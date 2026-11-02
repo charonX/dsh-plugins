@@ -134,7 +134,7 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
 
 ## 7. Web UI
 
-`plugins.tab` 列表槽（Plugins 页，与 Installed/Discover 并列），`id: skills-manager`、`order: 40`。
+左侧栏独立页面：`main`（keyed，key = `skills-manager`）提供页面本体，`sidebar.panellist`（id = `skills-manager`，order 20，位于 Plugins 0 / 自动化任务 10 之后）提供带图标的入口；不再占用 Plugins 页的页签。
 
 - **头部**：标题、来源数/技能数、搜索框、`+ 安装技能来源` 按钮。
 - **来源卡片**：slug、`git`/`local` 徽标、版本（package.json version 或 git short hash）、git remote、来源级开关、`更新`/`删除`（local 无更新）。
@@ -191,7 +191,7 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
 **P0 / P1 已实现**（本仓库第一版）：
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
-- Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- Client：`src/client/{index,SkillsPage,SkillsPanelIcon,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
 - 项目开关：`links.json` 的 `entries[].enabled` + `PUT /api/links`；全局启停改为 detach/restore，删除才丢弃记录。
 - 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
@@ -217,7 +217,7 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 **P0 / P1 已实现**（本仓库第一版）：
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
-- Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- Client：`src/client/{index,SkillsPage,SkillsPanelIcon,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
 - 项目开关：`links.json` 的 `entries[].enabled` + `PUT /api/links`；全局启停改为 detach/restore，删除才丢弃记录。
 - 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。

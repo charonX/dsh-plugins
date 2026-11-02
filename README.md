@@ -1,6 +1,6 @@
 # dsh-skills-manager
 
-A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. It installs skill sources from Git or a local folder, keeps them updated, lets you switch individual skills on or off, and distributes them into projects as symlinks — for DSH itself and for the other coding agents a project uses. Everything is available through a **Skills** tab on the Harness Plugins page.
+A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. It installs skill sources from Git or a local folder, keeps them updated, lets you switch individual skills on or off, and distributes them into projects as symlinks — for DSH itself and for the other coding agents a project uses. Everything is available on a dedicated **Skills** page in the Harness sidebar, next to Plugins and Automation tasks.
 
 Skills managed here are real Harness skills: they appear in the model's `skill` tool catalog and in the composer's `/` suggestions without any extra wiring.
 
@@ -61,7 +61,7 @@ pnpm dsh web --patch /path/to/dsh-skills-manager/dev/overlay.example.yml
 
 ## Use
 
-Open **Plugins** in the sidebar and select the **Skills** tab.
+Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks**).
 
 - **Add skill source** — a Git repository (`https://`, `ssh://`, `git@host:owner/repo`) or a local folder. A folder must contain `SKILL.md` at its root, under `skills/<name>/`, or under `skills/<category>/<name>/`. Git installs show live `git clone` output; local folders are copied without any nested `.git`.
 - **Version** — `package.json` version when the source has one, else `git describe --tags --always --dirty` (tag, then short hash, with `-dirty` for local edits).

@@ -59,7 +59,7 @@ python3 -c "import json;print(json.load(open('$HOME/.dsh/profiles/skills-test/pa
 
 ```sh
 dsh --profile skills-test --no-open --port 3099
-# 打开日志里的 http://127.0.0.1:3099/?token=…，Plugins → Skills
+# 打开日志里的 http://127.0.0.1:3099/?token=…，点左栏 Skills
 curl -s http://127.0.0.1:3099/dsh-skills-manager/api/library
 ```
 
@@ -77,7 +77,7 @@ dsh --profile skills-test --dump-config | grep skills-manager || echo "layer rem
 
 当前 Desktop 是 **0.2.1-rc.5**，已落在 `engines.dsh` 范围内，不需要版本豁免。
 
-- 方式 A（推荐）：Desktop → **Plugins → Add plugin → 本地路径**，选 `dsh-skills-manager` 目录或 tarball；安装后启用、重启（或等 HMR），Plugins 页出现 **Skills** 标签。
+- 方式 A（推荐）：Desktop → **Plugins → Add plugin → 本地路径**，选 `dsh-skills-manager` 目录或 tarball；安装后启用、重启（或等 HMR），左栏出现 **Skills** 入口。
 - 方式 B：Desktop 菜单 **Manage dsh Command…** 注册 `dsh` 命令 → 退出 Desktop → `dsh plugin --profile desktop add <tarball>`（Desktop profile 只能由 Desktop 启动，CLI 不能 boot 它）。
 
 Desktop 的页面来自 `dsh-app://`，请求经 IPC 桥转发；自动化脚本只覆盖 `dsh web`，所以 Desktop 需要人工确认一次（标签出现、安装/关联/开关可用）。
@@ -97,6 +97,6 @@ Desktop 的页面来自 `dsh-app://`，请求经 IPC 桥转发；自动化脚本
 | `engines.dsh` 拒绝安装 | 运行时 < 0.2.1-rc.5；升级运行时，或用 `dsh plugin ... allow-version ... --accept-risk` |
 | 安装时 peer 警告 | 正常：`@deepseek-ai/cordis`、`schemastery` 由宿主提供，不会被装进 profile |
 | `--dump-config` 没有层 | 确认 `dsh.profile.bundles` 里有 `dsh-skills-manager`；`dsh plugin add` 是否用了同一个 `DSH_HOME` |
-| 页面没有 Skills 标签 | 看 boot graph 是否含 `dsh-skills-manager/client.js`；再看浏览器 console；最后确认 host 半已加载（`/dsh-skills-manager/api/library` 是否 200） |
+| 左栏没有 Skills 入口 | 看 boot graph 是否含 `dsh-skills-manager/client.js`；再看浏览器 console；最后确认 host 半已加载（`/dsh-skills-manager/api/library` 是否 200） |
 | 离线安装失败 | 用 linked checkout（`add /path/to/plugin`）避免拉取 `dsh-home-paths`/`yaml`；或预填 pnpm store |
 | 安装后启动行为没变 | 安装与启动用了不同运行时（版本或路径不同） |

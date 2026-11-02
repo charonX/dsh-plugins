@@ -75,8 +75,9 @@ pnpm dsh web --patch /path/to/overlay.yml --no-open --port 3099
 # 打开日志里的 http://127.0.0.1:3099/?token=…
 ```
 
-Plugins → **Skills** 逐项确认：
+左栏 **Skills**（在 Plugins、自动化任务下方）逐项确认：
 
+- [ ] 左栏出现带图标的 **Skills** 入口，点击后进入独立页面（不再挂在 Plugins 页签里）
 - [ ] 安装本地目录（含 `skills/<name>/SKILL.md`）：进度日志、失败码（`.dsh/…` 路径、冲突 `409`）
 - [ ] 安装 git 源：clone 日志、版本号（tag / short hash）
 - [ ] **检查更新**：`已是最新`；给远端加提交后再次检查显示 `有 N 个新提交`；更新后回到 `0`

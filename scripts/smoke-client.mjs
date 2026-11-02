@@ -28,12 +28,15 @@ const ctx = {
   },
 }
 registration.factory((specifier) => require(specifier)).apply(ctx)
-const tab = registered.slots.find((entry) => entry.options.name === 'plugins.tab')
-if (tab === undefined) throw new Error('client bundle did not register the plugins.tab slot')
+const panel = registered.slots.find((entry) => entry.options.name === 'main')
+if (panel === undefined) throw new Error('client bundle did not register the main slot')
+const sidebar = registered.slots.find((entry) => entry.options.name === 'sidebar.panellist')
+if (sidebar === undefined) throw new Error('client bundle did not register the sidebar.panellist slot')
 console.log(JSON.stringify({
   id: registration.id,
   locale: registered.locale?.namespace,
   locales: Object.keys(registered.locale?.dictionaries ?? {}),
-  tab: { id: tab.options.id, order: tab.options.order },
-  component: tab.component.name,
+  panel: { key: panel.options.key },
+  sidebar: { id: sidebar.options.id, order: sidebar.options.order },
+  components: [panel.component.name, sidebar.component.name],
 }))
