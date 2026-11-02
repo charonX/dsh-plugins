@@ -18,7 +18,7 @@ $DSH_HOME/skills-manager/
 ## Requirements
 
 - Node.js ≥ 24.9
-- DeepSeek Harness `0.2.2-alpha.x` (`engines.dsh` is `>=0.2.2-alpha.2 <0.3.0`)
+- DeepSeek Harness `0.2.1-rc.5` or newer (`engines.dsh` is `>=0.2.1-rc.5 <0.3.0`; tested on `0.2.1-rc.5` and `0.2.2-alpha.2`)
 - `git` on `PATH` only for Git sources; local-folder sources work without it
 
 ## Install
@@ -30,6 +30,18 @@ dsh plugin --profile web add /path/to/dsh-skills-manager
 dsh --profile web --dump-config    # should show a "# == dsh-skills-manager" layer
 dsh --profile web
 ```
+
+As a profile bundle (the published path — this is what [docs/INSTALL.md](docs/INSTALL.md) covers in detail):
+
+```sh
+npm pack
+dsh --profile skills-test --from-default-profile web --dump-config >/dev/null   # create profile, no boot
+dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
+dsh --profile skills-test --no-open --port 3099
+dsh plugin --profile skills-test remove dsh-skills-manager
+```
+
+`pnpm verify:profile` automates exactly that in an isolated `DSH_HOME` (9 checks: pack → install → dump-config → boot → API → client bundle → remove).
 
 From a Harness source checkout, select the built host entry with an overlay:
 
@@ -142,12 +154,13 @@ The browser half is a `window.__ModuleLoader__.load(...)` factory produced by `t
 ### Verify locally
 
 ```sh
-pnpm verify:local   # builds, boots a real dsh web with an isolated overlay, runs 8 end-to-end checks
+pnpm verify:local     # source overlay path: builds, boots a real dsh web, runs 8 end-to-end checks
+pnpm verify:profile   # bundle path: packs, installs into an isolated profile, boots it, runs 9 checks
 ```
 
 It installs a local and a git source, links a project, exercises both switch levels, checks the update flow, and fetches the browser bundle — all in a temporary directory, never touching `~/.dsh` or your projects. `--keep` preserves the fixture and overlay for debugging; `DSH_HARNESS_DIR` points at another checkout.
 
-The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md).
+The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md); integration into real profiles and Desktop is covered by [docs/INSTALL.md](docs/INSTALL.md).
 
 Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -175,5 +188,5 @@ The agent directory snapshot in `src/agent-registry.ts` is derived from the regi
 - Categories and notes are supported by the state file and HTTP API, but the tab does not edit them yet.
 - Global (user-level) distribution to other agents is not implemented; links are project-scoped. DSH itself sees the library globally through the provider.
 - Re-enabling a disabled skill or source does not restore links automatically; run **Resync** on the project.
-- Verified against `dsh web` from the Harness source checkout; the Desktop shell and older Harness releases are not covered yet.
+- `dsh web` is verified end-to-end on the Harness source checkout and on the published `0.2.1-rc.5` runtime; the Desktop shell (`dsh-app://`) still needs a manual pass.
 - Harness plugin APIs are pre-stable: `engines.dsh` pins the range this version is tested against.

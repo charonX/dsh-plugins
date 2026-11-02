@@ -302,3 +302,8 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 1. **L0**：`typecheck`（host/client/tests 三套）+ `vitest`（76 项，含真实 git、真实软链、真实 `ctx.skills` registry）+ `build` + `smoke:client`（在 Node 里执行 bundle，断言注册形状）。
 2. **L1**：`pnpm verify:local` —— 用临时 overlay 从源码启动真实 `dsh web`，驱动 HTTP API 并检查磁盘软链/记录，8 项断言；隔离 `library/state/links/updates`，不触碰 `~/.dsh`；结束时回收进程与临时目录。
 3. **L2/L3/L4**：手工清单（Web UI、`/` 菜单与 `skill` 工具、mock LLM 回合）与 profile 安装（`dsh plugin add`，验证 `dsh.bundle`/`dsh.client` 清单被正确装配）；Desktop 壳仍为人工确认。
+
+## 17. 安装路径验证与兼容性
+
+- `pnpm verify:profile`：`npm pack` → 在隔离 `DSH_HOME` 中 `--from-default-profile web` 建 profile → `dsh plugin add <tarball>` → 校验 `dsh.profile.bundles`、`--dump-config` 层、安装包文件 → 启动并校验 host API 与 client bundle → `dsh plugin remove` 校验层消失。隔离目录与 tarball 默认清理（`--keep` 保留）。
+- `engines.dsh` 调整为 `>=0.2.1-rc.5 <0.3.0`：在发布运行时 **0.2.1-rc.5**（与当前 Desktop 同版本）上实测了 profile 安装/卸载、Web boot、API 与 client bundle，并用 mock LLM 跑通一次 headless 回合（`exit 0`）；0.2.2-alpha.2 上跑通 overlay 与 profile 两条路径。Desktop 的 `dsh-app://` 页面仍为人工确认项。

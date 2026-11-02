@@ -115,7 +115,13 @@ DEEPSEEK_BASE_URL=http://127.0.0.1:8123/v1 DEEPSEEK_API_KEY=mock-key \
 
 ## L3 以 bundle 方式安装（发布路径）
 
-overlay 验证的是源码行；这一层验证 `package.json` 的清单和 profile 装配：
+一键版：
+
+```sh
+pnpm verify:profile        # 打包 → 隔离 DSH_HOME → 建 profile → 安装 → 启动 → API/bundle → 卸载，9 项
+```
+
+手工版（真实 profile）与 Desktop 步骤见 [INSTALL.md](INSTALL.md)。要点：
 
 ```sh
 # 需要一个 dsh 命令：Desktop 安装的命令，或 harness 源码里的 pnpm dsh
