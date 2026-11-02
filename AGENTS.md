@@ -9,13 +9,16 @@ dsh/
 ├── AGENTS.md            # 工作区唯一权威说明（本文件），CLAUDE.md 为软链接
 ├── .gitignore           # 只追踪工作区级文件；顶层子目录全部为独立仓库
 ├── deepseek-harness/    # 上游 harness 源码 checkout（含自身 .git，分支 master，remote origin）
-└── dsh-media-station/   # 自建插件项目（含自身 .git），作为 dsh bundle 开发
+├── dsh-media-station/   # 自建插件项目（含自身 .git），作为 dsh bundle 开发
+└── dsh-skills-manager/  # 自建插件项目：技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
 ```
 
 | 仓库 | 角色 | 改动方式 |
 |---|---|---|
 | `deepseek-harness/` | Cordis "一切皆插件" 的 agent harness 本体，`@deepseek-ai/dsh-*` 包集合，当前 `0.2.2-alpha.2` | 阅读、构建、本地开发；需要上游修复才动它，按该仓库 `AGENTS.md` 的 PR/规范流程 |
 | 其他顶层目录 | 自建插件仓库，以 npm bundle 形式安装进 dsh profile | 只依赖 `@deepseek-ai/dsh-*`（peer/dev），不复制 harness 源码 |
+
+已有插件仓库的入口文档：`dsh-skills-manager/README.md`（用法与 API）、`dsh-skills-manager/docs/DESIGN.md`（方案与阶段）；`dsh-media-station` 尚未实现。
 
 插件仓库内**不要**复制或改写 harness 包源码；需要新增/修改上游能力时，在 `deepseek-harness/` 内开分支实现并走上游流程，插件侧继续通过公开扩展点接入。反之，harness 仓库里也不提交个人插件（官方 bundle 才进 `packages/bundle/`）。
 
