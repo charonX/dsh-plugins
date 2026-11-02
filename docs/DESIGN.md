@@ -294,3 +294,11 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 因此同一个技能可以「项目 A 开、项目 B 关」，而全局关闭表示"任何地方都不可用"；这与参考实现"关联即生效"相比多了一层，但保留了其「磁盘为准 + 记录用于修复」的分工。
 
 实现：`LinkManager.setEnabled`（项目开关）、`detach` / `restore`（全局开关的级联与恢复）、`forget*`（删除）；HTTP `PUT /api/links`；UI 项目面板每个条目一个 Switch + 取消。
+
+## 16. 本地验证策略
+
+自动化分三层（详见 `docs/VERIFY.md`）：
+
+1. **L0**：`typecheck`（host/client/tests 三套）+ `vitest`（76 项，含真实 git、真实软链、真实 `ctx.skills` registry）+ `build` + `smoke:client`（在 Node 里执行 bundle，断言注册形状）。
+2. **L1**：`pnpm verify:local` —— 用临时 overlay 从源码启动真实 `dsh web`，驱动 HTTP API 并检查磁盘软链/记录，8 项断言；隔离 `library/state/links/updates`，不触碰 `~/.dsh`；结束时回收进程与临时目录。
+3. **L2/L3/L4**：手工清单（Web UI、`/` 菜单与 `skill` 工具、mock LLM 回合）与 profile 安装（`dsh plugin add`，验证 `dsh.bundle`/`dsh.client` 清单被正确装配）；Desktop 壳仍为人工确认。

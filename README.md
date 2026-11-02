@@ -139,6 +139,16 @@ pnpm run smoke:client  # load the built bundle and assert its registrations
 
 The browser half is a `window.__ModuleLoader__.load(...)` factory produced by `tsdown`; `react` and `react/jsx-runtime` stay external and resolve through the host's module table. The Host half imports only Node built-ins, `yaml`, and `@deepseek-ai/dsh-home-paths`.
 
+### Verify locally
+
+```sh
+pnpm verify:local   # builds, boots a real dsh web with an isolated overlay, runs 8 end-to-end checks
+```
+
+It installs a local and a git source, links a project, exercises both switch levels, checks the update flow, and fetches the browser bundle — all in a temporary directory, never touching `~/.dsh` or your projects. `--keep` preserves the fixture and overlay for debugging; `DSH_HARNESS_DIR` points at another checkout.
+
+The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md).
+
 Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Versioning and update checks

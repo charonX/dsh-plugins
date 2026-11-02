@@ -56,7 +56,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepack": "npm run build",
-    "smoke:client": "node scripts/smoke-client.mjs"
+    "smoke:client": "node scripts/smoke-client.mjs",
+    "verify:local": "node scripts/verify-local.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
