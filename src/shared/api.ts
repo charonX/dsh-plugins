@@ -15,6 +15,26 @@ export interface SkillInvocationPolicy {
   readonly userInvocable: boolean
 }
 
+/** Result of one git update check. */
+export interface UpdateCheck {
+  /** ISO timestamp of this observation. */
+  readonly checkedAt: string
+  /** Local HEAD commit. */
+  readonly localCommit?: string
+  /** Upstream commit, when the source has one. */
+  readonly remoteCommit?: string
+  /** Commits the local checkout is behind. */
+  readonly behind?: number
+  /** Commits the local checkout is ahead of upstream. */
+  readonly ahead?: number
+  /** Whether the working tree has uncommitted changes. */
+  readonly dirty?: boolean
+  /** Version-ish label of the upstream commit. */
+  readonly remoteVersion?: string
+  /** Failure recorded instead of a comparison. */
+  readonly error?: { readonly code: string; readonly message: string }
+}
+
 /** One skill discovered inside a managed source. */
 export interface SkillView {
   /** Directory name; stable identity inside its source. */
@@ -57,6 +77,8 @@ export interface SourceView {
   readonly note?: string
   /** Source-level problem, such as an empty or unreadable directory. */
   readonly problem?: string
+  /** Last recorded update check for a git source. */
+  readonly update?: UpdateCheck
   /** Discovered skills, sorted by directory name. */
   readonly skills: readonly SkillView[]
 }
@@ -155,6 +177,8 @@ export interface LinkTargetView {
   readonly skillsDir: string
   /** Link name: the skill directory name. */
   readonly skillName: string
+  /** Recorded source slug, present for recorded positions. */
+  readonly source?: string
   /** Observed state of the link position. */
   readonly state: 'linked' | 'missing' | 'broken' | 'conflict' | 'external'
   /** Absolute link path. */

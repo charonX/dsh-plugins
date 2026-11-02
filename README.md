@@ -11,7 +11,8 @@ $DSH_HOME/skills-manager/
 │   ├── other-repo/skills/<name>/SKILL.md        # multi-skill source
 │   └── other-repo/skills/<category>/<name>/SKILL.md   # nested category layout
 ├── manager-state.json       # enable flags, categories, notes (sparse)
-└── links.json               # per-project link intent (agents + skills)
+├── links.json               # per-project link intent (agents + skills)
+└── updates.json             # last git update check per source
 ```
 
 ## Requirements
@@ -51,6 +52,8 @@ pnpm dsh web --patch /path/to/dsh-skills-manager/dev/overlay.example.yml
 Open **Plugins** in the sidebar and select the **Skills** tab.
 
 - **Add skill source** — a Git repository (`https://`, `ssh://`, `git@host:owner/repo`) or a local folder. A folder must contain `SKILL.md` at its root, under `skills/<name>/`, or under `skills/<category>/<name>/`. Git installs show live `git clone` output; local folders are copied without any nested `.git`.
+- **Version** — `package.json` version when the source has one, else `git describe --tags --always --dirty` (tag, then short hash, with `-dirty` for local edits).
+- **Check for updates** — fetches the Git remote and compares the local HEAD with its upstream: commits behind, commits ahead, a `-dirty` working tree, and the upstream version label. The last result is kept in `updates.json` and shown on the source card; checking is advisory and never touches the checkout.
 - **Update** — `git pull --ff-only` for Git sources; a failed pull keeps its raw git output for diagnosis.
 - **Remove** — deletes the source directory and its state entries.
 - **Switches** — disable a whole source or a single skill. A disabled skill leaves the catalog entirely: the model cannot call it and `/name` no longer suggests it.
@@ -106,6 +109,7 @@ All routes live under `routePrefix` and answer JSON with `cache-control: no-stor
 | `POST` | `/api/links` | `{ project, source, skillName?, agents? }` → link report |
 | `DELETE` | `/api/links` | Same body → unlink report |
 | `POST` | `/api/links/resync` | `{ project }` → repair report |
+| `POST` | `/api/sources/:slug/check` | Fetch + compare with upstream → `{ check }` |
 
 Failures use `{ "error": { "code", "message" } }` with codes such as `SKILL_SOURCE_INVALID`, `SKILL_SLUG_CONFLICT`, `SKILL_FETCH_FAILED`, `SKILL_UPDATE_FAILED`, `SKILL_UPDATE_UNSUPPORTED`, `GIT_UNAVAILABLE`, `UNTRUSTED_REQUEST`.
 
@@ -130,6 +134,20 @@ pnpm run smoke:client  # load the built bundle and assert its registrations
 The browser half is a `window.__ModuleLoader__.load(...)` factory produced by `tsdown`; `react` and `react/jsx-runtime` stay external and resolve through the host's module table. The Host half imports only Node built-ins, `yaml`, and `@deepseek-ai/dsh-home-paths`.
 
 Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Versioning and update checks
+
+The library owns the version story; no package manager or lockfile is involved:
+
+| Question | Answer |
+|---|---|
+| What version is this source? | `package.json` `version`, else `git describe --tags --always --dirty` |
+| Is an update available? | `POST /api/sources/:slug/check` runs `git fetch --tags --prune origin` and compares `HEAD` with `@{u}`; the result records `behind`, `ahead`, `dirty`, the upstream commit, and the upstream version label |
+| How do I update? | **Update** runs `git pull --ff-only`; a fast-forward failure keeps the raw git output and never resets local work |
+| Where is the result kept? | `updates.json`, keyed by source slug; the snapshot carries it as `SourceView.update` |
+| What about local sources? | No upstream exists, so checking answers `SKILL_UPDATE_UNSUPPORTED`; reinstalling with **overwrite** is the update path |
+
+This is deliberately the same model as the reference implementation (install into a central library, symlink out, `pull --ff-only` on demand). `vercel-labs/skills` is still not needed at runtime: it has no central library, no version management, and no update check — only the agent directory registry data, which is vendored.
 
 ## Credits
 

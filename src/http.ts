@@ -25,6 +25,7 @@ import {
 import type { JobRegistry } from './jobs.js'
 import type { LinkManager } from './links.js'
 import { listAgentTargets } from './links.js'
+import { checkGitSource, type UpdateStore } from './updates.js'
 import { scanLibrary, type WarnLogger } from './library.js'
 import { assertDirectoryName, isInsideOrEqual } from './paths.js'
 import type {
@@ -59,6 +60,8 @@ export interface HttpDeps {
   readonly jobs: JobRegistry
   /** Project symlink distribution manager. */
   readonly links: LinkManager
+  /** Persisted update-check results. */
+  readonly updates: UpdateStore
   /** Plugin logger. */
   readonly logger: WarnLogger
   /**
@@ -160,6 +163,16 @@ async function dispatch(
     return
   }
 
+  if (second === 'sources' && third !== undefined && segments[3] === 'check' && segments.length === 4) {
+    requireMethod(method, ['POST'])
+    const slug = assertDirectoryName(third, 'source')
+    const sourceDir = sourceDirectory(deps, slug)
+    const check = await checkGitSource(sourceDir, { allowFileProtocol: deps.allowFileProtocol })
+    deps.updates.set(slug, check)
+    sendJson(response, 200, { check })
+    return
+  }
+
   if (second === 'jobs' && third !== undefined && segments.length === 3) {
     requireMethod(method, ['GET', 'HEAD'])
     const job = deps.jobs.view(third)
@@ -214,6 +227,7 @@ function snapshotOf(deps: HttpDeps): LibrarySnapshot {
     deps.statePath,
     scanLibrary(deps.libraryDir, deps.logger),
     deps.state.read(),
+    deps.updates.read(),
   )
 }
 
@@ -256,6 +270,7 @@ async function startUpdate(deps: HttpDeps, slug: string): Promise<JobAcceptedBod
 function removeSource(deps: HttpDeps, slug: string): void {
   const sourceDir = sourceDirectory(deps, slug)
   deps.links.forgetSource(slug)
+  deps.updates.drop(slug)
   removeSourceDirectory(sourceDir)
   deps.state.dropSource(slug)
 }

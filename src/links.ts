@@ -240,7 +240,7 @@ export class LinkManager {
     for (const entry of live) {
       const skillDir = this.skillDirectory(entry.source, entry.skillName)
       for (const target of dirs) {
-        targets.push(observeLink(join(target.dir, entry.skillName), skillDir, target, entry.skillName, this.options.libraryDir))
+        targets.push(observeLink(join(target.dir, entry.skillName), skillDir, target, entry.skillName, this.options.libraryDir, entry.source))
       }
     }
     if (exists) {
@@ -443,8 +443,15 @@ function observeLink(
   target: TargetDir,
   skillName: string,
   libraryDir: string,
+  source?: string,
 ): LinkTargetView {
-  const base = { agents: target.agents, skillsDir: target.skillsDir, skillName, path: linkPath }
+  const base = {
+    agents: target.agents,
+    skillsDir: target.skillsDir,
+    skillName,
+    path: linkPath,
+    ...(source === undefined ? {} : { source }),
+  }
   const existing = lstatSync(linkPath, { throwIfNoEntry: false })
   if (existing === undefined) {
     return expectedTarget === undefined

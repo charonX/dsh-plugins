@@ -6,7 +6,7 @@
  */
 
 import type { ScannedSource } from './library.js'
-import type { LibrarySnapshot, SkillView, SourceView } from './shared/api.js'
+import type { LibrarySnapshot, SkillView, SourceView, UpdateCheck } from './shared/api.js'
 import { isSkillEnabled, isSourceEnabled, type StateFile } from './state.js'
 
 /**
@@ -22,15 +22,16 @@ export function buildSnapshot(
   statePath: string,
   sources: readonly ScannedSource[],
   state: StateFile,
+  updates: Readonly<Record<string, UpdateCheck>> = {},
 ): LibrarySnapshot {
   return {
     libraryDir,
     statePath,
-    sources: sources.map((source) => toSourceView(source, state)),
+    sources: sources.map((source) => toSourceView(source, state, updates[source.slug])),
   }
 }
 
-function toSourceView(source: ScannedSource, state: StateFile): SourceView {
+function toSourceView(source: ScannedSource, state: StateFile, update: UpdateCheck | undefined): SourceView {
   const sourceState = state.sources[source.slug]
   return {
     slug: source.slug,
@@ -53,6 +54,7 @@ function toSourceView(source: ScannedSource, state: StateFile): SourceView {
     ...(source.sourceUrl === undefined ? {} : { sourceUrl: source.sourceUrl }),
     ...(source.version === undefined ? {} : { version: source.version }),
     ...(source.problem === undefined ? {} : { problem: source.problem }),
+    ...(update === undefined ? {} : { update }),
     ...(sourceState?.category === undefined ? {} : { category: sourceState.category }),
     ...(sourceState?.note === undefined ? {} : { note: sourceState.note }),
   }

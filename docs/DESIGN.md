@@ -190,8 +190,9 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
-- 测试：`tests/` 共 59 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 测试：`tests/` 共 67 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -214,8 +215,9 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
-- 测试：`tests/` 共 59 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 测试：`tests/` 共 67 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -261,3 +263,18 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 - 状态比较全部经过 `realpath` 规范化（覆盖 macOS `/tmp → /private/tmp` 这类差异）。
 - 记录文件与状态文件一样采用临时文件 + rename 原子写；读失败按空记录处理并告警。
 - 禁用技能/来源、删除来源都会级联清理链接；重新启用不会自动重建，需要用户点 **Resync**（避免"停用"被隐式撤销）。
+
+## 14. 版本号与更新检查（与 workstation 对齐）
+
+参考实现的版本/更新语义（`skillService.readSourceVersion`、`requestSourceUpdate`）：
+
+| 能力 | workstation | 本插件 |
+|---|---|---|
+| 版本来源 | `package.json.version` → `git rev-parse --short HEAD` | `package.json.version` → `git describe --tags --always --dirty`（更易读，含 tag 与 dirty 标记） |
+| 更新动作 | `git pull --ff-only`，失败保留原始输出 | 同（spawn，无 shell，保留 `job.log`） |
+| 更新检查 | 无（只提供手动更新） | 新增：`git fetch --tags --prune origin` 后比较 `HEAD...@{u}`，记录 `behind/ahead/dirty/remoteCommit/remoteVersion` |
+| 检查结果存储 | — | `updates.json`（原子写），随 `GET /api/library` 返回，UI 在来源卡片上展示 |
+| 本地来源 | `force` 重新添加覆盖 | 同；检查返回 `SKILL_UPDATE_UNSUPPORTED` |
+| 远端异常 | 更新失败进 job.error | 检查失败记录为 `check.error`（不抛给 UI，也不阻塞列表） |
+
+为什么不引入 `vercel-labs/skills`：它只做"往 agent 目录安装 + `skills-lock.json`"，没有中央库、版本管理和更新检查；唯一可复用的是 agent 目录约定数据，已按 ADR-011 的方式做成构建期快照（`src/agent-registry.ts`）。因此版本/检查/更新全部自持，与参考实现同构。

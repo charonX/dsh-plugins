@@ -209,6 +209,17 @@ export function readSourceVersion(sourceDir: string, git: boolean): string | und
   }
   if (!git) return undefined
   try {
+    const described = execFileSync('git', ['describe', '--tags', '--always', '--dirty'], {
+      cwd: sourceDir,
+      encoding: 'utf8',
+      timeout: 2_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (described !== '') return described
+  } catch {
+    // Fall through to the plain hash.
+  }
+  try {
     const hash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
       cwd: sourceDir,
       encoding: 'utf8',

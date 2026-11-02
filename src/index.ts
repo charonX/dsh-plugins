@@ -18,6 +18,7 @@ import { LinkManager } from './links.js'
 import { LibrarySkillProvider } from './provider.js'
 import { DEFAULT_ROUTE_PREFIX } from './shared/api.js'
 import { StateStore } from './state.js'
+import { UpdateStore } from './updates.js'
 
 export { Config } from './config.js'
 export type { Config as SkillsManagerConfig } from './config.js'
@@ -43,10 +44,12 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     ? join(dataHome, 'manager-state.json')
     : expandHomePath(config.statePath)
   const linksPath = join(dataHome, 'links.json')
+  const updatesPath = join(dataHome, 'updates.json')
   const routePrefix = normalizePrefix(config.routePrefix ?? DEFAULT_ROUTE_PREFIX)
 
   const state = new StateStore(statePath, ctx.logger)
   const jobs = new JobRegistry()
+  const updates = new UpdateStore(updatesPath, ctx.logger)
   const links = new LinkManager({
     libraryDir,
     recordPath: linksPath,
@@ -80,6 +83,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     state,
     jobs,
     links,
+    updates,
     logger: ctx.logger,
     trustedHosts: () => readTrustedHosts(ctx),
     onLibraryChanged: () => provider?.invalidate(),

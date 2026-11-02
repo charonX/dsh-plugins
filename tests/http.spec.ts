@@ -1,11 +1,13 @@
 import { createServer, type Server } from 'node:http'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createRequestHandler } from '../src/http.ts'
 import { JobRegistry } from '../src/jobs.ts'
 import { LinkManager } from '../src/links.ts'
-import type { AgentTargetView, JobView, LibrarySnapshot, LinkReport, ProjectLinkView } from '../src/shared/api.ts'
+import type { AgentTargetView, JobView, LibrarySnapshot, LinkReport, ProjectLinkView, UpdateCheck } from '../src/shared/api.ts'
 import { StateStore } from '../src/state.ts'
+import { UpdateStore } from '../src/updates.ts'
 import { jsonBody, skillFields, tempTree, writeSkill, type TempTree } from './helpers.ts'
 
 const silentLogger = { warn: () => {} }
@@ -32,6 +34,7 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     logger: silentLogger,
     readState: () => state.read(),
   })
+  const updates = new UpdateStore(tree.path('skills-manager', 'updates.json'), silentLogger)
   const handler = createRequestHandler({
     prefix: '/dsh-skills-manager',
     libraryDir: tree.path('skills-manager', 'library'),
@@ -40,6 +43,7 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     state,
     jobs: new JobRegistry(),
     links,
+    updates,
     logger: silentLogger,
     trustedHosts: () => options.crossSiteTrustedHosts,
     onLibraryChanged: () => {},
@@ -322,5 +326,66 @@ describe('project links over HTTP', () => {
       body: JSON.stringify({ project: 'relative', source: 'outside' }),
     })
     expect(relative.status).toBe(400)
+  })
+})
+
+describe('update checks over HTTP', () => {
+  function git(cwd: string, args: readonly string[]): string {
+    return execFileSync('git', [...args], {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+    })
+  }
+
+  it('checks a git source and exposes the recorded result on the snapshot', async () => {
+    const harness = await startServer()
+    const remote = harness.tree.path('remote')
+    mkdirSync(remote, { recursive: true })
+    git(remote, ['init', '-b', 'main'])
+    writeSkill(`${remote}/skills/alpha`, skillFields('alpha'))
+    git(remote, ['add', '.'])
+    git(remote, ['commit', '-m', 'first'])
+    git(remote, ['tag', 'v1.0.0'])
+
+    const start = await fetch(`${harness.base}/dsh-skills-manager/api/sources/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceType: 'git', identifier: `file://${remote}` }),
+    })
+    const job = await waitForJob(harness, (await jsonBody<{ jobId: string }>(start)).jobId)
+    expect(job.status).toBe('success')
+
+    const checked = await fetch(`${harness.base}/dsh-skills-manager/api/sources/remote/check`, { method: 'POST' })
+    expect(checked.status).toBe(200)
+    const { check } = await jsonBody<{ check: UpdateCheck }>(checked)
+    expect(check.behind).toBe(0)
+    expect(check.remoteVersion).toContain('v1.0.0')
+
+    const snapshot = await jsonBody<LibrarySnapshot>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/library`),
+    )
+    expect(snapshot.sources[0]?.update?.behind).toBe(0)
+  })
+
+  it('rejects a check for a local source', async () => {
+    const harness = await startServer()
+    writeSkill(harness.tree.path('local'), skillFields('local'))
+    const start = await fetch(`${harness.base}/dsh-skills-manager/api/sources/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceType: 'local', identifier: harness.tree.path('local') }),
+    })
+    await waitForJob(harness, (await jsonBody<{ jobId: string }>(start)).jobId)
+    const checked = await fetch(`${harness.base}/dsh-skills-manager/api/sources/local/check`, { method: 'POST' })
+    expect(checked.status).toBe(400)
+    expect((await jsonBody<{ error: { code: string } }>(checked)).error.code).toBe('SKILL_UPDATE_UNSUPPORTED')
   })
 })
