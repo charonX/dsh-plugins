@@ -1,0 +1,9 @@
+# 工作区根仓库只追踪工作区级文件（AGENTS.md 等）。
+# 每个顶层子目录都是独立 Git 仓库，由各自的 .git 管理。
+/*/
+
+.DS_Store
+node_modules/
+*.log
+.env
+.env.*
