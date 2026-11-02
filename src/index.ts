@@ -14,6 +14,7 @@ import { Config } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { createRequestHandler } from './http.js'
 import { JobRegistry } from './jobs.js'
+import { LinkManager } from './links.js'
 import { LibrarySkillProvider } from './provider.js'
 import { DEFAULT_ROUTE_PREFIX } from './shared/api.js'
 import { StateStore } from './state.js'
@@ -41,10 +42,17 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const statePath = config.statePath === undefined
     ? join(dataHome, 'manager-state.json')
     : expandHomePath(config.statePath)
+  const linksPath = join(dataHome, 'links.json')
   const routePrefix = normalizePrefix(config.routePrefix ?? DEFAULT_ROUTE_PREFIX)
 
   const state = new StateStore(statePath, ctx.logger)
   const jobs = new JobRegistry()
+  const links = new LinkManager({
+    libraryDir,
+    recordPath: linksPath,
+    logger: ctx.logger,
+    readState: () => state.read(),
+  })
 
   let provider: LibrarySkillProvider | undefined
   ctx.effect(
@@ -71,6 +79,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     allowFileProtocol: config.allowFileProtocol !== false,
     state,
     jobs,
+    links,
     logger: ctx.logger,
     trustedHosts: () => readTrustedHosts(ctx),
     onLibraryChanged: () => provider?.invalidate(),

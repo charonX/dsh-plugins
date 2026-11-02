@@ -23,14 +23,20 @@ import {
   type InstallerOptions,
 } from './installer.js'
 import type { JobRegistry } from './jobs.js'
+import type { LinkManager } from './links.js'
+import { listAgentTargets } from './links.js'
 import { scanLibrary, type WarnLogger } from './library.js'
 import { assertDirectoryName, isInsideOrEqual } from './paths.js'
 import type {
+  AgentTargetView,
   ApiErrorBody,
   InstallRequestBody,
   JobAcceptedBody,
   JobView,
   LibrarySnapshot,
+  LinkRequestBody,
+  LinkReport,
+  ProjectLinkView,
   SkillPatch,
   SourcePatch,
 } from './shared/api.js'
@@ -51,6 +57,8 @@ export interface HttpDeps {
   readonly state: StateStore
   /** Job registry. */
   readonly jobs: JobRegistry
+  /** Project symlink distribution manager. */
+  readonly links: LinkManager
   /** Plugin logger. */
   readonly logger: WarnLogger
   /**
@@ -127,6 +135,31 @@ async function dispatch(
     return
   }
 
+  if (second === 'agents' && segments.length === 2) {
+    requireMethod(method, ['GET', 'HEAD'])
+    sendJson(response, 200, { agents: listAgentTargets() satisfies readonly AgentTargetView[] })
+    return
+  }
+
+  if (second === 'links' && third === 'resync' && segments.length === 3) {
+    requireMethod(method, ['POST'])
+    const body = await readJsonBody(request)
+    sendJson(response, 200, deps.links.resync(requireProject(body)) satisfies LinkReport)
+    return
+  }
+
+  if (second === 'links' && segments.length === 2) {
+    if (method === 'GET' || method === 'HEAD') {
+      sendJson(response, 200, { projects: deps.links.listProjects() satisfies readonly ProjectLinkView[] })
+      return
+    }
+    requireMethod(method, ['POST', 'DELETE'])
+    const body = await readLinkBody(request)
+    const report = method === 'POST' ? deps.links.link(body) : deps.links.unlink(body)
+    sendJson(response, 200, report)
+    return
+  }
+
   if (second === 'jobs' && third !== undefined && segments.length === 3) {
     requireMethod(method, ['GET', 'HEAD'])
     const job = deps.jobs.view(third)
@@ -146,7 +179,9 @@ async function dispatch(
       requireMethod(method, ['PUT'])
       const skillName = assertDirectoryName(segments[4], 'skill')
       const patch = readSkillPatch(await readJsonBody(request))
-      sendJson(response, 200, deps.state.patchSkill(slug, skillName, patch))
+      deps.state.patchSkill(slug, skillName, patch)
+      if (patch.enabled === false) deps.links.forgetSkill(slug, skillName)
+      sendJson(response, 200, snapshotOf(deps))
       deps.onLibraryChanged()
       return
     }
@@ -155,6 +190,7 @@ async function dispatch(
         sourceDirectory(deps, slug)
         const patch = readSourcePatch(await readJsonBody(request))
         deps.state.patchSource(slug, patch)
+        if (patch.enabled === false) deps.links.forgetSource(slug)
         sendJson(response, 200, snapshotOf(deps))
         deps.onLibraryChanged()
         return
@@ -219,6 +255,7 @@ async function startUpdate(deps: HttpDeps, slug: string): Promise<JobAcceptedBod
 
 function removeSource(deps: HttpDeps, slug: string): void {
   const sourceDir = sourceDirectory(deps, slug)
+  deps.links.forgetSource(slug)
   removeSourceDirectory(sourceDir)
   deps.state.dropSource(slug)
 }
@@ -294,6 +331,37 @@ async function readInstallBody(request: IncomingMessage): Promise<InstallRequest
     identifier: identifier.trim(),
     ...(body.force === true ? { force: true } : {}),
   }
+}
+
+async function readLinkBody(request: IncomingMessage): Promise<LinkRequestBody> {
+  const body = await readJsonBody(request)
+  const project = requireProject(body)
+  const source = body.source
+  if (typeof source !== 'string') {
+    throw new SkillManagerError(400, 'SKILL_IDENTITY_INVALID', 'source is required')
+  }
+  const skillName = body.skillName
+  if (skillName !== undefined && typeof skillName !== 'string') {
+    throw new SkillManagerError(400, 'SKILL_IDENTITY_INVALID', 'skillName must be a string')
+  }
+  const agents = body.agents
+  if (agents !== undefined && (!Array.isArray(agents) || agents.some((agent) => typeof agent !== 'string'))) {
+    throw new SkillManagerError(400, 'AGENT_INVALID', 'agents must be an array of registry keys')
+  }
+  return {
+    project,
+    source: assertDirectoryName(source, 'source'),
+    ...(skillName === undefined ? {} : { skillName: assertDirectoryName(skillName, 'skill') }),
+    ...(agents === undefined ? {} : { agents: agents as readonly string[] }),
+  }
+}
+
+function requireProject(body: Record<string, unknown>): string {
+  const project = body.project
+  if (typeof project !== 'string' || project.trim() === '') {
+    throw new SkillManagerError(400, 'PROJECT_INVALID', 'project is required')
+  }
+  return project.trim()
 }
 
 function readSourcePatch(body: Record<string, unknown>): SourcePatch {

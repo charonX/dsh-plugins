@@ -1,6 +1,6 @@
 # dsh-skills-manager
 
-A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. It installs skill sources from Git or a local folder, keeps them updated, lets you switch individual skills on or off, and exposes everything through a **Skills** tab on the Harness Plugins page.
+A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. It installs skill sources from Git or a local folder, keeps them updated, lets you switch individual skills on or off, and distributes them into projects as symlinks — for DSH itself and for the other coding agents a project uses. Everything is available through a **Skills** tab on the Harness Plugins page.
 
 Skills managed here are real Harness skills: they appear in the model's `skill` tool catalog and in the composer's `/` suggestions without any extra wiring.
 
@@ -10,7 +10,8 @@ $DSH_HOME/skills-manager/
 │   ├── owner-repo/SKILL.md                      # single-skill source
 │   ├── other-repo/skills/<name>/SKILL.md        # multi-skill source
 │   └── other-repo/skills/<category>/<name>/SKILL.md   # nested category layout
-└── manager-state.json       # enable flags, categories, notes (sparse)
+├── manager-state.json       # enable flags, categories, notes (sparse)
+└── links.json               # per-project link intent (agents + skills)
 ```
 
 ## Requirements
@@ -53,6 +54,12 @@ Open **Plugins** in the sidebar and select the **Skills** tab.
 - **Update** — `git pull --ff-only` for Git sources; a failed pull keeps its raw git output for diagnosis.
 - **Remove** — deletes the source directory and its state entries.
 - **Switches** — disable a whole source or a single skill. A disabled skill leaves the catalog entirely: the model cannot call it and `/name` no longer suggests it.
+- **Link to project** — points a project's agent skills directories at the library with symlinks, so an update in the library reaches every project at once:
+  - `dsh` targets `<project>/.dsh/skills`, the Harness `project-dsh` root, so a linked skill is visible to that project's sessions.
+  - The other agent targets come from a pinned registry of project conventions (`.claude/skills`, `.codex/skills`, `.agents/skills`, …); pick any subset per project.
+  - Occupied positions (a real directory, a file, or a foreign symlink) are reported as conflicts and never touched.
+  - **Resync** rebuilds recorded links, repairs hand-repointed library links, and drops broken links and stale records.
+  - Disabling a skill or a source removes its links, so "disabled" means absent everywhere.
 - **Search** filters by source, skill name, and description.
 - Invalid or duplicated `SKILL.md` files stay visible with the reason, so a broken source is fixable instead of silently missing.
 
@@ -92,8 +99,13 @@ All routes live under `routePrefix` and answer JSON with `cache-control: no-stor
 | `GET` | `/api/jobs/:jobId` | `{ id, status, error, log }` |
 | `POST` | `/api/sources/:slug/update` | Git update → `202 { jobId }` |
 | `DELETE` | `/api/sources/:slug` | Remove source + state |
-| `PUT` | `/api/sources/:slug` | `{ enabled?, category?, note? }` |
-| `PUT` | `/api/sources/:slug/skills/:skill` | `{ enabled?, note? }` |
+| `PUT` | `/api/sources/:slug` | `{ enabled?, category?, note? }` (disabling cascades links) |
+| `PUT` | `/api/sources/:slug/skills/:skill` | `{ enabled?, note? }` (disabling cascades the link) |
+| `GET` | `/api/agents` | Agent directory registry used by project links |
+| `GET` | `/api/links` | Recorded projects with refreshed link state |
+| `POST` | `/api/links` | `{ project, source, skillName?, agents? }` → link report |
+| `DELETE` | `/api/links` | Same body → unlink report |
+| `POST` | `/api/links/resync` | `{ project }` → repair report |
 
 Failures use `{ "error": { "code", "message" } }` with codes such as `SKILL_SOURCE_INVALID`, `SKILL_SLUG_CONFLICT`, `SKILL_FETCH_FAILED`, `SKILL_UPDATE_FAILED`, `SKILL_UPDATE_UNSUPPORTED`, `GIT_UNAVAILABLE`, `UNTRUSTED_REQUEST`.
 
@@ -103,24 +115,31 @@ Failures use `{ "error": { "code", "message" } }` with codes such as `SKILL_SOUR
 - Git identifiers are restricted to `https://`, `ssh://`, `scp`-like `user@host:path`, and `file://` (configurable). `ext::` transports and option-shaped identifiers are rejected before any process starts.
 - Every child process is spawned with an argument array — never through a shell — and `--` terminates Git option parsing.
 - Source slugs and skill names must be single directory names; composed paths are checked to stay inside the library, and a local source may not equal, contain, or live inside the library.
+- Project links only remove symlinks whose target resolves into the library (or the specific source being removed). Real directories, files, and symlinks pointing elsewhere are left in place and reported.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm run typecheck     # host (tsc) + client (tsc, DOM + JSX)
-pnpm test              # vitest: library scan, state, installer (real git), HTTP, provider
+pnpm run typecheck     # host (tsc) + client (tsc, DOM + JSX) + tests
+pnpm test              # vitest: library, state, installer (real git), links (real symlinks), HTTP, provider, registry
 pnpm run build         # tsc → lib/, tsdown → client/client.js
+pnpm run smoke:client  # load the built bundle and assert its registrations
 ```
 
 The browser half is a `window.__ModuleLoader__.load(...)` factory produced by `tsdown`; `react` and `react/jsx-runtime` stay external and resolve through the host's module table. The Host half imports only Node built-ins, `yaml`, and `@deepseek-ai/dsh-home-paths`.
 
 Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
 
+## Credits
+
+The agent directory snapshot in `src/agent-registry.ts` is derived from the registry in [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20 (`src/agents.ts`, MIT), plus one local `dsh` row. Only the data is used: fetching, linking, and repair stay in this plugin, so upstream releases cannot change runtime behavior. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Known limitations
 
 - No filesystem watcher: edits made outside the UI become visible on the next invalidation (any manager operation) or after a restart.
 - Categories and notes are supported by the state file and HTTP API, but the tab does not edit them yet.
-- Project-level distribution (symlinking a library skill into `<project>/.dsh/skills`) is planned, not implemented.
+- Global (user-level) distribution to other agents is not implemented; links are project-scoped. DSH itself sees the library globally through the provider.
+- Re-enabling a disabled skill or source does not restore links automatically; run **Resync** on the project.
 - Verified against `dsh web` from the Harness source checkout; the Desktop shell and older Harness releases are not covered yet.
 - Harness plugin APIs are pre-stable: `engines.dsh` pins the range this version is tested against.

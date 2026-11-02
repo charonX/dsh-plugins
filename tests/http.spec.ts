@@ -1,10 +1,11 @@
 import { createServer, type Server } from 'node:http'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
-import { JobRegistry } from '../src/jobs.ts'
 import { createRequestHandler } from '../src/http.ts'
+import { JobRegistry } from '../src/jobs.ts'
+import { LinkManager } from '../src/links.ts'
+import type { AgentTargetView, JobView, LibrarySnapshot, LinkReport, ProjectLinkView } from '../src/shared/api.ts'
 import { StateStore } from '../src/state.ts'
-import type { JobView, LibrarySnapshot } from '../src/shared/api.ts'
 import { jsonBody, skillFields, tempTree, writeSkill, type TempTree } from './helpers.ts'
 
 const silentLogger = { warn: () => {} }
@@ -25,6 +26,12 @@ afterEach(async () => {
 async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): Promise<Harness> {
   const tree = tempTree()
   const state = new StateStore(tree.path('skills-manager', 'state.json'), silentLogger)
+  const links = new LinkManager({
+    libraryDir: tree.path('skills-manager', 'library'),
+    recordPath: tree.path('skills-manager', 'links.json'),
+    logger: silentLogger,
+    readState: () => state.read(),
+  })
   const handler = createRequestHandler({
     prefix: '/dsh-skills-manager',
     libraryDir: tree.path('skills-manager', 'library'),
@@ -32,6 +39,7 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     allowFileProtocol: true,
     state,
     jobs: new JobRegistry(),
+    links,
     logger: silentLogger,
     trustedHosts: () => options.crossSiteTrustedHosts,
     onLibraryChanged: () => {},
@@ -221,5 +229,98 @@ describe('skills manager routes', () => {
     })
     expect(response.status).toBe(400)
     expect((await jsonBody<{ error: { code: string } }>(response)).error.code).toBe('SKILL_SOURCE_INVALID')
+  })
+})
+
+describe('project links over HTTP', () => {
+  async function seedSource(harness: Harness): Promise<void> {
+    writeSkill(harness.tree.path('outside', 'skills', 'alpha'), skillFields('alpha'))
+    writeSkill(harness.tree.path('outside', 'skills', 'beta'), skillFields('beta'))
+    const start = await fetch(`${harness.base}/dsh-skills-manager/api/sources/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceType: 'local', identifier: harness.tree.path('outside') }),
+    })
+    await waitForJob(harness, (await jsonBody<{ jobId: string }>(start)).jobId)
+  }
+
+  it('exposes the agent registry with DSH first', async () => {
+    const harness = await startServer()
+    const response = await fetch(`${harness.base}/dsh-skills-manager/api/agents`)
+    const body = await jsonBody<{ agents: readonly AgentTargetView[] }>(response)
+    expect(body.agents[0]).toMatchObject({ name: 'dsh', skillsDir: '.dsh/skills' })
+    expect(body.agents.some((agent) => agent.name === 'claude-code' && agent.skillsDir === '.claude/skills')).toBe(true)
+  })
+
+  it('links, lists, cascades on disable, and deletes links with the source', async () => {
+    const harness = await startServer()
+    await seedSource(harness)
+    mkdirSync(harness.tree.path('project'), { recursive: true })
+
+    const linked = await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: harness.tree.path('project'), source: 'outside', agents: ['dsh'] }),
+    })
+    expect(linked.status).toBe(200)
+    const report = await jsonBody<LinkReport>(linked)
+    expect(report.counts.linked).toBe(2)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(true)
+
+    const listed = await jsonBody<{ projects: readonly ProjectLinkView[] }>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/links`),
+    )
+    expect(listed.projects.map((project) => project.project)).toEqual([harness.tree.path('project')])
+
+    const disabled = await fetch(`${harness.base}/dsh-skills-manager/api/sources/outside/skills/alpha`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(disabled.status).toBe(200)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(false)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'beta'))).toBe(true)
+
+    const removed = await fetch(`${harness.base}/dsh-skills-manager/api/sources/outside`, { method: 'DELETE' })
+    expect(removed.status).toBe(200)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'beta'))).toBe(false)
+    const after = await jsonBody<{ projects: readonly ProjectLinkView[] }>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/links`),
+    )
+    expect(after.projects).toEqual([])
+  })
+
+  it('resyncs a project and rejects unknown agents or relative projects', async () => {
+    const harness = await startServer()
+    await seedSource(harness)
+    mkdirSync(harness.tree.path('project'), { recursive: true })
+    await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: harness.tree.path('project'), source: 'outside', agents: ['dsh'] }),
+    })
+    rmSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))
+
+    const resynced = await fetch(`${harness.base}/dsh-skills-manager/api/links/resync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: harness.tree.path('project') }),
+    })
+    expect(resynced.status).toBe(200)
+    expect((await jsonBody<LinkReport>(resynced)).counts.linked).toBe(2)
+
+    const unknownAgent = await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: harness.tree.path('project'), source: 'outside', agents: ['nope'] }),
+    })
+    expect(unknownAgent.status).toBe(400)
+
+    const relative = await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: 'relative', source: 'outside' }),
+    })
+    expect(relative.status).toBe(400)
   })
 })

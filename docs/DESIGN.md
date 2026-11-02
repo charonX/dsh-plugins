@@ -190,7 +190,8 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
-- 测试：`tests/` 共 44 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
+- 测试：`tests/` 共 59 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -205,7 +206,7 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 **默认状态文件**使用 `manager-state.json`，避免覆盖早期实验留在 `~/.dsh/skills-manager/state.json` 的旧格式数据。
 
-**后续（P2/P3）**：分类/备注编辑 UI、来源排序与拖拽、项目软链（`<project>/.dsh/skills`）、外部 agent 目录只读聚合、在线检查远端新提交、`/skills` 命令与模型工具。
+**后续（P2/P3）**：分类/备注编辑 UI、来源排序与拖拽、外部 agent 目录只读聚合与导入、其他 agent 的全局目录分发、在线检查远端新提交、`/skills` 命令与模型工具。
 
 ## 11. 实现状态与验证
 
@@ -213,7 +214,8 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
-- 测试：`tests/` 共 44 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
+- 测试：`tests/` 共 59 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -228,4 +230,34 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 **默认状态文件**使用 `manager-state.json`，避免覆盖早期实验留在 `~/.dsh/skills-manager/state.json` 的旧格式数据。
 
-**后续（P2/P3）**：分类/备注编辑 UI、来源排序与拖拽、项目软链（`<project>/.dsh/skills`）、外部 agent 目录只读聚合、在线检查远端新提交、`/skills` 命令与模型工具。
+**后续（P2/P3）**：分类/备注编辑 UI、来源排序与拖拽、外部 agent 目录只读聚合与导入、其他 agent 的全局目录分发、在线检查远端新提交、`/skills` 命令与模型工具。
+
+## 12. 与 workstation 参考实现的逐项对照（软链 + 开源 registry）
+
+工作区参考实现在 `workstation/src/services/skillService.js`、`agentRegistryService.js`、`scripts/sync-agent-registry.mjs`，以及 ADR-003 / ADR-004 / ADR-011。
+
+| 维度 | workstation | 本插件 |
+|---|---|---|
+| 分发模型 | **软链直指技能库**：安装时把 `<project>/<agent 原生 skills 目录>/<skill>` 指向库内技能目录，库更新即时生效 | 一致：同一软链模型；默认目标是 `dsh`（`<project>/.dsh/skills`，即 DSH 的 `project-dsh` root，rank 100） |
+| agent 目录约定 | 构建期从 **`vercel-labs/skills@1.5.20`** 的 `src/agents.ts` 提取 75 种约定做 JSON 快照；运行时不调用该库 | 同源**数据**快照（`src/agent-registry.ts`，75 行 + 本地 `dsh` 一行），运行时不调用该库；获取/建链/修复全部自持 |
+| 为什么不用库的运行时 | ADR-011：库的 canonical 固定 `~/.agents/skills` 会全局泄露、项目级软链指向项目内副本而非中央库、零编程导出只能 spawn CLI | 同意该结论，沿用其取舍：只取数据，不取实现 |
+| 关联意图记录 | 库内 `.linked-skills/<projectId>.json`（视图以磁盘为准，记录只用于修复） | 数据目录 `links.json`：`{ project: { agents, entries } }`，同一分工 |
+| 收敛/修复 | agentTypes 变更时收敛；resync 重建、修错指、清断链；外部实体不碰 | 同：link/unlink/resync；缺失重放、错指修复、断链清理、冲突/外部条目只报告不修改 |
+| 冲突保护 | 非 workstation 创建的条目、外部软链 → 跳过并表面化 | 同：真实文件/目录、外部软链 → `conflict`/`external`，不删除 |
+| 来源删除 | 先级联删链再删目录 | 同：`forgetSource()` → 删目录 |
+| 开关语义 | 无全局启停 | 额外提供**全局启停**：禁用的技能不进 catalog，并级联删除其项目软链（"停用"在任何 agent 中都不可见） |
+| 全局可用 | 仅项目分发（另有 builtin CLI skills 特例） | DSH 通过 provider 全局可用；项目软链用于跨 agent / 项目内收敛；其他 agent 的全局目录暂不分发 |
+| 更新传播 | `git pull --ff-only`；软链使所有项目即时生效 | 同（spawn，无 shell） |
+| 跨 agent 全局泄露风险 | 明确禁止把库放在 `~/.agents/skills` 等扫描目录 | 库在 `~/.dsh/skills-manager/library`，不在任何 agent 的扫描 root 内；只有显式 link 才进入项目目录 |
+
+结论：参考实现的两点核心——**软链分发**与**开源 registry 只作数据源**——本插件都已按同一原则实现；差异只在"全局启停"和"DSH 原生 catalog 接入"两点上更贴近 dsh 的插件模型。
+
+## 13. 链接实现细节（本插件）
+
+- 目标目录由 `agent-registry.ts` 的 `skillsDir` 展开为 `<project>/<skillsDir>`；多个 agent 共享同一目录时（如 `.agents/skills` 被 19 个 universal agent 使用）只建一条链，状态行里列出全部 agent。
+- Windows 使用 `junction`，其他平台用目录软链。
+- 健康判定：`realpath(link) === realpath(期望技能目录)`；解析失败 → `broken`；指向库内其它技能/库外 → `external`；非软链 → `conflict`。
+- `resync` 只修复"名字等于记录的技能名、且目标在库内"的链接；外部条目永不改写。
+- 状态比较全部经过 `realpath` 规范化（覆盖 macOS `/tmp → /private/tmp` 这类差异）。
+- 记录文件与状态文件一样采用临时文件 + rename 原子写；读失败按空记录处理并告警。
+- 禁用技能/来源、删除来源都会级联清理链接；重新启用不会自动重建，需要用户点 **Resync**（避免"停用"被隐式撤销）。

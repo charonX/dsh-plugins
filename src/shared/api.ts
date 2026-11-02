@@ -127,6 +127,80 @@ export interface SkillPatch {
   readonly note?: string
 }
 
+/** One agent-directory convention from the pinned registry snapshot. */
+export interface AgentTargetView {
+  /** Stable registry key used in link requests and records. */
+  readonly name: string
+  /** Human-readable agent name. */
+  readonly displayName: string
+  /** Project-relative skills directory. */
+  readonly skillsDir: string
+  /** Whether many agents share this directory convention. */
+  readonly universal: boolean
+}
+
+/** A recorded source/skill association of one project. */
+export interface LinkEntryView {
+  /** Source slug. */
+  readonly source: string
+  /** Skill directory name. */
+  readonly skillName: string
+}
+
+/** One link position observed on disk for a project. */
+export interface LinkTargetView {
+  /** Registry keys sharing this skills directory. */
+  readonly agents: readonly string[]
+  /** Project-relative skills directory. */
+  readonly skillsDir: string
+  /** Link name: the skill directory name. */
+  readonly skillName: string
+  /** Observed state of the link position. */
+  readonly state: 'linked' | 'missing' | 'broken' | 'conflict' | 'external'
+  /** Absolute link path. */
+  readonly path: string
+  /** Resolved target for a healthy link, or the intended target for a missing one. */
+  readonly target?: string
+  /** Why the position is not usable, for `broken`, `conflict`, and `external`. */
+  readonly problem?: string
+}
+
+/** One project's link state. */
+export interface ProjectLinkView {
+  /** Absolute project directory. */
+  readonly project: string
+  /** Whether the project directory still exists. */
+  readonly exists: boolean
+  /** Agent keys recorded for this project. */
+  readonly agents: readonly string[]
+  /** Recorded associations. */
+  readonly entries: readonly LinkEntryView[]
+  /** Observed link positions, one per unique skills directory and skill. */
+  readonly targets: readonly LinkTargetView[]
+  /** Entries recorded for the project whose skill is no longer in the library. */
+  readonly stale: readonly LinkEntryView[]
+}
+
+/** Result of a link, unlink, or resync request. */
+export interface LinkReport {
+  /** Project state after the operation. */
+  readonly project: ProjectLinkView
+  /** Counts per observed state after the operation. */
+  readonly counts: Readonly<Record<'linked' | 'missing' | 'broken' | 'conflict' | 'external', number>>
+}
+
+/** Body of `POST /api/links` and `DELETE /api/links`. */
+export interface LinkRequestBody {
+  /** Absolute project directory. */
+  readonly project: string
+  /** Source slug. */
+  readonly source: string
+  /** One skill of the source; omitted links every enabled skill of the source. */
+  readonly skillName?: string
+  /** Agent keys to target; omitted uses the project's recorded agents or `dsh`. */
+  readonly agents?: readonly string[]
+}
+
 /** Default HTTP prefix owned by this plugin. */
 export const DEFAULT_ROUTE_PREFIX = '/dsh-skills-manager'
 
