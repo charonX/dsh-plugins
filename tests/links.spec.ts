@@ -222,3 +222,104 @@ describe('LinkManager.forget', () => {
     }
   })
 })
+
+describe('per-project distribution switch', () => {
+  it('disables distribution but keeps the record, then restores it', () => {
+    const { tree, links, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      const disabled = links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: false })
+      expect(disabled.project.entries).toEqual([
+        { source: 'src', skillName: 'alpha', enabled: false },
+        { source: 'src', skillName: 'beta', enabled: true },
+      ])
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(false)
+      expect(existsSync(linkPath(project, '.dsh/skills', 'beta'))).toBe(true)
+      // A disabled entry is not reported as a missing link.
+      expect(disabled.project.targets.some((target) => target.skillName === 'alpha')).toBe(false)
+      expect(disabled.counts.missing).toBe(0)
+
+      const enabled = links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: true })
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(true)
+      expect(enabled.project.entries.every((entry) => entry.enabled)).toBe(true)
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('keeps disabled entries across resync and never recreates their links', () => {
+    const { tree, links, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: false })
+      rmSync(linkPath(project, '.dsh/skills', 'beta'))
+      const report = links.resync(project)
+      expect(existsSync(linkPath(project, '.dsh/skills', 'beta'))).toBe(true)
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(false)
+      expect(report.project.entries.map((entry) => [entry.skillName, entry.enabled]))
+        .toEqual([['alpha', false], ['beta', true]])
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('re-enables a whole source at once', () => {
+    const { tree, links, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      links.setEnabled({ project, source: 'src', enabled: false })
+      expect(links.listProjects()[0]?.targets).toEqual([])
+      links.setEnabled({ project, source: 'src', enabled: true })
+      expect(links.listProjects()[0]?.targets.map((target) => target.state)).toEqual(['linked', 'linked'])
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('rejects enabling a globally disabled skill', () => {
+    const { tree, links, state, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: false })
+      state.patchSkill('src', 'alpha', { enabled: false })
+      expect(() => links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: true }))
+        .toThrow(/disabled/)
+    } finally {
+      tree.cleanup()
+    }
+  })
+})
+
+describe('global switch and project records', () => {
+  it('detaches links on global disable but keeps records for restore', () => {
+    const { tree, links, state, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      state.patchSource('src', { enabled: false })
+      links.detach('src')
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(false)
+      expect(links.listProjects()[0]?.entries).toHaveLength(2)
+      state.patchSource('src', { enabled: true })
+      links.restore('src')
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(true)
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('does not restore a project entry the user switched off', () => {
+    const { tree, links, state, project } = fixture()
+    try {
+      links.link({ project, source: 'src', agents: ['dsh'] })
+      links.setEnabled({ project, source: 'src', skillName: 'alpha', enabled: false })
+      state.patchSource('src', { enabled: false })
+      links.detach('src')
+      state.patchSource('src', { enabled: true })
+      links.restore('src')
+      expect(existsSync(linkPath(project, '.dsh/skills', 'alpha'))).toBe(false)
+      expect(existsSync(linkPath(project, '.dsh/skills', 'beta'))).toBe(true)
+    } finally {
+      tree.cleanup()
+    }
+  })
+})

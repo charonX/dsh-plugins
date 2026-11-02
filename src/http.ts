@@ -165,8 +165,15 @@ async function dispatch(
       sendJson(response, 200, { projects: deps.links.listProjects() satisfies readonly ProjectLinkView[] })
       return
     }
-    requireMethod(method, ['POST', 'DELETE'])
+    requireMethod(method, ['POST', 'DELETE', 'PUT'])
     const body = await readLinkBody(request)
+    if (method === 'PUT') {
+      if (body.enabled === undefined) {
+        throw new SkillManagerError(400, 'INVALID_JSON', '"enabled" is required to change a project distribution')
+      }
+      sendJson(response, 200, deps.links.setEnabled({ ...body, enabled: body.enabled }))
+      return
+    }
     const report = method === 'POST' ? deps.links.link(body) : deps.links.unlink(body)
     sendJson(response, 200, report)
     return
@@ -202,7 +209,8 @@ async function dispatch(
       const skillName = assertDirectoryName(segments[4], 'skill')
       const patch = readSkillPatch(await readJsonBody(request))
       deps.state.patchSkill(slug, skillName, patch)
-      if (patch.enabled === false) deps.links.forgetSkill(slug, skillName)
+      if (patch.enabled === false) deps.links.detach(slug, skillName)
+      else if (patch.enabled === true) deps.links.restore(slug, skillName)
       sendJson(response, 200, snapshotOf(deps))
       deps.onLibraryChanged()
       return
@@ -212,7 +220,8 @@ async function dispatch(
         sourceDirectory(deps, slug)
         const patch = readSourcePatch(await readJsonBody(request))
         deps.state.patchSource(slug, patch)
-        if (patch.enabled === false) deps.links.forgetSource(slug)
+        if (patch.enabled === false) deps.links.detach(slug)
+        else if (patch.enabled === true) deps.links.restore(slug)
         sendJson(response, 200, snapshotOf(deps))
         deps.onLibraryChanged()
         return
@@ -372,11 +381,16 @@ async function readLinkBody(request: IncomingMessage): Promise<LinkRequestBody> 
   if (agents !== undefined && (!Array.isArray(agents) || agents.some((agent) => typeof agent !== 'string'))) {
     throw new SkillManagerError(400, 'AGENT_INVALID', 'agents must be an array of registry keys')
   }
+  const enabled = body.enabled
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    throw new SkillManagerError(400, 'INVALID_JSON', 'enabled must be a boolean')
+  }
   return {
     project,
     source: assertDirectoryName(source, 'source'),
     ...(skillName === undefined ? {} : { skillName: assertDirectoryName(skillName, 'skill') }),
     ...(agents === undefined ? {} : { agents: agents as readonly string[] }),
+    ...(enabled === undefined ? {} : { enabled }),
   }
 }
 

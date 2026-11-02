@@ -62,7 +62,8 @@ Open **Plugins** in the sidebar and select the **Skills** tab.
   - The other agent targets come from a pinned registry of project conventions (`.claude/skills`, `.codex/skills`, `.agents/skills`, …); pick any subset per project.
   - Occupied positions (a real directory, a file, or a foreign symlink) are reported as conflicts and never touched.
   - **Resync** rebuilds recorded links, repairs hand-repointed library links, and drops broken links and stale records.
-  - Disabling a skill or a source removes its links, so "disabled" means absent everywhere.
+  - **Per-project switch** — each recorded skill has its own switch in the project panel. Turning it off removes only that project's links and keeps the record, so the same skill can be on in one project and off in another.
+  - **Two switch levels**: the library switch is the master (a globally disabled skill is unavailable everywhere); the per-project switch controls distribution into that project. Global disable detaches links but keeps project records, so re-enabling restores them automatically — except entries the user switched off in that project.
 - **Search** filters by source, skill name, and description.
 - Invalid or duplicated `SKILL.md` files stay visible with the reason, so a broken source is fixable instead of silently missing.
 
@@ -111,7 +112,8 @@ All routes live under `routePrefix` and answer JSON with `cache-control: no-stor
 | `GET` | `/api/agents` | Agent directory registry used by project links |
 | `GET` | `/api/links` | Recorded projects with refreshed link state |
 | `POST` | `/api/links` | `{ project, source, skillName?, agents? }` → link report |
-| `DELETE` | `/api/links` | Same body → unlink report |
+| `PUT` | `/api/links` | `{ project, source, skillName?, enabled }` → per-project switch |
+| `DELETE` | `/api/links` | Same body → unlink report (drops the record) |
 | `POST` | `/api/links/resync` | `{ project }` → repair report |
 | `POST` | `/api/sources/:slug/check` | Fetch + compare with upstream → `{ check }` |
 

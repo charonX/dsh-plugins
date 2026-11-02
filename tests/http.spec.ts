@@ -400,3 +400,88 @@ describe('update checks over HTTP', () => {
     expect((await jsonBody<{ error: { code: string } }>(checked)).error.code).toBe('SKILL_UPDATE_UNSUPPORTED')
   })
 })
+
+describe('per-project switches over HTTP', () => {
+  async function seed(harness: Harness): Promise<void> {
+    writeSkill(harness.tree.path('outside', 'skills', 'alpha'), skillFields('alpha'))
+    writeSkill(harness.tree.path('outside', 'skills', 'beta'), skillFields('beta'))
+    const start = await fetch(`${harness.base}/dsh-skills-manager/api/sources/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceType: 'local', identifier: harness.tree.path('outside') }),
+    })
+    await waitForJob(harness, (await jsonBody<{ jobId: string }>(start)).jobId)
+    mkdirSync(harness.tree.path('project'), { recursive: true })
+    await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ project: harness.tree.path('project'), source: 'outside', agents: ['dsh'] }),
+    })
+  }
+
+  it('turns one entry off and on without losing the record', async () => {
+    const harness = await startServer()
+    await seed(harness)
+    const off = await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        project: harness.tree.path('project'),
+        source: 'outside',
+        skillName: 'alpha',
+        enabled: false,
+      }),
+    })
+    expect(off.status).toBe(200)
+    const disabled = await jsonBody<LinkReport>(off)
+    expect(disabled.project.entries).toContainEqual({ source: 'outside', skillName: 'alpha', enabled: false })
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(false)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'beta'))).toBe(true)
+
+    const on = await fetch(`${harness.base}/dsh-skills-manager/api/links`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        project: harness.tree.path('project'),
+        source: 'outside',
+        skillName: 'alpha',
+        enabled: true,
+      }),
+    })
+    expect((await jsonBody<LinkReport>(on)).project.entries.every((entry) => entry.enabled)).toBe(true)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(true)
+  })
+
+  it('keeps project records for a global disable and restores them on re-enable', async () => {
+    const harness = await startServer()
+    await seed(harness)
+    const off = await fetch(`${harness.base}/dsh-skills-manager/api/sources/outside`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(off.status).toBe(200)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(false)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'beta'))).toBe(false)
+    const kept = await jsonBody<{ projects: readonly ProjectLinkView[] }>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/links`),
+    )
+    expect(kept.projects[0]?.entries).toHaveLength(2)
+
+    const on = await fetch(`${harness.base}/dsh-skills-manager/api/sources/outside`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    expect(on.status).toBe(200)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'alpha'))).toBe(true)
+    expect(existsSync(harness.tree.path('project', '.dsh', 'skills', 'beta'))).toBe(true)
+
+    const removed = await fetch(`${harness.base}/dsh-skills-manager/api/sources/outside`, { method: 'DELETE' })
+    expect(removed.status).toBe(200)
+    const after = await jsonBody<{ projects: readonly ProjectLinkView[] }>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/links`),
+    )
+    expect(after.projects).toEqual([])
+  })
+})

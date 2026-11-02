@@ -175,6 +175,8 @@ export interface LinkEntryView {
   readonly source: string
   /** Skill directory name. */
   readonly skillName: string
+  /** Whether this project distributes the skill; false keeps the record but removes its links. */
+  readonly enabled: boolean
 }
 
 /** One link position observed on disk for a project. */
@@ -231,6 +233,8 @@ export interface LinkRequestBody {
   readonly skillName?: string
   /** Agent keys to target; omitted uses the project's recorded agents or `dsh`. */
   readonly agents?: readonly string[]
+  /** Per-project distribution switch; required by `PUT /api/links`. */
+  readonly enabled?: boolean
 }
 
 /** Default HTTP prefix owned by this plugin. */

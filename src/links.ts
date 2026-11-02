@@ -39,6 +39,8 @@ import { isSkillEnabled, isSourceEnabled, type StateFile } from './state.js'
 interface LinkEntry {
   readonly source: string
   readonly skillName: string
+  /** Project switch; absent means enabled. */
+  readonly enabled?: boolean
 }
 
 /** One project record. */
@@ -174,7 +176,7 @@ export class LinkManager {
     if (record === undefined) return this.report(project)
     const live = record.entries.filter((entry) => this.skillDirectoryIfPresent(entry) !== undefined)
     const targets = targetDirs(project, record.agents)
-    for (const entry of live) {
+    for (const entry of live.filter((candidate) => candidate.enabled !== false)) {
       const skillDir = this.skillDirectory(entry.source, entry.skillName)
       for (const target of targets) this.repairOrPlace(join(target.dir, entry.skillName), skillDir)
     }
@@ -186,8 +188,106 @@ export class LinkManager {
   }
 
   /**
-   * Remove every link resolving into a source, across all recorded projects.
-   * Called before the source directory is deleted so no dangling link remains.
+   * Turn this project's distribution of a skill (or a whole source) on or off.
+   * Disabling removes the symlinks but keeps the record; enabling validates the
+   * skill and recreates the links.
+   * @param request - project, source, optional skill, and the desired switch.
+   * @returns the refreshed project view and per-state counts.
+   */
+  setEnabled(request: LinkRequest & { readonly enabled: boolean }): LinkReport {
+    const project = validateProject(request.project, this.options.libraryDir)
+    const file = this.readFile()
+    const record = file.projects[project]
+    if (record === undefined) {
+      throw new SkillManagerError(404, 'NOT_FOUND', `No linked skills recorded for ${project}`)
+    }
+    const matches = record.entries.filter((entry) => matchesRequest(entry, request))
+    if (matches.length === 0) {
+      throw new SkillManagerError(404, 'NOT_FOUND', 'No recorded link matches this request')
+    }
+    const sourceDir = join(this.options.libraryDir, request.source)
+    if (request.enabled) {
+      const state = this.options.readState()
+      if (!isSourceEnabled(state, request.source)) {
+        throw new SkillManagerError(409, 'SKILL_SOURCE_DISABLED', `Source "${request.source}" is disabled; enable it before distributing it`)
+      }
+      for (const entry of matches) {
+        if (!isSkillEnabled(state, request.source, entry.skillName)) {
+          throw new SkillManagerError(409, 'SKILL_DISABLED', `Skill "${entry.skillName}" is disabled; enable it before distributing it`)
+        }
+        const skillDir = this.skillDirectory(entry.source, entry.skillName)
+        for (const target of targetDirs(project, record.agents)) this.placeLink(target, entry.skillName, skillDir)
+      }
+    } else {
+      for (const entry of matches) {
+        for (const target of targetDirs(project, record.agents)) {
+          removeLinksInto(target.dir, sourceDir, entry.skillName)
+        }
+      }
+    }
+    this.writeFile({
+      ...file,
+      projects: {
+        ...file.projects,
+        [project]: {
+          agents: record.agents,
+          entries: record.entries.map((entry) =>
+            matchesRequest(entry, request) ? { ...entry, enabled: request.enabled } : entry),
+        },
+      },
+    })
+    return this.report(project)
+  }
+
+  /**
+   * Remove links of a source (or skill) from every project while keeping the
+   * records, so a later restore can recreate them.
+   * @param source - source slug.
+   * @param skillName - optional single skill.
+   */
+  detach(source: string, skillName?: string): void {
+    const sourceDir = join(this.options.libraryDir, source)
+    for (const project of Object.keys(this.readFile().projects)) {
+      const record = this.readFile().projects[project]
+      /* v8 ignore next -- projects come from the same snapshot */
+      if (record === undefined) continue
+      for (const target of targetDirs(project, record.agents)) {
+        for (const entry of record.entries) {
+          if (entry.source !== source || (skillName !== undefined && entry.skillName !== skillName)) continue
+          removeLinksInto(target.dir, sourceDir, entry.skillName)
+        }
+      }
+    }
+  }
+
+  /**
+   * Recreate links for a source (or skill) in every project whose entry is
+   * enabled and whose skill is currently usable.
+   * @param source - source slug.
+   * @param skillName - optional single skill.
+   */
+  restore(source: string, skillName?: string): void {
+    const state = this.options.readState()
+    if (!isSourceEnabled(state, source)) return
+    const file = this.readFile()
+    for (const [project, record] of Object.entries(file.projects)) {
+      for (const entry of record.entries) {
+        if (entry.source !== source || entry.enabled === false) continue
+        if (skillName !== undefined && entry.skillName !== skillName) continue
+        if (!isSkillEnabled(state, source, entry.skillName)) continue
+        const skillDir = this.skillDirectoryIfPresent(entry)
+        if (skillDir === undefined) continue
+        for (const target of targetDirs(project, record.agents)) {
+          this.repairOrPlace(join(target.dir, entry.skillName), skillDir)
+        }
+      }
+    }
+  }
+
+  /**
+   * Remove every link resolving into a source, across all recorded projects,
+   * and drop the records. Called before the source directory is deleted so no
+   * dangling link remains.
    * @param source - source slug being removed.
    */
   forgetSource(source: string): void {
@@ -237,7 +337,7 @@ export class LinkManager {
     const stale = recordedEntries.filter((entry) => this.skillDirectoryIfPresent(entry) === undefined)
     const targets: LinkTargetView[] = []
     const dirs = exists ? targetDirs(project, agents) : []
-    for (const entry of live) {
+    for (const entry of live.filter((candidate) => candidate.enabled !== false)) {
       const skillDir = this.skillDirectory(entry.source, entry.skillName)
       for (const target of dirs) {
         targets.push(observeLink(join(target.dir, entry.skillName), skillDir, target, entry.skillName, this.options.libraryDir, entry.source))
@@ -259,8 +359,20 @@ export class LinkManager {
     const entries: LinkEntryView[] = recordedEntries.map((entry) => ({
       source: entry.source,
       skillName: entry.skillName,
+      enabled: entry.enabled !== false,
     }))
-    return { project, exists, agents, entries, targets, stale: stale.map((entry) => ({ ...entry })) }
+    return {
+      project,
+      exists,
+      agents,
+      entries,
+      targets,
+      stale: stale.map((entry) => ({
+        source: entry.source,
+        skillName: entry.skillName,
+        enabled: entry.enabled !== false,
+      })),
+    }
   }
 
   private entriesToLink(request: LinkRequest): LinkEntry[] {
@@ -546,15 +658,24 @@ function normalizeLinkFile(value: unknown): LinkFile {
     const entries = Array.isArray(candidate.entries)
       ? candidate.entries.flatMap((item): LinkEntry[] => {
         if (typeof item !== 'object' || item === null) return []
-        const entryCandidate = item as { source?: unknown; skillName?: unknown }
+        const entryCandidate = item as { source?: unknown; skillName?: unknown; enabled?: unknown }
         if (typeof entryCandidate.source !== 'string' || typeof entryCandidate.skillName !== 'string') return []
-        return [{ source: entryCandidate.source, skillName: entryCandidate.skillName }]
+        return [{
+          source: entryCandidate.source,
+          skillName: entryCandidate.skillName,
+          ...(entryCandidate.enabled === false ? { enabled: false } : {}),
+        }]
       })
       : []
     if (agents.length === 0 || entries.length === 0) continue
     projects[project] = { agents, entries }
   }
   return { version: STATE_VERSION, projects }
+}
+
+function matchesRequest(entry: LinkEntry, request: LinkRequest): boolean {
+  return entry.source === request.source
+    && (request.skillName === undefined || entry.skillName === request.skillName)
 }
 
 function union(left: readonly string[], right: readonly string[]): string[] {
@@ -564,7 +685,8 @@ function union(left: readonly string[], right: readonly string[]): string[] {
 function mergeEntries(left: readonly LinkEntry[], right: readonly LinkEntry[]): LinkEntry[] {
   const key = (entry: LinkEntry): string => `${entry.source}/${entry.skillName}`
   const merged = new Map(left.map((entry) => [key(entry), entry]))
-  for (const entry of right) merged.set(key(entry), entry)
+  // An explicit link request re-enables a previously disabled project entry.
+  for (const entry of right) merged.set(key(entry), { ...entry, enabled: true })
   return [...merged.values()]
 }
 

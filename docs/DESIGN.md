@@ -192,9 +192,10 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- 项目开关：`links.json` 的 `entries[].enabled` + `PUT /api/links`；全局启停改为 detach/restore，删除才丢弃记录。
 - 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
-- 测试：`tests/` 共 67 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 测试：`tests/` 共 76 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -217,9 +218,10 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 - Host：`src/{config,library,frontmatter,state,jobs,installer,provider,http,index}.ts`
 - Client：`src/client/{index,SkillsTab,api,locales}.tsx|ts`，构建为 `client/client.js`（`window.__ModuleLoader__.load` 工厂，仅 `react`/`react/jsx-runtime` 为外部依赖）
+- 项目开关：`links.json` 的 `entries[].enabled` + `PUT /api/links`；全局启停改为 detach/restore，删除才丢弃记录。
 - 版本/检查：`src/updates.ts`（`git fetch` + `HEAD...@{u}` 比较、`updates.json`、`POST /api/sources/:slug/check`）；UI 来源卡片展示 `behind/dirty/远端版本/检查时间`。
 - 链接：`src/{agent-registry,links}.ts`（项目软链分发、resync、断链/错指修复、外部保护、禁用/删除级联）；HTTP 增加 `/api/agents`、`/api/links`、`/api/links/resync`。
-- 测试：`tests/` 共 67 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
+- 测试：`tests/` 共 76 项，覆盖布局发现、frontmatter、状态稀疏化/原子写、git 标识符白名单、本地安装与冲突、真实 git clone/pull、真实软链（建链/幂等/冲突/断链/错指修复/级联）、HTTP 路由/错误码/同源校验、provider 过滤，以及**与真实 `ctx.skills` registry 的集成**（目录可读、`get()` 正文、`invalidate()` 失效、rank 冲突）。
 
 已执行的验证：
 
@@ -280,3 +282,15 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 | 远端异常 | 更新失败进 job.error | 检查失败记录为 `check.error`（不抛给 UI，也不阻塞列表） |
 
 为什么不引入 `vercel-labs/skills`：它只做"往 agent 目录安装 + `skills-lock.json`"，没有中央库、版本管理和更新检查；唯一可复用的是 agent 目录约定数据，已按 ADR-011 的方式做成构建期快照（`src/agent-registry.ts`）。因此版本/检查/更新全部自持，与参考实现同构。
+
+## 15. 两层开关语义（全局 vs 项目）
+
+| 层级 | 载体 | 关闭时 | 重新打开时 |
+|---|---|---|---|
+| 全局（库） | `manager-state.json` 的 `sources/skills.enabled` | 移出 `ctx.skills` catalog；同时 **detach** 所有项目软链，但保留 `links.json` 记录 | 恢复 catalog；**restore** 各项目中该条目仍为 `enabled` 的链接（项目侧关闭的条目保持关闭） |
+| 项目 | `links.json` 的 `entries[].enabled` | 删除该项目内该技能的软链，记录保留（项目视图显示为 disabled） | 校验全局可用后重建软链 |
+| 删除 | `DELETE /api/sources/:slug` | 删目录 + 删记录（真正移除） | — |
+
+因此同一个技能可以「项目 A 开、项目 B 关」，而全局关闭表示"任何地方都不可用"；这与参考实现"关联即生效"相比多了一层，但保留了其「磁盘为准 + 记录用于修复」的分工。
+
+实现：`LinkManager.setEnabled`（项目开关）、`detach` / `restore`（全局开关的级联与恢复）、`forget*`（删除）；HTTP `PUT /api/links`；UI 项目面板每个条目一个 Switch + 取消。
