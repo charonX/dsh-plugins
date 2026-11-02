@@ -44,6 +44,7 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     jobs: new JobRegistry(),
     links,
     updates,
+    listWorkspaces: () => [{ path: tree.path('project'), title: 'Project' }],
     logger: silentLogger,
     trustedHosts: () => options.crossSiteTrustedHosts,
     onLibraryChanged: () => {},
@@ -233,6 +234,16 @@ describe('skills manager routes', () => {
     })
     expect(response.status).toBe(400)
     expect((await jsonBody<{ error: { code: string } }>(response)).error.code).toBe('SKILL_SOURCE_INVALID')
+  })
+})
+
+describe('workspace options over HTTP', () => {
+  it('serves the DSH workspaces as link targets', async () => {
+    const harness = await startServer()
+    const response = await fetch(`${harness.base}/dsh-skills-manager/api/projects`)
+    expect(response.status).toBe(200)
+    const body = await jsonBody<{ projects: readonly { path: string; title: string }[] }>(response)
+    expect(body.projects).toEqual([{ path: harness.tree.path('project'), title: 'Project' }])
   })
 })
 

@@ -152,6 +152,8 @@ interface Job { id: string; status: 'pending'|'running'|'success'|'error'; error
   config:
     libraryDir: ~/.dsh/skills-manager/library   # 默认
     statePath: ~/.dsh/skills-manager/manager-state.json # 默认
+    linksPath: ~/.dsh/skills-manager/links.json         # 默认
+    updatesPath: ~/.dsh/skills-manager/updates.json     # 默认
     providerName: skills-manager
     rank: 450
     routePrefix: /dsh-skills-manager

@@ -40,6 +40,7 @@ import type {
   ProjectLinkView,
   SkillPatch,
   SourcePatch,
+  WorkspaceOptionView,
 } from './shared/api.js'
 import { buildSnapshot } from './view.js'
 import type { StateStore } from './state.js'
@@ -62,6 +63,8 @@ export interface HttpDeps {
   readonly links: LinkManager
   /** Persisted update-check results. */
   readonly updates: UpdateStore
+  /** DSH workspaces offered as link targets. */
+  readonly listWorkspaces: () => readonly WorkspaceOptionView[]
   /** Plugin logger. */
   readonly logger: WarnLogger
   /**
@@ -141,6 +144,12 @@ async function dispatch(
   if (second === 'agents' && segments.length === 2) {
     requireMethod(method, ['GET', 'HEAD'])
     sendJson(response, 200, { agents: listAgentTargets() satisfies readonly AgentTargetView[] })
+    return
+  }
+
+  if (second === 'projects' && segments.length === 2) {
+    requireMethod(method, ['GET', 'HEAD'])
+    sendJson(response, 200, { projects: deps.listWorkspaces() })
     return
   }
 

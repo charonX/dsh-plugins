@@ -16,7 +16,7 @@ import { createRequestHandler } from './http.js'
 import { JobRegistry } from './jobs.js'
 import { LinkManager } from './links.js'
 import { LibrarySkillProvider } from './provider.js'
-import { DEFAULT_ROUTE_PREFIX } from './shared/api.js'
+import { DEFAULT_ROUTE_PREFIX, type WorkspaceOptionView } from './shared/api.js'
 import { StateStore } from './state.js'
 import { UpdateStore } from './updates.js'
 
@@ -43,8 +43,12 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const statePath = config.statePath === undefined
     ? join(dataHome, 'manager-state.json')
     : expandHomePath(config.statePath)
-  const linksPath = join(dataHome, 'links.json')
-  const updatesPath = join(dataHome, 'updates.json')
+  const linksPath = config.linksPath === undefined
+    ? join(dataHome, 'links.json')
+    : expandHomePath(config.linksPath)
+  const updatesPath = config.updatesPath === undefined
+    ? join(dataHome, 'updates.json')
+    : expandHomePath(config.updatesPath)
   const routePrefix = normalizePrefix(config.routePrefix ?? DEFAULT_ROUTE_PREFIX)
 
   const state = new StateStore(statePath, ctx.logger)
@@ -84,6 +88,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     jobs,
     links,
     updates,
+    listWorkspaces: () => readWorkspaces(ctx),
     logger: ctx.logger,
     trustedHosts: () => readTrustedHosts(ctx),
     onLibraryChanged: () => provider?.invalidate(),
@@ -95,6 +100,34 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
       'skills-manager: http routes',
     )
   })
+}
+
+/**
+ * Read the host's workspaces as link targets, tolerating a host without the
+ * workspace registry (headless or minimal profiles).
+ * @param ctx - plugin context.
+ * @returns current workspaces with their absolute directories.
+ */
+function readWorkspaces(ctx: Context): readonly WorkspaceOptionView[] {
+  const registry: unknown = ctx.get('workspaceRegistry')
+  if (typeof registry !== 'object' || registry === null) return []
+  const list = (registry as { list?: unknown }).list
+  if (typeof list !== 'function') return []
+  const rows: unknown = (list as () => unknown).call(registry)
+  if (!Array.isArray(rows)) return []
+  const seen = new Set<string>()
+  const result: WorkspaceOptionView[] = []
+  for (const row of rows) {
+    if (typeof row !== 'object' || row === null) continue
+    const candidate = row as { path?: unknown; title?: unknown }
+    if (typeof candidate.path !== 'string' || candidate.path === '' || seen.has(candidate.path)) continue
+    seen.add(candidate.path)
+    result.push({
+      path: candidate.path,
+      title: typeof candidate.title === 'string' && candidate.title !== '' ? candidate.title : candidate.path,
+    })
+  }
+  return result
 }
 
 function normalizePrefix(prefix: string): string {

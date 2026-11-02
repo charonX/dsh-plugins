@@ -149,6 +149,14 @@ export interface SkillPatch {
   readonly note?: string
 }
 
+/** One DSH workspace offered as a link target. */
+export interface WorkspaceOptionView {
+  /** Absolute workspace directory. */
+  readonly path: string
+  /** Workspace title. */
+  readonly title: string
+}
+
 /** One agent-directory convention from the pinned registry snapshot. */
 export interface AgentTargetView {
   /** Stable registry key used in link requests and records. */

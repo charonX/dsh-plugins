@@ -74,6 +74,8 @@ Open **Plugins** in the sidebar and select the **Skills** tab.
   config:
     libraryDir: ~/.dsh/skills-manager/library          # default
     statePath: ~/.dsh/skills-manager/manager-state.json # default
+    linksPath: ~/.dsh/skills-manager/links.json         # default
+    updatesPath: ~/.dsh/skills-manager/updates.json     # default
     providerName: skills-manager
     rank: 450
     routePrefix: /dsh-skills-manager
@@ -84,6 +86,8 @@ Open **Plugins** in the sidebar and select the **Skills** tab.
 |---|---|---|
 | `libraryDir` | `<dshHome>/skills-manager/library` | Managed library root |
 | `statePath` | `<dshHome>/skills-manager/manager-state.json` | Enable flags, categories, notes |
+| `linksPath` | `<dshHome>/skills-manager/links.json` | Per-project link intent |
+| `updatesPath` | `<dshHome>/skills-manager/updates.json` | Last update check per source |
 | `providerName` | `skills-manager` | Name registered on `ctx.skills` |
 | `rank` | `450` | Provider precedence; lower wins (project skills at 100/200 still win) |
 | `routePrefix` | `/dsh-skills-manager` | HTTP prefix for the Web Client API |
