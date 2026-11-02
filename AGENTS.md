@@ -63,11 +63,17 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
   "main": "lib/index.js",
   "exports": { ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" } },
   "files": ["lib/index.js", "cordis.patch.yml", "lib/types/**/*.d.ts"],
-  "engines": { "dsh": ">=0.2.2-0 <0.3.0" },
+  "engines": { "dsh": ">=0.2.2-alpha.2 <0.3.0" },
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "dependencies": {},
-  "peerDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-tools": "*" },
-  "devDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-tools": "*" }
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.6-alpha.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.2 <0.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.6-alpha.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-alpha.2 <0.3.0"
+  }
 }
 ```
 
