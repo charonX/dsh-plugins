@@ -48,10 +48,7 @@ README.md（英文）和 README.zh.md（中文）引用下面 5 张图。截好�
 - 底部可见「导入所选」。
 - 如果方便，让其中一行显示「同名冲突」更有说明力（非必需）。
 
-## 待补拍：`link-projects.png`
+## 打码说明
 
-当前这张只打开了项目下拉、没有勾选项目，agent 列表也滚到了 Antigravity/AstrBot，展示不出「多选」和「已选 agent」。补拍时请：
-
-- 勾选 **≥2 个项目**（chips 可见）；
-- agent 列表滚到顶部，勾选 **DeepSeek Harness + Claude Code + Codex**；
-- 若不想暴露真实路径，可先把项目路径换成 `/Users/demo/...`，或告诉我需要打码的区域。
+- 所有截图中的 `/Users/zhanglei/...` 路径（含项目路径、扫描根路径）已用 ffmpeg 模糊处理；原图未入库。
+- `link-projects.png` 里勾选的 agent 是 Antigravity CLI（`universal`），已选项目为 2 个。若之后想换成 DSH/Claude/Codex 的勾选画面，可再补拍一版替换，其余不用动。
