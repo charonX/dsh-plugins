@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3
 
 - Global skill scanning now resolves the agent roots against the platform home directory: on Windows `%USERPROFILE%` replaces a POSIX `HOME` inherited from Git Bash, and an unset or blank home no longer makes the roots current-directory-relative, which made every non-DSH root report as missing.
 - The shared `.agents` root follows `DSH_AGENTS_HOME`, like the rest of the harness.
