@@ -6,7 +6,7 @@
    npm version patch --no-git-tag-version   # 或 minor / major
    ```
 
-   在 `CHANGELOG.md` 顶部补一段对应版本说明。
+   在 `CHANGELOG.md` 顶部补一段对应版本说明。**仓库提交了 `lib/` 与 `client/` 构建产物**：发布前先 `pnpm run build` 并把它们一起提交，这样 Git 安装无需 `prepare`/`allowBuilds`。
 
 2. 跑门禁：
 
@@ -47,4 +47,4 @@
      https://github.com/charonX/dsh-skills-manager/releases/download/vX.Y.Z/charonx-dsh-skills-manager-X.Y.Z.tgz
    ```
 
-Git 安装（`git+https://…`）会通过 `prepare` 自行构建，pnpm 默认拦截该脚本，需要「允许并重试」或在 profile 的 `pnpm-workspace.yaml` 写入 pnpm 打印的 `allowBuilds` 键。
+Git 安装（`git+https://…`）直接读取仓库里提交的 `lib/`、`client/`，不需要构建脚本；旧版本（`v0.1.0`）仍会触发 `prepare` 拦截，不要再用它。

@@ -68,10 +68,10 @@ Or from Git (the package builds itself through its `prepare` script):
 dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-manager.git
 ```
 
-pnpm blocks that build script until you allow it: use **Allow these scripts and retry** in the plugin manager, or add the exact `allowBuilds` key pnpm prints to the profile's `pnpm-workspace.yaml`. A GitHub Release tarball needs no build scripts at all:
+The repository commits its build output (`lib/` and `client/`), so Git installs need no build approval. A GitHub Release tarball works the same way:
 
 ```sh
-dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.0/charonx-dsh-skills-manager-0.1.0.tgz
+dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.1/charonx-dsh-skills-manager-0.1.1.tgz
 ```
 
 Or pack it yourself:
@@ -79,7 +79,7 @@ Or pack it yourself:
 ```sh
 npm pack                                                        # build + tarball
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.0.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.1.tgz"
 dsh --profile skills-test --no-open --port 3099                 # open the token URL
 dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```

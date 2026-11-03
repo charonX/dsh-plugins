@@ -68,10 +68,10 @@ dsh plugin --profile skills-test add @charonx/dsh-skills-manager
 dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-manager.git
 ```
 
-pnpm 默认会拦截这个构建脚本：在插件管理界面点 **允许并重试**，或把 pnpm 打印的 `allowBuilds` 键写进 profile 的 `pnpm-workspace.yaml`。GitHub Release 里的 tarball 不需要构建脚本：
+仓库已提交构建产物（`lib/`、`client/`），Git 安装不需要构建授权。GitHub Release 的 tarball 同样免构建：
 
 ```sh
-dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.0/charonx-dsh-skills-manager-0.1.0.tgz
+dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.1/charonx-dsh-skills-manager-0.1.1.tgz
 ```
 
 或自行打包：
@@ -79,7 +79,7 @@ dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manag
 ```sh
 npm pack                                                        # 构建并打包
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.0.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.1.tgz"
 dsh --profile skills-test --no-open --port 3099                 # 打开日志里的 token 地址
 dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```

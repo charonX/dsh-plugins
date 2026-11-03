@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Ship the built `lib/` and `client/` artifacts in the repository so Git installs need no `prepare` script or pnpm `allowBuilds` approval.
+- No behavior changes; Git installs of `v0.1.1` or later work directly.
+
 ## 0.1.0
 
 First public release.

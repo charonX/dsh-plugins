@@ -1,6 +1,6 @@
 {
   "name": "@charonx/dsh-skills-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Skill library manager for DeepSeek Harness: install sources from Git or a folder, check updates, import globally installed skills, and distribute them into projects as symlinks.",
   "type": "module",
   "main": "lib/index.js",
@@ -62,8 +62,7 @@
     "smoke:client": "node scripts/smoke-client.mjs",
     "verify:local": "node scripts/verify-local.mjs",
     "verify:profile": "node scripts/verify-profile.mjs",
-    "debug:ui": "node scripts/debug-ui.mjs",
-    "prepare": "node scripts/prepare.mjs"
+    "debug:ui": "node scripts/debug-ui.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
