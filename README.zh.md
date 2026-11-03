@@ -1,12 +1,14 @@
 # dsh-skills-manager
 
-[English](README.md) | 中文
+[![npm](https://img.shields.io/npm/v/@charonx/dsh-skills-manager?label=npm)](https://www.npmjs.com/package/@charonx/dsh-skills-manager) [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/charonX/dsh-skills-manager/blob/main/LICENSE)
+
+[English](https://github.com/charonX/dsh-skills-manager/blob/main/README.md) | 中文
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**技能库管理器**：从 Git 或本地目录安装技能来源、保持更新、导入其它 agent 已安装的技能，并以软链方式分发到项目——同时服务 DSH 本身和项目里使用的其它编码 agent。
 
 入口在 Harness 左侧栏独立的 **技能** 页，与「插件」「自动化任务」并列。
 
-<img src="docs/assets/skills-page.png" alt="技能页" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/skills-page.png" alt="技能页" width="1100" />
 
 ## 能力
 
@@ -21,15 +23,15 @@
 
 **一次关联多个项目，并选择目标 agent。** 项目字段是多选下拉，点一次「关联」写入所有选中项目。
 
-<img src="docs/assets/link-projects.png" alt="关联弹窗" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/link-projects.png" alt="关联弹窗" width="1100" />
 
 **每个已关联项目有自己的开关。** 条目显示状态与持有链接的 agent 名，不显示文件路径。
 
-<img src="docs/assets/linked-projects.png" alt="已关联项目" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/linked-projects.png" alt="已关联项目" width="1100" />
 
 **导入其它 agent 已安装的技能。** 扫描结果按来源分组，不存在或空的目录显示 0。
 
-<img src="docs/assets/scan-import.png" alt="扫描导入" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/scan-import.png" alt="扫描导入" width="1100" />
 
 ## 工作原理
 
@@ -97,7 +99,7 @@ dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
         libraryDir: /absolute/path/to/dsh-skills-manager/.dev/library
 ```
 
-Desktop：**Plugins → Add plugin → 本地路径**，然后在左栏打开 **技能**。完整步骤与排错见 [docs/INSTALL.md](docs/INSTALL.md)。
+Desktop：**Plugins → Add plugin → 本地路径**，然后在左栏打开 **技能**。完整步骤与排错见 [docs/INSTALL.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/INSTALL.md)。
 
 ## 使用
 
@@ -201,7 +203,7 @@ pnpm verify:profile         # 打包、装进隔离 profile、启动（9 项）
 pnpm verify:profile -- --linked
 ```
 
-调试（DevTools、`curl`、可选 Playwright 重放）见 [docs/DEBUG.md](docs/DEBUG.md)；验证矩阵见 [docs/VERIFY.md](docs/VERIFY.md)；方案与阶段见 [docs/DESIGN.md](docs/DESIGN.md)。
+调试（DevTools、`curl`、可选 Playwright 重放）见 [docs/DEBUG.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/DEBUG.md)；验证矩阵见 [docs/VERIFY.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/VERIFY.md)；方案与阶段见 [docs/DESIGN.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/DESIGN.md)。
 
 ## 已知限制
 
@@ -214,4 +216,4 @@ pnpm verify:profile -- --linked
 
 ## 致谢
 
-`src/agent-registry.ts` 中的 agent 目录快照来自 [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20（MIT），外加一行本地 `dsh`。只使用数据：安装、建链、修复、导入均由本仓库实现。详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+`src/agent-registry.ts` 中的 agent 目录快照来自 [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20（MIT），外加一行本地 `dsh`。只使用数据：安装、建链、修复、导入均由本仓库实现。详见 [THIRD_PARTY_NOTICES.md](https://github.com/charonX/dsh-skills-manager/blob/main/THIRD_PARTY_NOTICES.md)。

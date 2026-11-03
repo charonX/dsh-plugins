@@ -1,12 +1,14 @@
 # dsh-skills-manager
 
-English | [中文](README.zh.md)
+[![npm](https://img.shields.io/npm/v/@charonx/dsh-skills-manager?label=npm)](https://www.npmjs.com/package/@charonx/dsh-skills-manager) [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/charonX/dsh-skills-manager/blob/main/LICENSE)
+
+English | [中文](https://github.com/charonX/dsh-skills-manager/blob/main/README.zh.md)
 
 A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. Install skill sources from Git or a local folder, keep them current, import skills other agents already installed, and distribute them into projects as symlinks — for DSH itself and for the other coding agents a project uses.
 
 Everything is available on a dedicated **Skills** page in the Harness sidebar, next to Plugins and Automation tasks.
 
-<img src="docs/assets/skills-page.png" alt="Skills page" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/skills-page.png" alt="Skills page" width="1100" />
 
 ## What it does
 
@@ -21,15 +23,15 @@ Everything is available on a dedicated **Skills** page in the Harness sidebar, n
 
 **Link any number of projects and choose the agents to target.** The project field is a multi-select dropdown; a single submit writes every selected project.
 
-<img src="docs/assets/link-projects.png" alt="Link dialog" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/link-projects.png" alt="Link dialog" width="1100" />
 
 **Every linked project keeps its own switches.** Each row shows the state and the agents that hold the link, not file paths.
 
-<img src="docs/assets/linked-projects.png" alt="Linked projects" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/linked-projects.png" alt="Linked projects" width="1100" />
 
 **Import what other agents installed.** The scanner groups results by origin; missing or empty directories show 0.
 
-<img src="docs/assets/scan-import.png" alt="Scan dialog" width="1100" />
+<img src="https://raw.githubusercontent.com/charonX/dsh-skills-manager/main/docs/assets/scan-import.png" alt="Scan dialog" width="1100" />
 
 ## How it works
 
@@ -97,7 +99,7 @@ While developing, link the checkout instead of packing (`dsh plugin add "$PWD"`)
         libraryDir: /absolute/path/to/dsh-skills-manager/.dev/library
 ```
 
-Desktop: **Plugins → Add plugin → local path**, then open **Skills** in the sidebar. Exact steps and troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
+Desktop: **Plugins → Add plugin → local path**, then open **Skills** in the sidebar. Exact steps and troubleshooting: [docs/INSTALL.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/INSTALL.md).
 
 ## Use
 
@@ -201,7 +203,7 @@ pnpm verify:profile         # pack, install into an isolated profile, boot it (9
 pnpm verify:profile -- --linked
 ```
 
-Debugging (DevTools, `curl`, optional Playwright replay): [docs/DEBUG.md](docs/DEBUG.md). Verification matrix: [docs/VERIFY.md](docs/VERIFY.md). Design and phase plan: [docs/DESIGN.md](docs/DESIGN.md).
+Debugging (DevTools, `curl`, optional Playwright replay): [docs/DEBUG.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/DEBUG.md). Verification matrix: [docs/VERIFY.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/VERIFY.md). Design and phase plan: [docs/DESIGN.md](https://github.com/charonX/dsh-skills-manager/blob/main/docs/DESIGN.md).
 
 ## Known limitations
 
@@ -214,4 +216,4 @@ Debugging (DevTools, `curl`, optional Playwright replay): [docs/DEBUG.md](docs/D
 
 ## Credits
 
-The agent directory snapshot in `src/agent-registry.ts` derives from the registry in [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20 (MIT), plus one local `dsh` row. Only the data is used — install, linking, repair, and import are implemented here. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The agent directory snapshot in `src/agent-registry.ts` derives from the registry in [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20 (MIT), plus one local `dsh` row. Only the data is used — install, linking, repair, and import are implemented here. See [THIRD_PARTY_NOTICES.md](https://github.com/charonX/dsh-skills-manager/blob/main/THIRD_PARTY_NOTICES.md).

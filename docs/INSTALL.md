@@ -49,6 +49,12 @@ linked 形态要求先 `pnpm run build`（profile 读的是构建产物，不会
 
 前置：harness 已 `pnpm run build`；tarball 安装会从 registry 取 `@deepseek-ai/dsh-home-paths` 与 `yaml`（缓存/离线环境可用下面的 linked checkout 方式）。
 
+## 1.5 从 npm 安装
+
+```sh
+dsh plugin --profile skills-test add @charonx/dsh-skills-manager
+```
+
 ## 2. 手工装进一个真实 profile
 
 以新建的 `skills-test` 为例：
