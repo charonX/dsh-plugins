@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'tsdown'
+
+/** Package name doubles as the client module id in the loader handoff. */
+const { name } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { name: string }
 
 /**
  * Browser half of the bundle: one CommonJS factory handed to the host module
@@ -22,7 +26,7 @@ export default defineConfig({
   },
   outputOptions: {
     entryFileNames: 'client.js',
-    banner: 'window.__ModuleLoader__.load({ id: "dsh-skills-manager", factory: (require) => {',
+    banner: `window.__ModuleLoader__.load({ id: ${JSON.stringify(name)}, factory: (require) => {`,
     intro: 'var module = { exports: {} }; var exports = module.exports;',
     footer: 'return module.exports; } });',
   },

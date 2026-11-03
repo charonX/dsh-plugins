@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const packageName = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name
 const require = createRequire(join(root, 'package.json'))
 let registration
 globalThis.window = { __ModuleLoader__: { load: (value) => { registration = value } } }
@@ -32,6 +33,7 @@ const panel = registered.slots.find((entry) => entry.options.name === 'main')
 if (panel === undefined) throw new Error('client bundle did not register the main slot')
 const sidebar = registered.slots.find((entry) => entry.options.name === 'sidebar.panellist')
 if (sidebar === undefined) throw new Error('client bundle did not register the sidebar.panellist slot')
+if (registration.id !== packageName) throw new Error(`client id "${registration.id}" does not match package name "${packageName}"`)
 console.log(JSON.stringify({
   id: registration.id,
   locale: registered.locale?.namespace,

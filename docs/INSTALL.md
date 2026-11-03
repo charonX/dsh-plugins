@@ -62,7 +62,7 @@ npm run build
 dsh plugin --profile skills-test add "$PWD"
 # b) tarball：发布前验证打包
 npm pack
-dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.0.tgz"
 
 # 3) 检查装配
 dsh --profile skills-test --dump-config | grep -A2 "== dsh-skills-manager"
@@ -82,7 +82,7 @@ curl -s http://127.0.0.1:3099/dsh-skills-manager/api/library
 卸载：
 
 ```sh
-dsh plugin --profile skills-test remove dsh-skills-manager
+dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 dsh --profile skills-test --dump-config | grep skills-manager || echo "layer removed"
 # 可选：删除 profile 目录或 --from-default-profile web 重置
 ```

@@ -1,4 +1,4 @@
 # dsh bundle patch: inserts the skills manager into a profile's layer stack.
 - insert:
     - id: skills-manager
-      name: 'dsh-skills-manager'
+      name: '@charonx/dsh-skills-manager'

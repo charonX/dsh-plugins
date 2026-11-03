@@ -25,7 +25,7 @@ const HARNESS = resolve(process.env.DSH_HARNESS_DIR ?? join(ROOT, '..', 'deepsee
 const KEEP = process.argv.includes('--keep')
 const LINKED = process.argv.includes('--linked')
 const PROFILE = 'skills-install-test'
-const PACKAGE = 'dsh-skills-manager'
+const PACKAGE = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
 const PREFIX = '/dsh-skills-manager'
 const BIN = join(HARNESS, 'apps', 'cli', 'src', 'bin.ts')
 

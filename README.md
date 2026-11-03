@@ -56,15 +56,29 @@ flowchart LR
 
 Requirements: Node.js ≥ 24.9, DeepSeek Harness `0.2.1-rc.5` or newer (tested on `0.2.1-rc.5` and `0.2.2-alpha.2`), `git` only for Git sources.
 
-As a profile bundle (the published shape):
+As a profile bundle (the published shape). Install from the npm registry:
+
+```sh
+dsh plugin --profile skills-test add @charonx/dsh-skills-manager
+```
+
+Or from Git (the package builds itself through its `prepare` script):
+
+```sh
+dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-manager.git
+```
+
+Or pack it yourself:
 
 ```sh
 npm pack                                                        # build + tarball
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.0.tgz"
 dsh --profile skills-test --no-open --port 3099                 # open the token URL
-dsh plugin --profile skills-test remove dsh-skills-manager
+dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```
+
+The published name is `@charonx/dsh-skills-manager`; the unqualified `dsh-skills-manager` on npm belongs to a different project.
 
 While developing, link the checkout instead of packing (`dsh plugin add "$PWD"`), and select the built entry with an overlay:
 
@@ -108,7 +122,7 @@ Provenance (`originPath`, `originRoot`, `contentHash`, `importedAt`) is recorded
 
 ```yaml
 - id: skills-manager
-  name: dsh-skills-manager
+  name: '@charonx/dsh-skills-manager'
   config:
     libraryDir: ~/.dsh/skills-manager/library            # default
     statePath: ~/.dsh/skills-manager/manager-state.json  # default

@@ -56,15 +56,29 @@ flowchart LR
 
 要求：Node.js ≥ 24.9；DeepSeek Harness `0.2.1-rc.5` 及以上（在 `0.2.1-rc.5` 与 `0.2.2-alpha.2` 上验证）；只有 Git 来源需要 `git`。
 
-以 profile bundle 安装（发布形态）：
+以 profile bundle 安装（发布形态）。从 npm 安装：
+
+```sh
+dsh plugin --profile skills-test add @charonx/dsh-skills-manager
+```
+
+或直接从 Git 安装（包内 `prepare` 会自行构建）：
+
+```sh
+dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-manager.git
+```
+
+或自行打包：
 
 ```sh
 npm pack                                                        # 构建并打包
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.0.tgz"
 dsh --profile skills-test --no-open --port 3099                 # 打开日志里的 token 地址
-dsh plugin --profile skills-test remove dsh-skills-manager
+dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```
+
+发布名为 `@charonx/dsh-skills-manager`；npm 上无前缀的 `dsh-skills-manager` 属于另一个项目。
 
 开发时用 linked checkout 更快（`dsh plugin add "$PWD"`），或用 overlay 直接挂源码行：
 
@@ -108,7 +122,7 @@ Desktop：**Plugins → Add plugin → 本地路径**，然后在左栏打开 **
 
 ```yaml
 - id: skills-manager
-  name: dsh-skills-manager
+  name: '@charonx/dsh-skills-manager'
   config:
     libraryDir: ~/.dsh/skills-manager/library            # 默认
     statePath: ~/.dsh/skills-manager/manager-state.json  # 默认

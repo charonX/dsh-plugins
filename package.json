@@ -1,7 +1,7 @@
 {
-  "name": "dsh-skills-manager",
+  "name": "@charonx/dsh-skills-manager",
   "version": "0.1.0",
-  "description": "Skill library manager for DeepSeek Harness: install, update, remove, and toggle skills from git or local sources, with a Plugins-page UI.",
+  "description": "Skill library manager for DeepSeek Harness: install sources from Git or a folder, check updates, import globally installed skills, and distribute them into projects as symlinks.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -18,11 +18,12 @@
     "lib",
     "client",
     "cordis.patch.yml",
-    "docs",
+    "docs/*.md",
     "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
     "LICENSE",
-    "THIRD_PARTY_NOTICES.md",
-    "README.zh.md"
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=24.9.0",
@@ -61,7 +62,8 @@
     "smoke:client": "node scripts/smoke-client.mjs",
     "verify:local": "node scripts/verify-local.mjs",
     "verify:profile": "node scripts/verify-profile.mjs",
-    "debug:ui": "node scripts/debug-ui.mjs"
+    "debug:ui": "node scripts/debug-ui.mjs",
+    "prepare": "node scripts/prepare.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
@@ -93,5 +95,14 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "author": "charonX",
+  "homepage": "https://github.com/charonX/dsh-skills-manager#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charonX/dsh-skills-manager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/charonX/dsh-skills-manager/issues"
   }
 }
