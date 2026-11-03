@@ -73,7 +73,7 @@ dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-m
 The repository commits its build output (`lib/` and `client/`), so Git installs need no build approval. A GitHub Release tarball works the same way:
 
 ```sh
-dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.1/charonx-dsh-skills-manager-0.1.1.tgz
+dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.2/charonx-dsh-skills-manager-0.1.2.tgz
 ```
 
 Or pack it yourself:
@@ -81,7 +81,7 @@ Or pack it yourself:
 ```sh
 npm pack                                                        # build + tarball
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.1.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.2.tgz"
 dsh --profile skills-test --no-open --port 3099                 # open the token URL
 dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```

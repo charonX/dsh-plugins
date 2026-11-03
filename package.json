@@ -1,6 +1,6 @@
 {
   "name": "@charonx/dsh-skills-manager",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Skill library manager for DeepSeek Harness: install sources from Git or a folder, check updates, import globally installed skills, and distribute them into projects as symlinks.",
   "type": "module",
   "main": "lib/index.js",

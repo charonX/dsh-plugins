@@ -73,7 +73,7 @@ dsh plugin --profile skills-test add git+https://github.com/charonX/dsh-skills-m
 仓库已提交构建产物（`lib/`、`client/`），Git 安装不需要构建授权。GitHub Release 的 tarball 同样免构建：
 
 ```sh
-dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.1/charonx-dsh-skills-manager-0.1.1.tgz
+dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manager/releases/download/v0.1.2/charonx-dsh-skills-manager-0.1.2.tgz
 ```
 
 或自行打包：
@@ -81,7 +81,7 @@ dsh plugin --profile skills-test add https://github.com/charonX/dsh-skills-manag
 ```sh
 npm pack                                                        # 构建并打包
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
-dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.1.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.2.tgz"
 dsh --profile skills-test --no-open --port 3099                 # 打开日志里的 token 地址
 dsh plugin --profile skills-test remove @charonx/dsh-skills-manager
 ```

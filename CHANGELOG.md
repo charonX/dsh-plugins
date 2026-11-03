@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- README images and documentation links now use absolute GitHub URLs, so they render correctly on the npm package page.
+- Adds the tag-triggered npm trusted-publishing workflow note and release checklist updates.
+
 ## 0.1.1
 
 - Ship the built `lib/` and `client/` artifacts in the repository so Git installs need no `prepare` script or pnpm `allowBuilds` approval.

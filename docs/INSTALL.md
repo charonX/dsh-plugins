@@ -30,7 +30,7 @@ DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
 | tarball | `npm pack` → `add <tgz>` | 上面全部 + **`files` 白名单、`prepack` 构建、不含源码/测试**，与 npm 用户最终拿到的包一致 | 发布前、排查"本地能跑、装完不行" |
 | registry | `dsh plugin --profile <p> add dsh-skills-manager` | 真实用户路径 | 发布之后 |
 
-从 Git 安装不需要构建：仓库提交了 `lib/` 与 `client/`，`v0.1.1` 起可直接 `dsh plugin add git+https://…`，不再需要 `allowBuilds` 授权。npm registry 与 GitHub Release tarball 路径同样免构建。
+从 Git 安装不需要构建：仓库提交了 `lib/` 与 `client/`，`v0.1.2` 起可直接 `dsh plugin add git+https://…`，不再需要 `allowBuilds` 授权。npm registry 与 GitHub Release tarball 路径同样免构建。
 
 linked 形态要求先 `pnpm run build`（profile 读的是构建产物，不会替你编译）；tarball 形态由 `prepack` 自动构建。
 
@@ -70,7 +70,7 @@ npm run build
 dsh plugin --profile skills-test add "$PWD"
 # b) tarball：发布前验证打包
 npm pack
-dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.1.tgz"
+dsh plugin --profile skills-test add "$PWD/charonx-dsh-skills-manager-0.1.2.tgz"
 
 # 3) 检查装配
 dsh --profile skills-test --dump-config | grep -A2 "== dsh-skills-manager"
