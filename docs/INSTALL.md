@@ -30,6 +30,8 @@ DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
 | tarball | `npm pack` → `add <tgz>` | 上面全部 + **`files` 白名单、`prepack` 构建、不含源码/测试**，与 npm 用户最终拿到的包一致 | 发布前、排查"本地能跑、装完不行" |
 | registry | `dsh plugin --profile <p> add dsh-skills-manager` | 真实用户路径 | 发布之后 |
 
+从 Git 安装时包会通过 `prepare` 自行构建；pnpm 会拦截该脚本，需要在插件管理界面点「允许并重试」，或把 pnpm 打印的 `allowBuilds` 键写进 profile 的 `pnpm-workspace.yaml`。要完全跳过构建，用 npm registry 或 GitHub Release 的 tarball。
+
 linked 形态要求先 `pnpm run build`（profile 读的是构建产物，不会替你编译）；tarball 形态由 `prepack` 自动构建。
 
 > tarball 是一个**文件**（`dsh-skills-manager-0.1.0.tgz`），不是目录，也不会预先生成：在插件仓库根目录跑 `npm pack` 才会出现。它被 `.gitignore` 的 `*.tgz` 忽略，`pnpm verify:profile` 默认在结束时删除（`--keep` 保留并打印路径）。
