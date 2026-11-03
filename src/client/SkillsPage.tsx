@@ -446,9 +446,13 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           onLinked={(report, project) => {
             setLinkTarget(null)
             mergeReport(report)
+            setExpandedProjects((current) => current.includes(project) ? current : [...current, project])
             setNotice(linkTarget.skillName === undefined
               ? t('linkSucceeded', { count: report.counts.linked, project })
               : t('linkOneSucceeded', { skill: linkTarget.skillName, project }))
+            setTimeout(() => {
+              document.getElementById('skills-manager-projects')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }, 50)
           }}
         />
       )}
@@ -721,7 +725,7 @@ function ProjectsSection({
 }: ProjectsSectionProps): ReactElement {
   const nameOf = (key: string): string => agents.find((agent) => agent.name === key)?.displayName ?? key
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <section id="skills-manager-projects" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{t('linkedProjects')}</h3>
         <span style={{ flex: 1 }} />
@@ -922,7 +926,15 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
   }
 
   const submit = useCallback(async (): Promise<void> => {
-    if (project.trim() === '' || selected.length === 0 || busy) return
+    if (busy) return
+    if (project.trim() === '') {
+      setError(t('projectRequired'))
+      return
+    }
+    if (selected.length === 0) {
+      setError(t('agentsRequired'))
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -934,11 +946,15 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
       })
       onLinked(report, report.project.project)
     } catch (failure) {
-      setError(`${messageOf(failure)} (${codeOf(failure)})`)
+      const message = `${messageOf(failure)} (${codeOf(failure)})`
+      // Kept for DevTools users: the dialog shows the same text, the console
+      // keeps the failed request and code next to the network entry.
+      console.warn('[skills-manager] link failed:', codeOf(failure), messageOf(failure))
+      setError(message)
     } finally {
       setBusy(false)
     }
-  }, [busy, onLinked, project, selected, skillName, source.slug])
+  }, [busy, onLinked, project, selected, skillName, source.slug, t])
 
   return (
     <Overlay onClose={busy ? undefined : onClose}>
@@ -1036,7 +1052,7 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
           <button
             type="button"
             style={primaryButtonStyle}
-            disabled={busy || project.trim() === '' || selected.length === 0}
+            disabled={busy}
             onClick={() => { void submit() }}
           >
             {busy ? t('linking') : t('linkStart')}

@@ -168,7 +168,7 @@ pnpm verify:profile   # bundle path: packs, installs into an isolated profile, b
 
 It installs a local and a git source, links a project, exercises both switch levels, checks the update flow, and fetches the browser bundle — all in a temporary directory, never touching `~/.dsh` or your projects. `--keep` preserves the fixture and overlay for debugging; `DSH_HARNESS_DIR` points at another checkout.
 
-The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md); integration into real profiles and Desktop is covered by [docs/INSTALL.md](docs/INSTALL.md).
+The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md); integration into real profiles and Desktop is covered by [docs/INSTALL.md](docs/INSTALL.md); UI/API debugging (DevTools, `curl`, and the optional Playwright replay script) is in [docs/DEBUG.md](docs/DEBUG.md).
 
 Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
 

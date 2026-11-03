@@ -59,7 +59,8 @@
     "prepack": "npm run build",
     "smoke:client": "node scripts/smoke-client.mjs",
     "verify:local": "node scripts/verify-local.mjs",
-    "verify:profile": "node scripts/verify-profile.mjs"
+    "verify:profile": "node scripts/verify-profile.mjs",
+    "debug:ui": "node scripts/debug-ui.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
