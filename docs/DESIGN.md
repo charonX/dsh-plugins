@@ -310,6 +310,7 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 ## 18. 扫描与导入（全局已安装技能）
 
+- **分组展示**：扫描结果按来源根分组，每个根都显示（包括不存在或技能数为 0 的），让用户知道扫描过哪些位置；搜索时只保留有命中的分组。
 - **扫描**：读取内置全局根（DSH `~/.dsh/skills`、`~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills`、`~/.cursor/skills`、`~/.gemini/skills`、`~/.config/opencode/skills`、`~/.codeium/windsurf/skills`，支持各自 env 覆盖）加配置项 `scanSkillDirs`；目录 bundle 与扁平 `<name>.md` 都识别，只读。
 - **导入策略：复制，不软链**。理由：外部目录不归本插件所有（可能被原工具改写/删除），而库要承担版本、启停、按项目分发；软链会把生命周期交给外部。导入后技能是库里的普通实体，可照常更新/停用/关联。
 - **冲突判定**：技能名 + `SKILL.md` 的 sha256。

@@ -933,7 +933,6 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
   const [overwrite, setOverwrite] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<ImportResponse | null>(null)
-  const [showRoots, setShowRoots] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -949,13 +948,21 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
 
   useEffect(() => { void load() }, [load])
 
-  const skills = useMemo(() => {
+  const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const rows = scan?.skills ?? []
-    if (needle === '') return rows
-    return rows.filter((skill) =>
-      [skill.name, skill.description, skill.originLabel]
-        .some((value) => value !== undefined && value.toLowerCase().includes(needle)))
+    const matches = (skill: ScanSkillView): boolean => needle === ''
+      || [skill.name, skill.description, skill.originLabel]
+        .some((value) => value !== undefined && value.toLowerCase().includes(needle))
+    const byOrigin = new Map<string, ScanSkillView[]>()
+    for (const skill of scan?.skills ?? []) {
+      if (!matches(skill)) continue
+      const list = byOrigin.get(skill.originKey) ?? []
+      list.push(skill)
+      byOrigin.set(skill.originKey, list)
+    }
+    return (scan?.roots ?? [])
+      .map((root) => ({ root, skills: byOrigin.get(root.key) ?? [] }))
+      .filter((group) => needle === '' || group.skills.length > 0 || group.root.label.toLowerCase().includes(needle))
   }, [query, scan])
 
   const selectable = (skill: ScanSkillView): boolean =>
@@ -1045,91 +1052,87 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
               total: (scan?.roots ?? []).length,
             })}
           </span>
-          <button
-            type="button"
-            style={{ ...buttonStyle, padding: '0 6px', fontSize: 10 }}
-            onClick={() => { setShowRoots((open) => !open) }}
-          >
-            {showRoots ? t('scanRootsHide') : t('scanRootsShow')}
-          </button>
+          <span>·</span>
+          <span>{t('scanRootsHint')}</span>
         </div>
-        {showRoots && (
-          <div style={{
-            margin: '0 14px 8px',
-            padding: '6px 8px',
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: 'var(--dsw-radius-sm)',
-            maxHeight: 160,
-            overflow: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-          }}>
-            {(scan?.roots ?? []).map((root) => (
-              <div key={root.key} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11 }}>
-                <span style={{ minWidth: 84, color: COLORS.secondary }}>{root.label}</span>
-                <code style={{ color: COLORS.tertiary, overflow: 'hidden', textOverflow: 'ellipsis' }}>{root.path}</code>
-                <span style={{ marginLeft: 'auto', color: root.exists ? COLORS.success : COLORS.tertiary }}>
-                  {root.exists ? t('scanRootsExists') : t('scanMissingRoot')}
-                </span>
-              </div>
-            ))}
-            <div style={{ fontSize: 10, color: COLORS.tertiary, paddingTop: 2 }}>{t('scanRootsHint')}</div>
-          </div>
-        )}
         <div style={{ overflow: 'auto', padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {loading && <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanLoading')}</p>}
           {error !== null && <p style={{ color: COLORS.error, fontSize: 12 }} role="alert">{error}</p>}
-          {!loading && (scan?.skills.length ?? 0) === 0 && (
+          {!loading && groups.length === 0 && (
             <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanEmpty')}</p>
           )}
-          {skills.map((skill) => {
-            const checkboxId = `scan-${skill.path}`
-            return (
-              <label
-                key={skill.path}
-                htmlFor={checkboxId}
-                title={skill.path}
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'flex-start',
-                  padding: '6px 4px',
-                  borderBottom: `1px solid ${COLORS.border}`,
-                  opacity: selectable(skill) ? 1 : 0.6,
-                  cursor: selectable(skill) ? 'pointer' : 'default',
-                }}
-              >
-                <input
-                  id={checkboxId}
-                  type="checkbox"
-                  checked={selected.includes(skill.path)}
-                  disabled={busy || !selectable(skill)}
-                  onChange={() => { toggle(skill.path) }}
-                  style={{ marginTop: 3 }}
-                />
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <strong style={{ fontSize: 13 }}>{skill.name}</strong>
-                    <code style={{ fontSize: 11, color: COLORS.tertiary }}>{skill.dirName}</code>
-                    <span style={{ fontSize: 11, color: COLORS.tertiary }}>{skill.originLabel}</span>
-                    <ScanStatus t={t} skill={skill} />
-                  </span>
-                  {skill.description !== undefined && (
-                    <span style={{ fontSize: 12, color: COLORS.secondary }}>{skill.description}</span>
-                  )}
-                  {skill.problem !== undefined && (
-                    <span style={{ fontSize: 11, color: COLORS.warn }}>{skill.problem}</span>
-                  )}
-                  {skill.existing !== undefined && (
-                    <span style={{ fontSize: 11, color: COLORS.tertiary }}>
-                      {t('scanConflictDetail', { source: `${skill.existing.source}/${skill.existing.skillName}` })}
-                    </span>
-                  )}
+          {groups.map(({ root, skills: groupSkills }) => (
+            <div key={root.key} style={{ marginTop: 6 }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+                padding: '4px 2px',
+                borderBottom: `1px solid ${COLORS.border}`,
+              }}>
+                <strong style={{ fontSize: 12 }}>{root.label}</strong>
+                <code
+                  title={root.path}
+                  style={{ fontSize: 10, color: COLORS.tertiary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '50%' }}
+                >
+                  {root.path}
+                </code>
+                <span style={{ fontSize: 11, color: COLORS.tertiary }}>
+                  {t('countSkills', { count: groupSkills.length })}
                 </span>
-              </label>
-            )
-          })}
+                {!root.exists && <Badge text={t('scanMissingRoot')} tone="warn" />}
+                {root.exists && groupSkills.length === 0 && (
+                  <span style={{ fontSize: 11, color: COLORS.tertiary }}>{t('scanGroupEmpty')}</span>
+                )}
+              </div>
+              {groupSkills.map((skill) => {
+                const checkboxId = `scan-${skill.path}`
+                return (
+                  <label
+                    key={skill.path}
+                    htmlFor={checkboxId}
+                    title={skill.path}
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'flex-start',
+                      padding: '6px 4px 6px 12px',
+                      borderBottom: `1px solid ${COLORS.border}`,
+                      opacity: selectable(skill) ? 1 : 0.6,
+                      cursor: selectable(skill) ? 'pointer' : 'default',
+                    }}
+                  >
+                    <input
+                      id={checkboxId}
+                      type="checkbox"
+                      checked={selected.includes(skill.path)}
+                      disabled={busy || !selectable(skill)}
+                      onChange={() => { toggle(skill.path) }}
+                      style={{ marginTop: 3 }}
+                    />
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <strong style={{ fontSize: 13 }}>{skill.name}</strong>
+                        <code style={{ fontSize: 11, color: COLORS.tertiary }}>{skill.dirName}</code>
+                        <ScanStatus t={t} skill={skill} />
+                      </span>
+                      {skill.description !== undefined && (
+                        <span style={{ fontSize: 12, color: COLORS.secondary }}>{skill.description}</span>
+                      )}
+                      {skill.problem !== undefined && (
+                        <span style={{ fontSize: 11, color: COLORS.warn }}>{skill.problem}</span>
+                      )}
+                      {skill.existing !== undefined && (
+                        <span style={{ fontSize: 11, color: COLORS.tertiary }}>
+                          {t('scanConflictDetail', { source: `${skill.existing.source}/${skill.existing.skillName}` })}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          ))}
         </div>
         {counts !== null && (
           <div style={{ padding: '8px 14px', fontSize: 12, borderTop: `1px solid ${COLORS.border}`, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
