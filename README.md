@@ -1,92 +1,104 @@
 # dsh-skills-manager
 
-A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. It installs skill sources from Git or a local folder, keeps them updated, lets you switch individual skills on or off, and distributes them into projects as symlinks — for DSH itself and for the other coding agents a project uses. Everything is available on a dedicated **Skills** page in the Harness sidebar, next to Plugins and Automation tasks.
+English | [中文](README.zh.md)
 
-Skills managed here are real Harness skills: they appear in the model's `skill` tool catalog and in the composer's `/` suggestions without any extra wiring.
+A **skill library manager for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**. Install skill sources from Git or a local folder, keep them current, import skills other agents already installed, and distribute them into projects as symlinks — for DSH itself and for the other coding agents a project uses.
 
+Everything is available on a dedicated **Skills** page in the Harness sidebar, next to Plugins and Automation tasks.
+
+<img src="docs/assets/skills-page.png" alt="Skills page" width="1100" />
+
+## What it does
+
+- **One library, many sources.** Every source is a Git clone or a copied folder; a source may contain one skill or dozens.
+- **Version and update checks.** `package.json` version when present, otherwise `git describe --tags --always --dirty`; **Check for updates** fetches the remote and reports commits behind/ahead, local changes, and the upstream version label. Updating stays an explicit `git pull --ff-only`.
+- **Install from anywhere reasonable.** Git (`https://`, `ssh://`, `scp`-like), a local folder, or the scanner for skills already installed by DSH, Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Windsurf and shared agents.
+- **Project distribution by symlink.** Link any number of projects at once; each project's agent directories point straight into the library, so one update reaches every project. Choose per project which agents to target (75 conventions plus `dsh`).
+- **Two switch levels.** The library switch is the master (disabled skills leave the model catalog and the `/` menu); the per-project switch only controls distribution into that project.
+- **Collapsible lists, batch controls.** Source cards and linked projects start collapsed; expand one row, or use Expand all / Collapse all.
+
+## Screenshots
+
+| Link to multiple projects | Per-project state |
+|---|---|
+| <img src="docs/assets/link-projects.png" alt="Link dialog" width="560" /> | <img src="docs/assets/linked-projects.png" alt="Linked projects" width="560" /> |
+
+| Import what other agents installed | Update check |
+|---|---|
+| <img src="docs/assets/scan-import.png" alt="Scan dialog" width="560" /> | <img src="docs/assets/update-check.png" alt="Update check" width="560" /> |
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Library["Skill library (~/.dsh/skills-manager)"]
+    S1["source A (git)"] --> K1["skills/<name>/SKILL.md"]
+    S2["source B (local)"] --> K2["skills/<name>/SKILL.md"]
+  end
+  Library -->|"ctx.skills provider (rank 450)"| Catalog["model skill catalog + / menu"]
+  Library -->|"symlinks"| P1["project A/.dsh/skills"]
+  Library -->|"symlinks"| P2["project A/.claude/skills"]
+  Library -->|"symlinks"| P3["project B/.agents/skills"]
+  UI["Skills page"] -->|"same-origin HTTP"| Host["host routes"]
+  Host --> Library
+  Host -->|"install, update, check, scan, import"| Git["git / global skill roots"]
 ```
-$DSH_HOME/skills-manager/
-├── library/                 # one directory per installed source
-│   ├── owner-repo/SKILL.md                      # single-skill source
-│   ├── other-repo/skills/<name>/SKILL.md        # multi-skill source
-│   └── other-repo/skills/<category>/<name>/SKILL.md   # nested category layout
-├── manager-state.json       # enable flags, categories, notes (sparse)
-├── links.json               # per-project link intent (agents + skills)
-└── updates.json             # last git update check per source
-```
 
-## Requirements
-
-- Node.js ≥ 24.9
-- DeepSeek Harness `0.2.1-rc.5` or newer (`engines.dsh` is `>=0.2.1-rc.5 <0.3.0`; tested on `0.2.1-rc.5` and `0.2.2-alpha.2`)
-- `git` on `PATH` only for Git sources; local-folder sources work without it
+- The library lives outside every agent's scan path; only explicit links put a skill into a project.
+- Skills reach DSH through a dedicated `SkillProvider`, so the model `skill` tool and the `/` menu work without extra wiring.
+- Project links are real symlinks into the library; a real file, a directory, or a foreign symlink at the target position is reported as a conflict and never touched.
 
 ## Install
 
-Into a Harness profile (a linked checkout while developing):
+Requirements: Node.js ≥ 24.9, DeepSeek Harness `0.2.1-rc.5` or newer (tested on `0.2.1-rc.5` and `0.2.2-alpha.2`), `git` only for Git sources.
+
+As a profile bundle (the published shape):
 
 ```sh
-dsh plugin --profile web add /path/to/dsh-skills-manager
-dsh --profile web --dump-config    # should show a "# == dsh-skills-manager" layer
-dsh --profile web
-```
-
-As a profile bundle. Use a **linked checkout** while developing and a **tarball** only to validate the published package (`files`, `prepack`, no sources); both are one command for `dsh plugin add`:
-
-```sh
-dsh --profile skills-test --from-default-profile web --dump-config >/dev/null   # create profile, no boot
-
-# development: the profile links this checkout (build first)
-pnpm run build
-dsh plugin --profile skills-test add "$PWD"
-
-# release check: only what npm would ship
-npm pack
+npm pack                                                        # build + tarball
+dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
 dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
-
-dsh --profile skills-test --no-open --port 3099
+dsh --profile skills-test --no-open --port 3099                 # open the token URL
 dsh plugin --profile skills-test remove dsh-skills-manager
 ```
 
-`pnpm verify:profile` automates the tarball shape in an isolated `DSH_HOME`; `pnpm verify:profile -- --linked` does the same with a linked checkout (9 checks each).
-
-From a Harness source checkout, select the built host entry with an overlay:
+While developing, link the checkout instead of packing (`dsh plugin add "$PWD"`), and select the built entry with an overlay:
 
 ```yaml
-# dev/overlay.example.yml — replace the path with your checkout
+# dev/overlay.example.yml — replace the absolute paths
 - insert:
     - id: skills-manager
-      name: '/Users/you/code/dsh-skills-manager/lib/index.js'
+      name: '/absolute/path/to/dsh-skills-manager/lib/index.js'
       config:
-        libraryDir: /Users/you/.dsh/skills-manager/library
+        libraryDir: /absolute/path/to/dsh-skills-manager/.dev/library
 ```
 
-```sh
-cd deepseek-harness
-pnpm dsh web --patch /path/to/dsh-skills-manager/dev/overlay.example.yml
-```
+Desktop: **Plugins → Add plugin → local path**, then open **Skills** in the sidebar. Exact steps and troubleshooting: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Use
 
-Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks**).
+**Sources** — add a Git repository or a local folder. Local folders are copied without their `.git`; Git installs stream `git clone` output. Removing a source deletes its directory and records, and removes every project link first.
 
-- **Add skill source** — a Git repository (`https://`, `ssh://`, `git@host:owner/repo`) or a local folder. A folder must contain `SKILL.md` at its root, under `skills/<name>/`, or under `skills/<category>/<name>/`. Git installs show live `git clone` output; local folders are copied without any nested `.git`.
-- **Version** — `package.json` version when the source has one, else `git describe --tags --always --dirty` (tag, then short hash, with `-dirty` for local edits).
-- **Check for updates** — fetches the Git remote and compares the local HEAD with its upstream: commits behind, commits ahead, a `-dirty` working tree, and the upstream version label. The last result is kept in `updates.json` and shown on the source card; checking is advisory and never touches the checkout.
-- **Update** — `git pull --ff-only` for Git sources; a failed pull keeps its raw git output for diagnosis.
-- **Remove** — deletes the source directory and its state entries.
-- **Switches** — disable a whole source or a single skill. A disabled skill leaves the catalog entirely: the model cannot call it and `/name` no longer suggests it.
-- **Scan installed skills** — reads the global skill roots of DSH and the common agents (`.dsh/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills`, …; only existing directories are scanned, and **Show roots** lists each with its path and state), groups what it finds by origin (each root shows its path and skill count, including **0** for an empty or missing directory), shows each skill's import status, and copies selected skills into the library. Importing is a **copy**, never a symlink to the original directory: the library stays the single source of truth, and the original tool cannot change or delete a managed skill. Conflicts are decided by name plus the sha256 of `SKILL.md` — identical content is skipped, different content is refused, and overwriting only replaces a copy this manager imported earlier. Provenance is recorded in `imports.json`.
-- **Link to project** — points a project's agent skills directories at the library with symlinks, so an update in the library reaches every project at once. The project field is a **multi-select dropdown** (pick any number of workspace directories, or add a custom path):
-  - `dsh` targets `<project>/.dsh/skills`, the Harness `project-dsh` root, so a linked skill is visible to that project's sessions.
-  - The other agent targets come from a pinned registry of project conventions (`.claude/skills`, `.codex/skills`, `.agents/skills`, …); pick any subset per project.
-  - Occupied positions (a real directory, a file, or a foreign symlink) are reported as conflicts and never touched.
-  - **Resync** rebuilds recorded links, repairs hand-repointed library links, and drops broken links and stale records.
-  - **Per-project switch** — each recorded skill has its own switch in the project panel. Turning it off removes only that project's links and keeps the record, so the same skill can be on in one project and off in another.
-  - **Two switch levels**: the library switch is the master (a globally disabled skill is unavailable everywhere); the per-project switch controls distribution into that project. Global disable detaches links but keeps project records, so re-enabling restores them automatically — except entries the user switched off in that project.
-- **Search** filters by source, skill name, and description; a non-empty search expands matching sources.
-- **Collapsible lists** — every source card and every linked project starts collapsed and expands on click; the toolbar has **Expand all / Collapse all** for sources, and the linked-projects header has the same pair. A project's rows show the state plus the agent names (`linked dsh · claude-code`), not individual paths.
-- Invalid or duplicated `SKILL.md` files stay visible with the reason, so a broken source is fixable instead of silently missing.
+**Version and updates** — the source card shows the version and, for Git, a **Check for updates** result (`N new commits`, local changes, last check time). **Update** runs `git pull --ff-only`; a failure keeps the raw Git output.
+
+**Link to a project** — the project field is a multi-select dropdown: pick workspace directories or add custom paths, choose agents (`dsh` by default), then submit once for every selected project. A linked skill is visible in that project's sessions (`project-dsh`, rank 100) and in the other chosen agents' directories.
+
+**Linked projects** — each project row lists its skills with a per-project switch and the state plus agent names (`linked dsh · claude-code`). **Resync** restores deleted links, repairs hand-repointed library links, and drops broken ones and stale records. **Unlink all** removes the links and the record.
+
+**Scan installed skills** — the scanner reads existing global roots (`~/.dsh/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills`, `~/.gemini/skills`, `~/.config/opencode/skills`, `~/.codeium/windsurf/skills`, plus `scanSkillDirs`) and groups results by origin. Roots that are missing or empty show **0**, so it is obvious what was scanned. Import copies the selected skills into `imported-<origin>` sources.
+
+### Import strategy and conflicts
+
+Importing **copies**; it never symlinks to the original directory. External directories do not belong to this manager, so a link would hand their lifecycle to another tool. Conflicts are decided by skill name plus the sha256 of `SKILL.md`:
+
+| Situation | Behavior |
+|---|---|
+| Same name, same content | Skipped as already imported |
+| Same name, different content, library copy is local/Git-managed | Refused (`SKILL_NAME_CONFLICT`) |
+| Same name, different content, library copy is an earlier import | Refused by default; **overwrite** replaces only that imported copy |
+| Path outside the configured roots, or empty selection | Failed (`IMPORT_PATH_INVALID`, `IMPORT_EMPTY`) |
+
+Provenance (`originPath`, `originRoot`, `contentHash`, `importedAt`) is recorded in `imports.json`.
 
 ## Configuration
 
@@ -94,112 +106,88 @@ Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks*
 - id: skills-manager
   name: dsh-skills-manager
   config:
-    libraryDir: ~/.dsh/skills-manager/library          # default
-    statePath: ~/.dsh/skills-manager/manager-state.json # default
-    linksPath: ~/.dsh/skills-manager/links.json         # default
-    updatesPath: ~/.dsh/skills-manager/updates.json     # default
+    libraryDir: ~/.dsh/skills-manager/library            # default
+    statePath: ~/.dsh/skills-manager/manager-state.json  # default
+    linksPath: ~/.dsh/skills-manager/links.json          # default
+    updatesPath: ~/.dsh/skills-manager/updates.json      # default
+    importsPath: ~/.dsh/skills-manager/imports.json      # default
+    scanSkillDirs: []                                    # extra global roots
     providerName: skills-manager
     rank: 450
     routePrefix: /dsh-skills-manager
     allowFileProtocol: true
 ```
 
-| Field | Default | Meaning |
-|---|---|---|
-| `libraryDir` | `<dshHome>/skills-manager/library` | Managed library root |
-| `statePath` | `<dshHome>/skills-manager/manager-state.json` | Enable flags, categories, notes |
-| `linksPath` | `<dshHome>/skills-manager/links.json` | Per-project link intent |
-| `updatesPath` | `<dshHome>/skills-manager/updates.json` | Last update check per source |
-| `importsPath` | `<dshHome>/skills-manager/imports.json` | Provenance of imported skills |
-| `scanSkillDirs` | `[]` | Extra global roots offered by the import scanner |
-| `providerName` | `skills-manager` | Name registered on `ctx.skills` |
-| `rank` | `450` | Provider precedence; lower wins (project skills at 100/200 still win) |
-| `routePrefix` | `/dsh-skills-manager` | HTTP prefix for the Web Client API |
-| `allowFileProtocol` | `true` | Accept `file://` Git identifiers (local repositories) |
-
-The provider's rank sits between Harness user roots (400/500): a project skill with the same name overrides a library skill.
+| Field | Meaning |
+|---|---|
+| `libraryDir` | Managed library root; every direct child is a source |
+| `statePath` | Enable flags, categories, notes (sparse JSON) |
+| `linksPath` | Per-project link intent (agents + skills) |
+| `updatesPath` | Last Git update check per source |
+| `importsPath` | Provenance of imported skills |
+| `scanSkillDirs` | Extra roots offered by the import scanner |
+| `providerName` / `rank` | Provider registration; rank 450 sits between project skills (100/200) and user roots (500) |
+| `routePrefix` | HTTP prefix for the Web Client |
+| `allowFileProtocol` | Accept `file://` Git identifiers |
 
 ## HTTP API
 
-All routes live under `routePrefix` and answer JSON with `cache-control: no-store`.
+All routes live under `routePrefix`; responses are JSON with `cache-control: no-store`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/library` | Library snapshot: sources, skills, enable flags, problems |
+| `GET` | `/api/library` | Sources, skills, enable flags, update checks, problems |
 | `POST` | `/api/sources/install` | `{ sourceType: 'git' \| 'local', identifier, force? }` → `202 { jobId }` |
-| `GET` | `/api/jobs/:jobId` | `{ id, status, error, log }` |
-| `POST` | `/api/sources/:slug/update` | Git update → `202 { jobId }` |
-| `DELETE` | `/api/sources/:slug` | Remove source + state |
-| `PUT` | `/api/sources/:slug` | `{ enabled?, category?, note? }` (disabling cascades links) |
-| `PUT` | `/api/sources/:slug/skills/:skill` | `{ enabled?, note? }` (disabling cascades the link) |
-| `GET` | `/api/scan` | Scan global skill roots and classify each skill against the library |
-| `POST` | `/api/import` | `{ paths, overwrite? }` → copy selected scans into `imported-<origin>` sources |
-| `GET` | `/api/agents` | Agent directory registry used by project links |
-| `GET` | `/api/links` | Recorded projects with refreshed link state |
-| `POST` | `/api/links` | `{ project, source, skillName?, agents? }` → link report |
-| `PUT` | `/api/links` | `{ project, source, skillName?, enabled }` → per-project switch |
-| `DELETE` | `/api/links` | Same body → unlink report (drops the record) |
-| `POST` | `/api/links/resync` | `{ project }` → repair report |
-| `POST` | `/api/sources/:slug/check` | Fetch + compare with upstream → `{ check }` |
+| `GET` | `/api/jobs/:jobId` | Job state and accumulated command output |
+| `POST` | `/api/sources/:slug/check` | Fetch and compare with upstream → `{ check }` |
+| `POST` | `/api/sources/:slug/update` | `git pull --ff-only` → `202 { jobId }` |
+| `DELETE` | `/api/sources/:slug` | Remove source, links, records |
+| `PUT` | `/api/sources/:slug` | `{ enabled?, category?, note? }` |
+| `PUT` | `/api/sources/:slug/skills/:skill` | `{ enabled?, note? }` |
+| `GET` | `/api/agents` | Agent directory registry |
+| `GET` | `/api/projects` | DSH workspaces as link targets |
+| `GET` | `/api/links` | Recorded projects with refreshed state |
+| `POST` | `/api/links` | `{ project, source, skillName?, agents? }` |
+| `PUT` | `/api/links` | `{ project, source, skillName?, enabled }` per-project switch |
+| `DELETE` | `/api/links` | Same body → unlink and drop the record |
+| `POST` | `/api/links/resync` | `{ project }` → repair |
+| `GET` | `/api/scan` | Scan global roots, grouped by origin |
+| `POST` | `/api/import` | `{ paths, overwrite? }` → import outcomes |
 
-Failures use `{ "error": { "code", "message" } }` with codes such as `SKILL_SOURCE_INVALID`, `SKILL_SLUG_CONFLICT`, `SKILL_FETCH_FAILED`, `SKILL_UPDATE_FAILED`, `SKILL_UPDATE_UNSUPPORTED`, `GIT_UNAVAILABLE`, `UNTRUSTED_REQUEST`.
+Errors use `{ "error": { "code", "message" } }` with codes such as `SKILL_SOURCE_INVALID`, `SKILL_SLUG_CONFLICT`, `SKILL_FETCH_FAILED`, `SKILL_UPDATE_FAILED`, `PROJECT_INVALID`, `AGENT_INVALID`, `SKILL_NAME_CONFLICT`, `IMPORT_PATH_INVALID`, `GIT_UNAVAILABLE`, `UNTRUSTED_REQUEST`.
 
 ## Security
 
-- Mutating requests must be same-origin: `Host` must be loopback or a declared `trustedHosts` authority, `sec-fetch-site: cross-site` is refused, and a present `Origin` must match. These routes run `git clone`/`pull`, so they are not exposed to other pages.
-- Git identifiers are restricted to `https://`, `ssh://`, `scp`-like `user@host:path`, and `file://` (configurable). `ext::` transports and option-shaped identifiers are rejected before any process starts.
-- Every child process is spawned with an argument array — never through a shell — and `--` terminates Git option parsing.
-- Source slugs and skill names must be single directory names; composed paths are checked to stay inside the library, and a local source may not equal, contain, or live inside the library.
-- Project links only remove symlinks whose target resolves into the library (or the specific source being removed). Real directories, files, and symlinks pointing elsewhere are left in place and reported.
+- Mutating requests must be same-origin: a loopback or declared `trustedHosts` authority, no `cross-site` fetch metadata, and a matching `Origin` when one is present.
+- Git identifiers are restricted to non-executable transports; `ext::` and option-shaped values are rejected before any process starts.
+- No shell: every child process is spawned with an argument array, and `--` ends Git option parsing.
+- Slugs and skill names must be single directory names; composed paths are checked to stay inside the library. Project links only remove symlinks that resolve into the library.
+- Import only accepts paths inside the configured scan roots.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm run typecheck     # host (tsc) + client (tsc, DOM + JSX) + tests
-pnpm test              # vitest: library, state, installer (real git), links (real symlinks), HTTP, provider, registry
-pnpm run build         # tsc → lib/, tsdown → client/client.js
-pnpm run smoke:client  # load the built bundle and assert its registrations
+pnpm run typecheck          # host, client, and tests
+pnpm test                   # 88 unit/integration tests (real git, symlinks, registry, HTTP)
+pnpm run build              # tsc → lib/, tsdown → client/client.js
+pnpm run smoke:client       # load the built bundle and assert its registrations
+pnpm verify:local           # boot a real dsh web with an isolated overlay (8 checks)
+pnpm verify:profile         # pack, install into an isolated profile, boot it (9 checks)
+pnpm verify:profile -- --linked
 ```
 
-The browser half is a `window.__ModuleLoader__.load(...)` factory produced by `tsdown`; `react` and `react/jsx-runtime` stay external and resolve through the host's module table. The Host half imports only Node built-ins, `yaml`, and `@deepseek-ai/dsh-home-paths`.
-
-### Verify locally
-
-```sh
-pnpm verify:local     # source overlay path: builds, boots a real dsh web, runs 8 end-to-end checks
-pnpm verify:profile   # bundle path: packs, installs into an isolated profile, boots it, runs 9 checks
-```
-
-It installs a local and a git source, links a project, exercises both switch levels, checks the update flow, and fetches the browser bundle — all in a temporary directory, never touching `~/.dsh` or your projects. `--keep` preserves the fixture and overlay for debugging; `DSH_HARNESS_DIR` points at another checkout.
-
-The full matrix — unit level, manual UI checklist, model-level checks with the mock LLM, and installing as a profile bundle — lives in [docs/VERIFY.md](docs/VERIFY.md); integration into real profiles and Desktop is covered by [docs/INSTALL.md](docs/INSTALL.md); UI/API debugging (DevTools, `curl`, and the optional Playwright replay script) is in [docs/DEBUG.md](docs/DEBUG.md).
-
-Design notes and the phase plan live in [docs/DESIGN.md](docs/DESIGN.md).
-
-## Versioning and update checks
-
-The library owns the version story; no package manager or lockfile is involved:
-
-| Question | Answer |
-|---|---|
-| What version is this source? | `package.json` `version`, else `git describe --tags --always --dirty` |
-| Is an update available? | `POST /api/sources/:slug/check` runs `git fetch --tags --prune origin` and compares `HEAD` with `@{u}`; the result records `behind`, `ahead`, `dirty`, the upstream commit, and the upstream version label |
-| How do I update? | **Update** runs `git pull --ff-only`; a fast-forward failure keeps the raw git output and never resets local work |
-| Where is the result kept? | `updates.json`, keyed by source slug; the snapshot carries it as `SourceView.update` |
-| What about local sources? | No upstream exists, so checking answers `SKILL_UPDATE_UNSUPPORTED`; reinstalling with **overwrite** is the update path |
-
-This is deliberately the same model as the reference implementation (install into a central library, symlink out, `pull --ff-only` on demand). `vercel-labs/skills` is still not needed at runtime: it has no central library, no version management, and no update check — only the agent directory registry data, which is vendored.
-
-## Credits
-
-The agent directory snapshot in `src/agent-registry.ts` is derived from the registry in [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20 (`src/agents.ts`, MIT), plus one local `dsh` row. Only the data is used: fetching, linking, and repair stay in this plugin, so upstream releases cannot change runtime behavior. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Debugging (DevTools, `curl`, optional Playwright replay): [docs/DEBUG.md](docs/DEBUG.md). Verification matrix: [docs/VERIFY.md](docs/VERIFY.md). Design and phase plan: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Known limitations
 
-- No filesystem watcher: edits made outside the UI become visible on the next invalidation (any manager operation) or after a restart.
-- Categories and notes are supported by the state file and HTTP API, but the tab does not edit them yet.
+- No filesystem watcher: changes made outside the UI appear on the next manager operation or restart.
+- Categories and notes are stored and exposed by the API but not edited in the page yet.
 - Global (user-level) distribution to other agents is not implemented; links are project-scoped. DSH itself sees the library globally through the provider.
-- Re-enabling a disabled skill or source does not restore links automatically; run **Resync** on the project.
-- `dsh web` is verified end-to-end on the Harness source checkout and on the published `0.2.1-rc.5` runtime; the Desktop shell (`dsh-app://`) still needs a manual pass.
-- Harness plugin APIs are pre-stable: `engines.dsh` pins the range this version is tested against.
+- Re-enabling a disabled skill or source does not restore links automatically; use **Resync** on the project.
+- The Desktop shell (`dsh-app://`) is verified manually; automated checks cover `dsh web`.
+- Harness plugin APIs are pre-stable; `engines.dsh` pins the tested range.
+
+## Credits
+
+The agent directory snapshot in `src/agent-registry.ts` derives from the registry in [`vercel-labs/skills`](https://github.com/vercel-labs/skills) v1.5.20 (MIT), plus one local `dsh` row. Only the data is used — install, linking, repair, and import are implemented here. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
