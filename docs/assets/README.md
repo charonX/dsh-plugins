@@ -5,10 +5,9 @@ README.md（英文）和 README.zh.md（中文）引用下面 5 张图。截好�
 | 文件 | 对应 README 区块 | 必需 |
 |---|---|---|
 | `skills-page.png` | 顶部主图 | 是 |
-| `link-projects.png` | Screenshots → Link to multiple projects | 是 |
+| `link-projects.png` | Screenshots → Link to multiple projects（待补拍，见文末） | 是 |
 | `linked-projects.png` | Screenshots → Per-project state | 是 |
 | `scan-import.png` | Screenshots → Import what other agents installed | 是 |
-| `update-check.png` | Screenshots → Update check | 可选（不放就把 README 里的引用删掉） |
 
 ## 通用要求 / General
 
@@ -49,7 +48,10 @@ README.md（英文）和 README.zh.md（中文）引用下面 5 张图。截好�
 - 底部可见「导入所选」。
 - 如果方便，让其中一行显示「同名冲突」更有说明力（非必需）。
 
-## 5. `update-check.png`（可选）— 更新检查
+## 待补拍：`link-projects.png`
 
-- 某个 Git 来源卡片：版本号 + **`有 N 个新提交`** 徽标 + 检查时间。
-- 同时露出「检查更新 / 更新 / 删除」按钮。
+当前这张只打开了项目下拉、没有勾选项目，agent 列表也滚到了 Antigravity/AstrBot，展示不出「多选」和「已选 agent」。补拍时请：
+
+- 勾选 **≥2 个项目**（chips 可见）；
+- agent 列表滚到顶部，勾选 **DeepSeek Harness + Claude Code + Codex**；
+- 若不想暴露真实路径，可先把项目路径换成 `/Users/demo/...`，或告诉我需要打码的区域。

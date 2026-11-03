@@ -19,13 +19,17 @@ Everything is available on a dedicated **Skills** page in the Harness sidebar, n
 
 ## Screenshots
 
-| Link to multiple projects | Per-project state |
-|---|---|
-| <img src="docs/assets/link-projects.png" alt="Link dialog" width="560" /> | <img src="docs/assets/linked-projects.png" alt="Linked projects" width="560" /> |
+**Link any number of projects and choose the agents to target.** The project field is a multi-select dropdown; a single submit writes every selected project.
 
-| Import what other agents installed | Update check |
-|---|---|
-| <img src="docs/assets/scan-import.png" alt="Scan dialog" width="560" /> | <img src="docs/assets/update-check.png" alt="Update check" width="560" /> |
+<img src="docs/assets/link-projects.png" alt="Link dialog" width="1100" />
+
+**Every linked project keeps its own switches.** Each row shows the state and the agents that hold the link, not file paths.
+
+<img src="docs/assets/linked-projects.png" alt="Linked projects" width="1100" />
+
+**Import what other agents installed.** The scanner groups results by origin; missing or empty directories show 0.
+
+<img src="docs/assets/scan-import.png" alt="Scan dialog" width="1100" />
 
 ## How it works
 

@@ -19,13 +19,17 @@
 
 ## 截图
 
-| 一次关联多个项目 | 项目内状态与开关 |
-|---|---|
-| <img src="docs/assets/link-projects.png" alt="关联弹窗" width="560" /> | <img src="docs/assets/linked-projects.png" alt="已关联项目" width="560" /> |
+**一次关联多个项目，并选择目标 agent。** 项目字段是多选下拉，点一次「关联」写入所有选中项目。
 
-| 扫描并导入其它 agent 的技能 | 更新检查 |
-|---|---|
-| <img src="docs/assets/scan-import.png" alt="扫描导入" width="560" /> | <img src="docs/assets/update-check.png" alt="更新检查" width="560" /> |
+<img src="docs/assets/link-projects.png" alt="关联弹窗" width="1100" />
+
+**每个已关联项目有自己的开关。** 条目显示状态与持有链接的 agent 名，不显示文件路径。
+
+<img src="docs/assets/linked-projects.png" alt="已关联项目" width="1100" />
+
+**导入其它 agent 已安装的技能。** 扫描结果按来源分组，不存在或空的目录显示 0。
+
+<img src="docs/assets/scan-import.png" alt="扫描导入" width="1100" />
 
 ## 工作原理
 
