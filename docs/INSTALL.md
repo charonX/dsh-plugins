@@ -32,6 +32,8 @@ DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
 
 linked 形态要求先 `pnpm run build`（profile 读的是构建产物，不会替你编译）；tarball 形态由 `prepack` 自动构建。
 
+> tarball 是一个**文件**（`dsh-skills-manager-0.1.0.tgz`），不是目录，也不会预先生成：在插件仓库根目录跑 `npm pack` 才会出现。它被 `.gitignore` 的 `*.tgz` 忽略，`pnpm verify:profile` 默认在结束时删除（`--keep` 保留并打印路径）。
+
 它做的事：
 
 1. `npm run build` + `npm pack`（验证 `files` 打包内容）；
