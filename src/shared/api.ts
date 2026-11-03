@@ -149,6 +149,94 @@ export interface SkillPatch {
   readonly note?: string
 }
 
+/** One global skill root offered by the import scanner. */
+export interface ScanRootView {
+  /** Stable key, also used for the imported source slug. */
+  readonly key: string
+  /** Human-readable origin, e.g. the agent name. */
+  readonly label: string
+  /** Absolute root path. */
+  readonly path: string
+  /** Whether the root exists on this machine. */
+  readonly exists: boolean
+}
+
+/** Library entry that shares a scanned skill's catalog name. */
+export interface ScanExistingView {
+  /** Source slug in the library. */
+  readonly source: string
+  /** Skill directory name in that source. */
+  readonly skillName: string
+  /** Content hash of the library copy. */
+  readonly hash: string
+}
+
+/** One skill discovered outside the library. */
+export interface ScanSkillView {
+  /** Absolute path of SKILL.md (or the flat `<name>.md`). */
+  readonly path: string
+  /** Catalog name from frontmatter, or the file/directory name when invalid. */
+  readonly name: string
+  /** On-disk directory (or flat file stem). */
+  readonly dirName: string
+  /** Routing description. */
+  readonly description?: string
+  /** sha256 of the SKILL.md contents. */
+  readonly hash: string
+  /** Why the file cannot be imported. */
+  readonly problem?: string
+  /** Registry key of the origin root. */
+  readonly originKey: string
+  /** Display label of the origin root. */
+  readonly originLabel: string
+  /** Absolute origin root path. */
+  readonly originPath: string
+  /** Import decision relative to the current library. */
+  readonly status: 'importable' | 'imported' | 'conflict' | 'invalid'
+  /** Existing library copy when the name is already managed. */
+  readonly existing?: ScanExistingView
+}
+
+/** Response of `GET /api/scan`. */
+export interface ScanResponse {
+  /** Roots the scanner looked at, including missing ones. */
+  readonly roots: readonly ScanRootView[]
+  /** Discovered skills, grouped by origin then name. */
+  readonly skills: readonly ScanSkillView[]
+}
+
+/** Body of `POST /api/import`. */
+export interface ImportRequest {
+  /** Absolute SKILL.md/`<name>.md` paths returned by the scan. */
+  readonly paths: readonly string[]
+  /** Replace a conflicting copy that this manager imported earlier. */
+  readonly overwrite?: boolean
+}
+
+/** One import result. */
+export interface ImportOutcome {
+  /** Requested path. */
+  readonly path: string
+  /** Catalog name. */
+  readonly name: string
+  /** What happened. */
+  readonly status: 'imported' | 'overwritten' | 'skipped' | 'conflict' | 'failed'
+  /** Imported source slug, when a copy was written. */
+  readonly source?: string
+  /** Skill directory name inside that source. */
+  readonly skillName?: string
+  /** Machine-readable failure/conflict code. */
+  readonly code?: string
+  /** Human-readable explanation. */
+  readonly message?: string
+}
+
+/** Response of `POST /api/import`. */
+export interface ImportResponse {
+  /** One row per requested path. */
+  readonly outcomes: readonly ImportOutcome[]
+}
+
 /** One DSH workspace offered as a link target. */
 export interface WorkspaceOptionView {
   /** Absolute workspace directory. */

@@ -13,6 +13,7 @@ import type { SkillProviderControl } from '@deepseek-ai/dsh-skill'
 import { Config } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { createRequestHandler } from './http.js'
+import { ImportStore } from './imports.js'
 import { JobRegistry } from './jobs.js'
 import { LinkManager } from './links.js'
 import { LibrarySkillProvider } from './provider.js'
@@ -49,11 +50,15 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const updatesPath = config.updatesPath === undefined
     ? join(dataHome, 'updates.json')
     : expandHomePath(config.updatesPath)
+  const importsPath = config.importsPath === undefined
+    ? join(dataHome, 'imports.json')
+    : expandHomePath(config.importsPath)
   const routePrefix = normalizePrefix(config.routePrefix ?? DEFAULT_ROUTE_PREFIX)
 
   const state = new StateStore(statePath, ctx.logger)
   const jobs = new JobRegistry()
   const updates = new UpdateStore(updatesPath, ctx.logger)
+  const imports = new ImportStore(importsPath, ctx.logger)
   const links = new LinkManager({
     libraryDir,
     recordPath: linksPath,
@@ -88,6 +93,8 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     jobs,
     links,
     updates,
+    imports,
+    scanExtraRoots: config.scanSkillDirs ?? [],
     listWorkspaces: () => readWorkspaces(ctx),
     logger: ctx.logger,
     trustedHosts: () => readTrustedHosts(ctx),

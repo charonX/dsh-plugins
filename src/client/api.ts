@@ -13,9 +13,11 @@ import type {
   InstallRequestBody,
   JobView,
   LibrarySnapshot,
+  ImportResponse,
   LinkReport,
   LinkRequestBody,
   ProjectLinkView,
+  ScanResponse,
   WorkspaceOptionView,
   SkillPatch,
   SourcePatch,
@@ -234,4 +236,25 @@ export async function loadWorkspaces(): Promise<readonly WorkspaceOptionView[]> 
  */
 export async function setLinkEnabled(body: LinkRequestBody & { readonly enabled: boolean }): Promise<LinkReport> {
   return await request<LinkReport>('/api/links', { method: 'PUT', body: JSON.stringify(body) })
+}
+
+/**
+ * Scan global skill roots offered for import.
+ * @returns roots plus one row per discovered skill, with its import status.
+ */
+export async function loadScan(): Promise<ScanResponse> {
+  return await request<ScanResponse>('/api/scan')
+}
+
+/**
+ * Copy the selected global skills into the library.
+ * @param paths - absolute SKILL.md paths from the scan response.
+ * @param overwrite - replace a conflicting copy previously imported here.
+ * @returns one outcome per requested path.
+ */
+export async function importSkills(paths: readonly string[], overwrite: boolean): Promise<ImportResponse> {
+  return await request<ImportResponse>('/api/import', {
+    method: 'POST',
+    body: JSON.stringify({ paths, ...(overwrite ? { overwrite: true } : {}) }),
+  })
 }

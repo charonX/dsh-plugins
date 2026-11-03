@@ -17,6 +17,8 @@ export interface Config {
   linksPath?: string
   /** Last update-check record; defaults to `<dshHome>/skills-manager/updates.json`. */
   updatesPath?: string
+  /** Import provenance record; defaults to `<dshHome>/skills-manager/imports.json`. */
+  importsPath?: string
   /** Provider name registered on `ctx.skills`; defaults to `skills-manager`. */
   providerName?: string
   /** Provider precedence rank; lower wins against other providers. */
@@ -25,6 +27,8 @@ export interface Config {
   routePrefix?: string
   /** Whether `file://` git identifiers are accepted for local repositories. */
   allowFileProtocol?: boolean
+  /** Extra global skill roots offered by the import scanner, on top of the built-in agent roots. */
+  scanSkillDirs?: string[]
 }
 
 /** Validated configuration schema. */
@@ -33,8 +37,10 @@ export const Config: Schema<Config> = z.object({
   statePath: z.string(),
   linksPath: z.string(),
   updatesPath: z.string(),
+  importsPath: z.string(),
   providerName: z.string().min(1).default('skills-manager'),
   rank: z.number().default(450),
   routePrefix: z.string().default('/dsh-skills-manager'),
   allowFileProtocol: z.boolean().default(true),
+  scanSkillDirs: z.array(z.string()).default([]),
 })

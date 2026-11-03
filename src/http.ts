@@ -25,6 +25,8 @@ import {
 import type { JobRegistry } from './jobs.js'
 import type { LinkManager } from './links.js'
 import { listAgentTargets } from './links.js'
+import { importSkills, type ImportStore } from './imports.js'
+import { scanGlobalSkills } from './scan.js'
 import { checkGitSource, type UpdateStore } from './updates.js'
 import { scanLibrary, type WarnLogger } from './library.js'
 import { assertDirectoryName, isInsideOrEqual } from './paths.js'
@@ -63,6 +65,10 @@ export interface HttpDeps {
   readonly links: LinkManager
   /** Persisted update-check results. */
   readonly updates: UpdateStore
+  /** Import provenance. */
+  readonly imports: ImportStore
+  /** Extra global skill roots offered by the import scanner. */
+  readonly scanExtraRoots: readonly string[]
   /** DSH workspaces offered as link targets. */
   readonly listWorkspaces: () => readonly WorkspaceOptionView[]
   /** Plugin logger. */
@@ -144,6 +150,41 @@ async function dispatch(
   if (second === 'agents' && segments.length === 2) {
     requireMethod(method, ['GET', 'HEAD'])
     sendJson(response, 200, { agents: listAgentTargets() satisfies readonly AgentTargetView[] })
+    return
+  }
+
+  if (second === 'scan' && segments.length === 2) {
+    requireMethod(method, ['GET', 'HEAD'])
+    sendJson(response, 200, scanGlobalSkills({
+      extraRoots: deps.scanExtraRoots,
+      libraryDir: deps.libraryDir,
+      importedKeys: deps.imports.keys(),
+      logger: deps.logger,
+    }))
+    return
+  }
+
+  if (second === 'import' && segments.length === 2) {
+    requireMethod(method, ['POST'])
+    const body = await readJsonBody(request)
+    const paths = body.paths
+    if (!Array.isArray(paths) || paths.some((path) => typeof path !== 'string')) {
+      throw new SkillManagerError(400, 'IMPORT_EMPTY', 'paths must be an array of absolute skill paths')
+    }
+    if (body.overwrite !== undefined && typeof body.overwrite !== 'boolean') {
+      throw new SkillManagerError(400, 'INVALID_JSON', 'overwrite must be a boolean')
+    }
+    const result = importSkills(
+      {
+        libraryDir: deps.libraryDir,
+        store: deps.imports,
+        extraRoots: deps.scanExtraRoots,
+        logger: deps.logger,
+      },
+      { paths: paths as readonly string[], ...(body.overwrite === true ? { overwrite: true } : {}) },
+    )
+    deps.onLibraryChanged()
+    sendJson(response, 200, result)
     return
   }
 
@@ -289,6 +330,7 @@ function removeSource(deps: HttpDeps, slug: string): void {
   const sourceDir = sourceDirectory(deps, slug)
   deps.links.forgetSource(slug)
   deps.updates.drop(slug)
+  deps.imports.dropSource(slug)
   removeSourceDirectory(sourceDir)
   deps.state.dropSource(slug)
 }

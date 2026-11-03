@@ -8,10 +8,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 import type {
   AgentTargetView,
+  ImportResponse,
   LibrarySnapshot,
   LinkReport,
   LinkEntryView,
   ProjectLinkView,
+  ScanResponse,
+  ScanSkillView,
   SkillView,
   SourceView,
   UpdateCheck,
@@ -20,8 +23,10 @@ import type {
 import {
   ApiFailure,
   checkSource,
+  importSkills,
   installSource,
   linkSource,
+  loadScan,
   loadAgents,
   loadLibrary,
   loadLinks,
@@ -147,6 +152,7 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
   const [expandedSources, setExpandedSources] = useState<readonly string[]>([])
   const [expandedProjects, setExpandedProjects] = useState<readonly string[]>([])
   const [installOpen, setInstallOpen] = useState(false)
+  const [scanOpen, setScanOpen] = useState(false)
   const [linkTarget, setLinkTarget] = useState<{ source: SourceView; skillName?: string } | null>(null)
   const [pendingRemove, setPendingRemove] = useState<string | null>(null)
 
@@ -345,6 +351,14 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           </button>
           <button
             type="button"
+            style={buttonStyle}
+            disabled={busy !== null}
+            onClick={() => { setScanOpen(true) }}
+          >
+            {t('scan')}
+          </button>
+          <button
+            type="button"
             style={primaryButtonStyle}
             disabled={busy !== null}
             onClick={() => { setInstallOpen(true) }}
@@ -422,6 +436,14 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
         />
       )}
 
+      {scanOpen && (
+        <ScanDialog
+          t={t}
+          onClose={() => { setScanOpen(false) }}
+          onImported={() => { void refresh() }}
+        />
+      )}
+
       {installOpen && (
         <InstallDialog
           t={t}
@@ -442,14 +464,15 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           agents={agents}
           workspaces={workspaces}
           {...(linkTarget.skillName === undefined ? {} : { skillName: linkTarget.skillName })}
-          onClose={() => { setLinkTarget(null) }}
-          onLinked={(report, project) => {
-            setLinkTarget(null)
-            mergeReport(report)
-            setExpandedProjects((current) => current.includes(project) ? current : [...current, project])
+          onClose={() => { setLinkTarget(null); void refresh() }}
+          onLinked={(reports) => {
+            const projects = reports.map((report) => report.project.project)
+            for (const report of reports) mergeReport(report)
+            setExpandedProjects((current) => [...new Set([...current, ...projects])])
+            const linked = reports.reduce((total, report) => total + report.counts.linked, 0)
             setNotice(linkTarget.skillName === undefined
-              ? t('linkSucceeded', { count: report.counts.linked, project })
-              : t('linkOneSucceeded', { skill: linkTarget.skillName, project }))
+              ? t('linkSucceededProjects', { count: linked, projects: projects.join(', ') })
+              : t('linkOneSucceeded', { skill: linkTarget.skillName, project: projects.join(', ') }))
             setTimeout(() => {
               document.getElementById('skills-manager-projects')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
             }, 50)
@@ -895,18 +918,240 @@ function entryStates(project: ProjectLinkView, entry: LinkEntryView): { state: s
   return [...byState.entries()].map(([state, agents]) => ({ state, agents: [...agents] }))
 }
 
+interface ScanDialogProps extends TranslateProps {
+  onClose(): void
+  onImported(): void
+}
+
+/** Scan well-known global skill roots and copy selected skills into the library. */
+function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
+  const [scan, setScan] = useState<ScanResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState<readonly string[]>([])
+  const [overwrite, setOverwrite] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<ImportResponse | null>(null)
+
+  const load = useCallback(async (): Promise<void> => {
+    setLoading(true)
+    try {
+      setScan(await loadScan())
+      setError(null)
+    } catch (failure) {
+      setError(`${messageOf(failure)} (${codeOf(failure)})`)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  const skills = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const rows = scan?.skills ?? []
+    if (needle === '') return rows
+    return rows.filter((skill) =>
+      [skill.name, skill.description, skill.originLabel]
+        .some((value) => value !== undefined && value.toLowerCase().includes(needle)))
+  }, [query, scan])
+
+  const selectable = (skill: ScanSkillView): boolean =>
+    skill.status === 'importable' || (skill.status === 'conflict' && overwrite)
+
+  const toggle = (path: string): void => {
+    setSelected((current) => current.includes(path)
+      ? current.filter((entry) => entry !== path)
+      : [...current, path])
+  }
+
+  const submit = useCallback(async (): Promise<void> => {
+    if (selected.length === 0 || busy) return
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    try {
+      const response = await importSkills(selected, overwrite)
+      setResult(response)
+      setSelected([])
+      onImported()
+      setScan(await loadScan())
+    } catch (failure) {
+      setError(`${messageOf(failure)} (${codeOf(failure)})`)
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, onImported, overwrite, selected])
+
+  const counts = result === null
+    ? null
+    : {
+      imported: result.outcomes.filter((outcome) => outcome.status === 'imported' || outcome.status === 'overwritten').length,
+      skipped: result.outcomes.filter((outcome) => outcome.status === 'skipped').length,
+      conflict: result.outcomes.filter((outcome) => outcome.status === 'conflict').length,
+      failed: result.outcomes.filter((outcome) => outcome.status === 'failed').length,
+    }
+
+  return (
+    <Overlay onClose={busy ? undefined : onClose}>
+      <div style={{
+        ...cardStyle,
+        width: 'min(720px, 94vw)',
+        maxHeight: '86vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: COLORS.surfaceAlt,
+      }}>
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${COLORS.border}` }}>
+          <div style={{ fontWeight: 600 }}>{t('scanTitle')}</div>
+          <div style={{ marginTop: 4, fontSize: 12, color: COLORS.secondary }}>{t('scanSubtitle')}</div>
+        </div>
+        <div style={{ padding: '10px 14px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            style={{ ...inputStyle, width: 220 }}
+            value={query}
+            placeholder={t('scanSearch')}
+            aria-label={t('scanSearch')}
+            onChange={(event) => { setQuery(event.target.value) }}
+          />
+          <span style={{ fontSize: 11, color: COLORS.tertiary }}>{t('scanSelected', { count: selected.length })}</span>
+          <span style={{ flex: 1 }} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary }}>
+            <input
+              type="checkbox"
+              checked={overwrite}
+              disabled={busy}
+              onChange={(event) => {
+                setOverwrite(event.target.checked)
+                if (!event.target.checked) {
+                  setSelected((current) => current.filter((path) => {
+                    const skill = scan?.skills.find((entry) => entry.path === path)
+                    return skill === undefined || skill.status !== 'conflict'
+                  }))
+                }
+              }}
+            />
+            {t('scanOverwrite')}
+          </label>
+        </div>
+        <div style={{ padding: '0 14px 6px', fontSize: 11, color: COLORS.tertiary }}>
+          {t('scanOverwriteHint')}
+          {' · '}
+          {t('scanRoots')}: {(scan?.roots ?? []).filter((root) => root.exists).length}/{(scan?.roots ?? []).length}
+        </div>
+        <div style={{ overflow: 'auto', padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {loading && <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanLoading')}</p>}
+          {error !== null && <p style={{ color: COLORS.error, fontSize: 12 }} role="alert">{error}</p>}
+          {!loading && (scan?.skills.length ?? 0) === 0 && (
+            <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanEmpty')}</p>
+          )}
+          {skills.map((skill) => {
+            const checkboxId = `scan-${skill.path}`
+            return (
+              <label
+                key={skill.path}
+                htmlFor={checkboxId}
+                title={skill.path}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'flex-start',
+                  padding: '6px 4px',
+                  borderBottom: `1px solid ${COLORS.border}`,
+                  opacity: selectable(skill) ? 1 : 0.6,
+                  cursor: selectable(skill) ? 'pointer' : 'default',
+                }}
+              >
+                <input
+                  id={checkboxId}
+                  type="checkbox"
+                  checked={selected.includes(skill.path)}
+                  disabled={busy || !selectable(skill)}
+                  onChange={() => { toggle(skill.path) }}
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <strong style={{ fontSize: 13 }}>{skill.name}</strong>
+                    <code style={{ fontSize: 11, color: COLORS.tertiary }}>{skill.dirName}</code>
+                    <span style={{ fontSize: 11, color: COLORS.tertiary }}>{skill.originLabel}</span>
+                    <ScanStatus t={t} skill={skill} />
+                  </span>
+                  {skill.description !== undefined && (
+                    <span style={{ fontSize: 12, color: COLORS.secondary }}>{skill.description}</span>
+                  )}
+                  {skill.problem !== undefined && (
+                    <span style={{ fontSize: 11, color: COLORS.warn }}>{skill.problem}</span>
+                  )}
+                  {skill.existing !== undefined && (
+                    <span style={{ fontSize: 11, color: COLORS.tertiary }}>
+                      {t('scanConflictDetail', { source: `${skill.existing.source}/${skill.existing.skillName}` })}
+                    </span>
+                  )}
+                </span>
+              </label>
+            )
+          })}
+        </div>
+        {counts !== null && (
+          <div style={{ padding: '8px 14px', fontSize: 12, borderTop: `1px solid ${COLORS.border}`, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ color: COLORS.success }}>{t('scanResultImported', { count: counts.imported })}</span>
+            <span style={{ color: COLORS.tertiary }}>{t('scanResultSkipped', { count: counts.skipped })}</span>
+            {counts.conflict > 0 && <span style={{ color: COLORS.warn }}>{t('scanResultConflicts', { count: counts.conflict })}</span>}
+            {counts.failed > 0 && <span style={{ color: COLORS.error }}>{t('scanResultFailed', { count: counts.failed })}</span>}
+            {result?.outcomes.filter((outcome) => outcome.status === 'conflict' || outcome.status === 'failed')
+              .map((outcome) => (
+                <span key={outcome.path} style={{ color: COLORS.warn, width: '100%' }}>
+                  {outcome.name}: {outcome.message ?? outcome.code}
+                </span>
+              ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 14px', borderTop: `1px solid ${COLORS.border}` }}>
+          <button type="button" style={buttonStyle} disabled={busy} onClick={onClose}>
+            {counts === null ? t('cancel') : t('scanDone')}
+          </button>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={busy || selected.length === 0}
+            onClick={() => { void submit() }}
+          >
+            {busy ? t('scanImporting') : t('scanImport')}
+          </button>
+        </div>
+      </div>
+    </Overlay>
+  )
+}
+
+function ScanStatus({ t, skill }: { readonly t: Translate; readonly skill: ScanSkillView }): ReactElement {
+  switch (skill.status) {
+    case 'importable':
+      return <Badge text={t('scanImportable')} />
+    case 'imported':
+      return <Badge text={t('scanImported')} />
+    case 'conflict':
+      return <Badge text={t('scanConflict')} tone="warn" />
+    case 'invalid':
+      return <Badge text={t('scanInvalid')} tone="warn" />
+  }
+}
+
 interface LinkDialogProps extends TranslateProps {
   readonly source: SourceView
   readonly skillName?: string
   readonly agents: readonly AgentTargetView[]
   readonly workspaces: readonly WorkspaceOptionView[]
   onClose(): void
-  onLinked(report: LinkReport, project: string): void
+  onLinked(reports: readonly LinkReport[]): void
 }
 
 function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinked }: LinkDialogProps): ReactElement {
-  const listId = `skills-manager-workspaces-${source.slug}`
-  const [project, setProject] = useState('')
+  const [projects, setProjects] = useState<readonly string[]>([])
+  const [customPath, setCustomPath] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [selected, setSelected] = useState<readonly string[]>(['dsh'])
   const [agentQuery, setAgentQuery] = useState('')
   const [busy, setBusy] = useState(false)
@@ -919,15 +1164,31 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
       agent.name.toLowerCase().includes(needle) || agent.displayName.toLowerCase().includes(needle))
   }, [agentQuery, agents])
 
+  const projectLabel = (path: string): string =>
+    workspaces.find((workspace) => workspace.path === path)?.title ?? path.split('/').filter(Boolean).pop() ?? path
+
   const toggleAgent = (key: string): void => {
     setSelected((current) => current.includes(key)
       ? current.filter((entry) => entry !== key)
       : [...current, key])
   }
 
+  const toggleProject = (path: string): void => {
+    setProjects((current) => current.includes(path)
+      ? current.filter((entry) => entry !== path)
+      : [...current, path])
+  }
+
+  const addCustomProject = (): void => {
+    const path = customPath.trim()
+    if (path === '') return
+    if (!projects.includes(path)) setProjects((current) => [...current, path])
+    setCustomPath('')
+  }
+
   const submit = useCallback(async (): Promise<void> => {
     if (busy) return
-    if (project.trim() === '') {
+    if (projects.length === 0) {
       setError(t('projectRequired'))
       return
     }
@@ -937,70 +1198,176 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
     }
     setBusy(true)
     setError(null)
-    try {
-      const report = await linkSource({
-        project: project.trim(),
-        source: source.slug,
-        agents: selected,
-        ...(skillName === undefined ? {} : { skillName }),
-      })
-      onLinked(report, report.project.project)
-    } catch (failure) {
-      const message = `${messageOf(failure)} (${codeOf(failure)})`
-      // Kept for DevTools users: the dialog shows the same text, the console
-      // keeps the failed request and code next to the network entry.
-      console.warn('[skills-manager] link failed:', codeOf(failure), messageOf(failure))
-      setError(message)
-    } finally {
-      setBusy(false)
+    const reports: LinkReport[] = []
+    const failures: string[] = []
+    for (const project of projects) {
+      try {
+        reports.push(await linkSource({
+          project,
+          source: source.slug,
+          agents: selected,
+          ...(skillName === undefined ? {} : { skillName }),
+        }))
+      } catch (failure) {
+        console.warn('[skills-manager] link failed:', project, codeOf(failure), messageOf(failure))
+        failures.push(`${project}: ${messageOf(failure)} (${codeOf(failure)})`)
+      }
     }
-  }, [busy, onLinked, project, selected, skillName, source.slug, t])
+    if (reports.length > 0) onLinked(reports)
+    if (failures.length > 0) {
+      setError(failures.join('\n'))
+      setBusy(false)
+      return
+    }
+    setBusy(false)
+    onClose()
+  }, [busy, onClose, onLinked, projects, selected, skillName, source.slug, t])
 
   return (
     <Overlay onClose={busy ? undefined : onClose}>
-      <div style={{ ...cardStyle, width: 'min(560px, 92vw)', background: COLORS.surfaceAlt }}>
+      <div style={{
+        ...cardStyle,
+        overflow: 'visible',
+        width: 'min(620px, 94vw)',
+        background: COLORS.surfaceAlt,
+      }}>
         <div style={{ padding: '12px 14px', borderBottom: `1px solid ${COLORS.border}`, fontWeight: 600 }}>
           {t('linkTitle', { slug: skillName === undefined ? source.slug : `${source.slug}/${skillName}` })}
         </div>
         <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: COLORS.secondary }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: COLORS.secondary }}>
             {t('linkProject')}
-            <input
-              style={inputStyle}
-              value={project}
-              disabled={busy}
-              autoFocus
-              list={workspaces.length === 0 ? undefined : listId}
-              placeholder={t('linkProjectHint')}
-              onChange={(event) => { setProject(event.target.value) }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') void submit()
-              }}
-            />
-            {workspaces.length > 0 && (
-              <>
-                <datalist id={listId}>
-                  {workspaces.map((workspace) => (
-                    <option key={workspace.path} value={workspace.path}>{workspace.title}</option>
-                  ))}
-                </datalist>
-                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11 }}>
-                  {workspaces.slice(0, 6).map((workspace) => (
-                    <button
-                      key={workspace.path}
-                      type="button"
-                      disabled={busy}
-                      title={workspace.path}
-                      style={{ ...buttonStyle, padding: '2px 8px', fontSize: 11 }}
-                      onClick={() => { setProject(workspace.path) }}
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                aria-expanded={pickerOpen}
+                aria-label={t('selectProjects')}
+                disabled={busy}
+                onClick={() => { setPickerOpen((open) => !open) }}
+                style={{
+                  ...inputStyle,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flexWrap: 'wrap',
+                  minHeight: 34,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                {projects.length === 0 && <span style={{ color: COLORS.tertiary }}>{t('selectProjects')}</span>}
+                {projects.map((path) => (
+                  <span
+                    key={path}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      border: `1px solid ${COLORS.border}`,
+                      fontSize: 12,
+                    }}
+                  >
+                    {projectLabel(path)}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${t('removeProject')}: ${path}`}
+                      onClick={(event) => { event.stopPropagation(); toggleProject(path) }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.stopPropagation()
+                          toggleProject(path)
+                        }
+                      }}
+                      style={{ cursor: 'pointer', color: COLORS.tertiary }}
                     >
-                      {workspace.title}
-                    </button>
-                  ))}
-                </span>
-              </>
-            )}
-          </label>
+                      ×
+                    </span>
+                  </span>
+                ))}
+                <span style={{ marginLeft: 'auto', color: COLORS.tertiary }}>{pickerOpen ? '▴' : '▾'}</span>
+              </button>
+              {pickerOpen && (
+                <>
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 5,
+                    border: `1px solid ${COLORS.borderStrong}`,
+                    borderRadius: 'var(--dsw-radius-sm)',
+                    background: 'var(--dsw-alias-bg-layer-1)',
+                    boxShadow: '0 8px 24px var(--dsw-alias-bg-mask-2)',
+                    maxHeight: 260,
+                    overflow: 'auto',
+                    padding: 6,
+                  }}>
+                    {workspaces.length === 0 && (
+                      <div style={{ padding: '4px 6px', fontSize: 12, color: COLORS.tertiary }}>
+                        {t('customProjectPath')}
+                      </div>
+                    )}
+                    {workspaces.map((workspace) => (
+                      <label
+                        key={workspace.path}
+                        title={workspace.path}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '4px 6px',
+                          fontSize: 12,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={projects.includes(workspace.path)}
+                          disabled={busy}
+                          onChange={() => { toggleProject(workspace.path) }}
+                        />
+                        <span>{workspace.title}</span>
+                        <code style={{ fontSize: 10, color: COLORS.tertiary, marginLeft: 'auto' }}>{workspace.path}</code>
+                      </label>
+                    ))}
+                    <div style={{
+                      display: 'flex',
+                      gap: 6,
+                      padding: 6,
+                      marginTop: 4,
+                      borderTop: `1px solid ${COLORS.border}`,
+                    }}>
+                      <input
+                        style={{ ...inputStyle, padding: '2px 6px' }}
+                        value={customPath}
+                        placeholder={t('customProjectPath')}
+                        aria-label={t('customProjectPath')}
+                        disabled={busy}
+                        onChange={(event) => { setCustomPath(event.target.value) }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            addCustomProject()
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        style={buttonStyle}
+                        disabled={busy || customPath.trim() === ''}
+                        onClick={addCustomProject}
+                      >
+                        {t('addProject')}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: COLORS.secondary }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
               <span>{t('linkAgents')}</span>
@@ -1045,7 +1412,9 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
             </div>
             <span style={{ color: COLORS.tertiary }}>{t('linkAgentsHint')}</span>
           </div>
-          {error !== null && <div style={{ fontSize: 12, color: COLORS.error }} role="alert">{error}</div>}
+          {error !== null && (
+            <div style={{ fontSize: 12, color: COLORS.error, whiteSpace: 'pre-wrap' }} role="alert">{error}</div>
+          )}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 14px', borderTop: `1px solid ${COLORS.border}` }}>
           <button type="button" style={buttonStyle} disabled={busy} onClick={onClose}>{t('cancel')}</button>

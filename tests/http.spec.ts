@@ -1,8 +1,10 @@
 import { createServer, type Server } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createRequestHandler } from '../src/http.ts'
+import { ImportStore } from '../src/imports.ts'
 import { JobRegistry } from '../src/jobs.ts'
 import { LinkManager } from '../src/links.ts'
 import type { AgentTargetView, JobView, LibrarySnapshot, LinkReport, ProjectLinkView, UpdateCheck } from '../src/shared/api.ts'
@@ -35,6 +37,10 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     readState: () => state.read(),
   })
   const updates = new UpdateStore(tree.path('skills-manager', 'updates.json'), silentLogger)
+  const imports = new ImportStore(tree.path('skills-manager', 'imports.json'), silentLogger)
+  const globalRoot = tree.path('global-skills')
+  mkdirSync(join(globalRoot, 'scanned'), { recursive: true })
+  writeFileSync(join(globalRoot, 'scanned', 'SKILL.md'), `---\n${skillFields('scanned', 'A globally installed skill.').join('\n')}\n---\n`)
   const handler = createRequestHandler({
     prefix: '/dsh-skills-manager',
     libraryDir: tree.path('skills-manager', 'library'),
@@ -44,6 +50,8 @@ async function startServer(options: { crossSiteTrustedHosts?: string[] } = {}): 
     jobs: new JobRegistry(),
     links,
     updates,
+    imports,
+    scanExtraRoots: [globalRoot],
     listWorkspaces: () => [{ path: tree.path('project'), title: 'Project' }],
     logger: silentLogger,
     trustedHosts: () => options.crossSiteTrustedHosts,
@@ -483,5 +491,46 @@ describe('per-project switches over HTTP', () => {
       await fetch(`${harness.base}/dsh-skills-manager/api/links`),
     )
     expect(after.projects).toEqual([])
+  })
+})
+
+describe('scan and import over HTTP', () => {
+  it('scans a configured root and imports the selected skill', async () => {
+    const harness = await startServer()
+    const scan = await fetch(`${harness.base}/dsh-skills-manager/api/scan`)
+    expect(scan.status).toBe(200)
+    const scanned = await jsonBody<{ roots: readonly { key: string; exists: boolean }[]; skills: readonly { name: string; status: string; path: string }[] }>(scan)
+    const row = scanned.skills.find((skill) => skill.name === 'scanned')
+    expect(row?.status).toBe('importable')
+
+    const imported = await fetch(`${harness.base}/dsh-skills-manager/api/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths: [row?.path] }),
+    })
+    expect(imported.status).toBe(200)
+    const result = await jsonBody<{ outcomes: readonly { status: string; source?: string }[] }>(imported)
+    expect(result.outcomes[0]).toMatchObject({ status: 'imported', source: 'imported-custom-1' })
+
+    const snapshot = await jsonBody<LibrarySnapshot>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/library`),
+    )
+    expect(snapshot.sources.map((source) => source.slug)).toContain('imported-custom-1')
+
+    const rescan = await jsonBody<{ skills: readonly { name: string; status: string }[] }>(
+      await fetch(`${harness.base}/dsh-skills-manager/api/scan`),
+    )
+    expect(rescan.skills.find((skill) => skill.name === 'scanned')?.status).toBe('imported')
+  })
+
+  it('rejects an import with no paths', async () => {
+    const harness = await startServer()
+    const response = await fetch(`${harness.base}/dsh-skills-manager/api/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths: [] }),
+    })
+    expect(response.status).toBe(400)
+    expect((await jsonBody<{ error: { code: string } }>(response)).error.code).toBe('IMPORT_EMPTY')
   })
 })

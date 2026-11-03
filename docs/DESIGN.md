@@ -307,3 +307,13 @@ cd ../deepseek-harness && pnpm dsh web --patch ../dsh-skills-manager/dev/overlay
 
 - `pnpm verify:profile`：`npm pack` → 在隔离 `DSH_HOME` 中 `--from-default-profile web` 建 profile → `dsh plugin add <tarball>` → 校验 `dsh.profile.bundles`、`--dump-config` 层、安装包文件 → 启动并校验 host API 与 client bundle → `dsh plugin remove` 校验层消失。隔离目录与 tarball 默认清理（`--keep` 保留）。
 - `engines.dsh` 调整为 `>=0.2.1-rc.5 <0.3.0`：在发布运行时 **0.2.1-rc.5**（与当前 Desktop 同版本）上实测了 profile 安装/卸载、Web boot、API 与 client bundle，并用 mock LLM 跑通一次 headless 回合（`exit 0`）；0.2.2-alpha.2 上跑通 overlay 与 profile 两条路径。Desktop 的 `dsh-app://` 页面仍为人工确认项。
+
+## 18. 扫描与导入（全局已安装技能）
+
+- **扫描**：读取内置全局根（DSH `~/.dsh/skills`、`~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills`、`~/.cursor/skills`、`~/.gemini/skills`、`~/.config/opencode/skills`、`~/.codeium/windsurf/skills`，支持各自 env 覆盖）加配置项 `scanSkillDirs`；目录 bundle 与扁平 `<name>.md` 都识别，只读。
+- **导入策略：复制，不软链**。理由：外部目录不归本插件所有（可能被原工具改写/删除），而库要承担版本、启停、按项目分发；软链会把生命周期交给外部。导入后技能是库里的普通实体，可照常更新/停用/关联。
+- **冲突判定**：技能名 + `SKILL.md` 的 sha256。
+  - 同名同哈希 → `skipped`（已导入）。
+  - 同名不同哈希 → `conflict`，默认不写入；只有冲突项本身是“此前导入的副本”且请求 `overwrite: true` 时才替换（覆盖也只覆盖导入来源，绝不动本地/ git 管理的技能）。
+  - 记录写入 `imports.json`（`source/skillName` → 来源路径、来源根、哈希、时间），为后续“来源漂移检查”和删除级联提供依据。
+- **来源合并**：同一扫描根下的导入进入同一个 `imported-<origin>` 来源，便于整体更新/删除；删除来源时同步清理 provenance。

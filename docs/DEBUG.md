@@ -19,6 +19,8 @@
 | 请求返回 409 `SKILL_SOURCE_DISABLED` / `SKILL_DISABLED` | 技能或来源被全局停用 | 先启用再关联 |
 | 请求返回 400 `AGENT_INVALID` | 宿主老版本没有该 agent key | 用 `GET /api/agents` 返回的 key |
 | 请求 403 `UNTRUSTED_REQUEST` | 跨站/代理改写了 Host/Origin | 用同源页面操作；反向代理需声明 `--trusted-host` |
+| 扫描后导入返回 `SKILL_NAME_CONFLICT` | 库里已有同名但内容不同的技能；默认不覆盖 |
+| 导入返回 `IMPORT_PATH_INVALID` / `IMPORT_EMPTY` | 路径不在扫描根内，或没有选择任何项 |
 | 请求 200 但“看不到变化” | 「已关联项目」在页面下方且默认收起 | 现在关联成功会自动展开该项目并滚动过去，同时顶部提示「已向 … 写入 N 个链接位置」 |
 
 ## 2. 直接打 API 复现

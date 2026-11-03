@@ -76,7 +76,8 @@ Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks*
 - **Update** — `git pull --ff-only` for Git sources; a failed pull keeps its raw git output for diagnosis.
 - **Remove** — deletes the source directory and its state entries.
 - **Switches** — disable a whole source or a single skill. A disabled skill leaves the catalog entirely: the model cannot call it and `/name` no longer suggests it.
-- **Link to project** — points a project's agent skills directories at the library with symlinks, so an update in the library reaches every project at once:
+- **Scan installed skills** — reads the global skill roots of DSH and the common agents (`.dsh/skills`, `.agents/skills`, `.claude/skills`, `.codex/skills`, …), lists what it finds with its import status, and copies selected skills into the library. Importing is a **copy**, never a symlink to the original directory: the library stays the single source of truth, and the original tool cannot change or delete a managed skill. Conflicts are decided by name plus the sha256 of `SKILL.md` — identical content is skipped, different content is refused, and overwriting only replaces a copy this manager imported earlier. Provenance is recorded in `imports.json`.
+- **Link to project** — points a project's agent skills directories at the library with symlinks, so an update in the library reaches every project at once. The project field is a **multi-select dropdown** (pick any number of workspace directories, or add a custom path):
   - `dsh` targets `<project>/.dsh/skills`, the Harness `project-dsh` root, so a linked skill is visible to that project's sessions.
   - The other agent targets come from a pinned registry of project conventions (`.claude/skills`, `.codex/skills`, `.agents/skills`, …); pick any subset per project.
   - Occupied positions (a real directory, a file, or a foreign symlink) are reported as conflicts and never touched.
@@ -109,6 +110,8 @@ Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks*
 | `statePath` | `<dshHome>/skills-manager/manager-state.json` | Enable flags, categories, notes |
 | `linksPath` | `<dshHome>/skills-manager/links.json` | Per-project link intent |
 | `updatesPath` | `<dshHome>/skills-manager/updates.json` | Last update check per source |
+| `importsPath` | `<dshHome>/skills-manager/imports.json` | Provenance of imported skills |
+| `scanSkillDirs` | `[]` | Extra global roots offered by the import scanner |
 | `providerName` | `skills-manager` | Name registered on `ctx.skills` |
 | `rank` | `450` | Provider precedence; lower wins (project skills at 100/200 still win) |
 | `routePrefix` | `/dsh-skills-manager` | HTTP prefix for the Web Client API |
@@ -129,6 +132,8 @@ All routes live under `routePrefix` and answer JSON with `cache-control: no-stor
 | `DELETE` | `/api/sources/:slug` | Remove source + state |
 | `PUT` | `/api/sources/:slug` | `{ enabled?, category?, note? }` (disabling cascades links) |
 | `PUT` | `/api/sources/:slug/skills/:skill` | `{ enabled?, note? }` (disabling cascades the link) |
+| `GET` | `/api/scan` | Scan global skill roots and classify each skill against the library |
+| `POST` | `/api/import` | `{ paths, overwrite? }` → copy selected scans into `imported-<origin>` sources |
 | `GET` | `/api/agents` | Agent directory registry used by project links |
 | `GET` | `/api/links` | Recorded projects with refreshed link state |
 | `POST` | `/api/links` | `{ project, source, skillName?, agents? }` → link report |
