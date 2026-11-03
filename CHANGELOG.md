@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Global skill scanning now resolves the agent roots against the platform home directory: on Windows `%USERPROFILE%` replaces a POSIX `HOME` inherited from Git Bash, and an unset or blank home no longer makes the roots current-directory-relative, which made every non-DSH root report as missing.
+- The shared `.agents` root follows `DSH_AGENTS_HOME`, like the rest of the harness.
+- Import containment checks compare path ancestry instead of a `/`-joined prefix, so imports work with Windows separators.
+
 ## 0.1.2
 
 - README images and documentation links now use absolute GitHub URLs, so they render correctly on the npm package page.

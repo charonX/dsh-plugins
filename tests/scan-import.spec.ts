@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ImportStore, importSkills } from '../src/imports.ts'
-import { scanGlobalSkills } from '../src/scan.ts'
+import { defaultScanRoots, scanGlobalSkills } from '../src/scan.ts'
 import { skillFields, tempTree, writeSkill, type TempTree } from './helpers.ts'
 
 const silentLogger = { warn: () => {} }
@@ -50,6 +50,40 @@ function scan(fixtureValue: Fixture) {
 function globalPath(fixtureValue: Fixture, name: string): string {
   return join(fixtureValue.globalRoot, name, 'SKILL.md')
 }
+
+describe('defaultScanRoots', () => {
+  it('resolves every built-in root absolutely when HOME is missing or blank', () => {
+    for (const roots of [defaultScanRoots({}, 'linux'), defaultScanRoots({ HOME: '   ' }, 'linux')]) {
+      expect(roots.map((root) => root.key)).toEqual([
+        'dsh', 'agents', 'claude', 'codex', 'cursor', 'gemini', 'opencode', 'windsurf',
+      ])
+      for (const root of roots) expect(isAbsolute(root.path)).toBe(true)
+    }
+  })
+
+  it('uses the win32 home convention instead of a POSIX HOME', () => {
+    const roots = defaultScanRoots({ HOME: '/c/Users/l', USERPROFILE: '/win/Users/l' }, 'win32')
+    const byKey = new Map(roots.map((root) => [root.key, root.path]))
+    expect(byKey.get('claude')).toBe(join('/win/Users/l', '.claude', 'skills'))
+    expect(byKey.get('windsurf')).toBe(join('/win/Users/l', '.codeium', 'windsurf', 'skills'))
+    expect(roots.some((root) => root.path.startsWith('/c/Users/l'))).toBe(false)
+  })
+
+  it('follows each tool environment override', () => {
+    const roots = defaultScanRoots({
+      HOME: '/home/l',
+      DSH_AGENTS_HOME: '/shared/agents',
+      CLAUDE_CONFIG_DIR: '/etc/claude',
+      CODEX_HOME: '/etc/codex',
+      XDG_CONFIG_HOME: '/etc/xdg',
+    }, 'linux')
+    const byKey = new Map(roots.map((root) => [root.key, root.path]))
+    expect(byKey.get('agents')).toBe(join('/shared/agents', 'skills'))
+    expect(byKey.get('claude')).toBe(join('/etc/claude', 'skills'))
+    expect(byKey.get('codex')).toBe(join('/etc/codex', 'skills'))
+    expect(byKey.get('opencode')).toBe(join('/etc/xdg', 'opencode', 'skills'))
+  })
+})
 
 describe('scanGlobalSkills', () => {
   it('finds directory bundles and flat files, with importability status', () => {

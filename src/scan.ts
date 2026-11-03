@@ -9,11 +9,12 @@
 
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
-import { expandHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { expandHomePath, resolveAgentsHome, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseSkillMarkdown } from './frontmatter.js'
 import { scanLibrary, type WarnLogger } from './library.js'
-import { canonicalPath } from './paths.js'
+import { canonicalPath, isInsideOrEqual } from './paths.js'
 import type { ScanRootView, ScanSkillView } from './shared/api.js'
 
 /** One built-in global root, keyed by the agent it belongs to. */
@@ -54,17 +55,37 @@ export interface ScanOptions {
 }
 
 /**
+ * Resolve the home directory the agent conventions hang off.
+ *
+ * Windows tools keep their global state under `%USERPROFILE%`; a POSIX `HOME`
+ * inherited from a Git Bash session (`/c/Users/…`) is not a win32 path and would
+ * resolve every root against the current drive. A blank override never wins, so
+ * no root silently becomes current-directory-relative.
+ * @param env - environment to read.
+ * @param platform - platform whose home convention applies.
+ * @returns an absolute home directory.
+ */
+function homeRoot(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  const preferred = (platform === 'win32' ? env.USERPROFILE : env.HOME)?.trim()
+  return preferred !== undefined && preferred !== '' ? preferred : homedir()
+}
+
+/**
  * Build the built-in global roots: DSH's own user directory plus the common
  * agent homes, following each tool's environment override when set.
  * @param env - environment used to resolve overrides.
+ * @param platform - platform whose home and separator conventions apply.
  * @returns one root per known agent, in display order.
  */
-export function defaultScanRoots(env: NodeJS.ProcessEnv = process.env): ScanRoot[] {
-  const home = env.HOME ?? ''
+export function defaultScanRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): ScanRoot[] {
+  const home = homeRoot(env, platform)
   const dshHome = resolveDshHome(undefined, env)
   const roots: ScanRoot[] = [
     { key: 'dsh', label: 'DeepSeek Harness', path: join(dshHome, 'skills'), skip: '.system' },
-    { key: 'agents', label: 'Shared agents', path: join(home, '.agents', 'skills') },
+    { key: 'agents', label: 'Shared agents', path: join(resolveAgentsHome(undefined, env), 'skills') },
     {
       key: 'claude',
       label: 'Claude Code',
@@ -215,14 +236,13 @@ export function buildLibraryIndex(options: ScanOptions): { byName: Map<string, L
  */
 export function rootForPath(path: string, extraRoots: readonly string[]): ScanRoot | undefined {
   const key = canonicalPath(path)
+  // Compare with `relative` rather than a `/`-joined prefix: win32 separators
+  // are `\`, and win32 comparisons are case-insensitive.
   return [...defaultScanRoots(), ...extraRoots.map((entry, index) => ({
     key: `custom-${String(index + 1)}`,
     label: basename(entry),
     path: expandHomePath(entry),
-  }))].find((root) => {
-    const rootKey = canonicalPath(root.path)
-    return key === rootKey || key.startsWith(`${rootKey}/`)
-  })
+  }))].find((root) => isInsideOrEqual(canonicalPath(root.path), key))
 }
 
 function isDirectory(path: string): boolean {

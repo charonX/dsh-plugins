@@ -45,9 +45,10 @@ export interface ScanOptions {
  * Build the built-in global roots: DSH's own user directory plus the common
  * agent homes, following each tool's environment override when set.
  * @param env - environment used to resolve overrides.
+ * @param platform - platform whose home and separator conventions apply.
  * @returns one root per known agent, in display order.
  */
-export declare function defaultScanRoots(env?: NodeJS.ProcessEnv): ScanRoot[];
+export declare function defaultScanRoots(env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform): ScanRoot[];
 /**
  * Scan global roots and classify candidates against the current library.
  * @param options - roots, library, provenance, and logger.
