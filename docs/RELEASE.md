@@ -51,12 +51,14 @@
 
    之后推送 `v*` tag 即由 `.github/workflows/release.yml` 以 OIDC 发布（`--provenance`），不再需要长期 token。注意：npm 已宣布 **约 2027 年 1 月起 2FA-bypass GAT 不能直接发布**，自动化发布应迁移到 OIDC 或 staged publishing。
 
-6. 发布后验证两条路径：
+6. 发布后验证两条路径（**必须钉版本**，见第 7 条）：
 
    ```sh
-   dsh plugin --profile smoke-npm add @charonx/dsh-skills-manager
+   dsh plugin --profile smoke-npm add @charonx/dsh-skills-manager@X.Y.Z
    dsh plugin --profile smoke-rel add \
      https://github.com/charonX/dsh-skills-manager/releases/download/vX.Y.Z/charonx-dsh-skills-manager-X.Y.Z.tgz
    ```
+
+7. 刚发布的版本会被 pnpm 的 `minimumReleaseAge` 暂缓（pnpm 11 默认 24 小时，非 strict 模式下挑上一个成熟版本而不是失败）。因此发布后立即用不带版本号的 `dsh plugin add` 会静默装到上一个版本——这是策略，不是安装出错；DSH 插件管理器会在安装完成页给出「卸载后安装 `name@X.Y.Z`」的提示。精确版本和 tarball / Git spec 不受暂缓影响。
 
 Git 安装（`git+https://…`）直接读取仓库里提交的 `lib/`、`client/`，不需要构建脚本；旧版本（`v0.1.0`）仍会触发 `prepare` 拦截，不要再用它。
