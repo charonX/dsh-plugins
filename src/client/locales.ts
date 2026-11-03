@@ -7,6 +7,8 @@
 /** English dictionary; its keys define the namespace's key domain. */
 export const en = {
   panel: 'Skills',
+  expandSource: 'Expand skills',
+  collapseSource: 'Collapse skills',
   title: 'Skills',
   subtitle: 'Install skill sources, keep them current, and decide which skills this agent can use.',
   install: 'Add skill source',
@@ -95,6 +97,8 @@ export type MessageKey = keyof typeof en
 /** Chinese dictionary, complete against {@link en}. */
 export const zh: Record<MessageKey, string> = {
   panel: '技能',
+  expandSource: '展开技能列表',
+  collapseSource: '收起技能列表',
   title: '技能',
   subtitle: '安装技能来源、保持更新，并决定这个 agent 能用哪些技能。',
   install: '添加技能来源',

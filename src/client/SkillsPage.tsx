@@ -144,6 +144,7 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [log, setLog] = useState<{ slug: string; text: string } | null>(null)
+  const [collapsed, setCollapsed] = useState<readonly string[]>([])
   const [installOpen, setInstallOpen] = useState(false)
   const [linkTarget, setLinkTarget] = useState<{ source: SourceView; skillName?: string } | null>(null)
   const [pendingRemove, setPendingRemove] = useState<string | null>(null)
@@ -279,6 +280,12 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
     })
   }, [mergeReport, projects, runAction, t])
 
+  const toggleCollapsed = useCallback((slug: string): void => {
+    setCollapsed((current) => current.includes(slug)
+      ? current.filter((entry) => entry !== slug)
+      : [...current, slug])
+  }, [])
+
   const filtered = useFiltered(snapshot, query)
   const counts = useCounts(snapshot)
   const existingSlugs = useMemo(() => (snapshot?.sources ?? []).map((source) => source.slug), [snapshot])
@@ -364,6 +371,8 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           source={source}
           skills={skills}
           busy={busy}
+          collapsed={collapsed.includes(source.slug)}
+          onToggleCollapsed={() => { toggleCollapsed(source.slug) }}
           onUpdate={onUpdate}
           onRemove={(slug) => { setPendingRemove(slug) }}
           onToggleSource={onToggleSource}
@@ -462,6 +471,8 @@ interface SourceCardProps extends TranslateProps {
   readonly source: SourceView
   readonly skills: readonly SkillView[]
   readonly busy: string | null
+  readonly collapsed: boolean
+  onToggleCollapsed(): void
   onUpdate(source: SourceView): Promise<void>
   onRemove(slug: string): void
   onToggleSource(source: SourceView): Promise<void>
@@ -471,20 +482,64 @@ interface SourceCardProps extends TranslateProps {
   onCheck(source: SourceView): Promise<void>
 }
 
-function SourceCard({ t, source, skills, busy, onUpdate, onRemove, onToggleSource, onToggleSkill, onLink, onLinkSkill, onCheck }: SourceCardProps): ReactElement {
+function SourceCard({
+  t,
+  source,
+  skills,
+  busy,
+  collapsed,
+  onToggleCollapsed,
+  onUpdate,
+  onRemove,
+  onToggleSource,
+  onToggleSkill,
+  onLink,
+  onLinkSkill,
+  onCheck,
+}: SourceCardProps): ReactElement {
   const working = busy === source.slug
   const checking = busy === `check:${source.slug}`
   const update = source.update
   return (
     <section style={cardStyle} aria-label={source.slug}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        flexWrap: 'wrap',
-        padding: '10px 12px',
-        borderBottom: skills.length === 0 ? undefined : `1px solid ${COLORS.border}`,
-      }}>
+      <div
+        onClick={onToggleCollapsed}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          padding: '10px 12px',
+          cursor: 'pointer',
+          borderBottom: skills.length === 0 || collapsed ? undefined : `1px solid ${COLORS.border}`,
+        }}
+      >
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t('expandSource') : t('collapseSource')}
+          title={collapsed ? t('expandSource') : t('collapseSource')}
+          onClick={(event) => { event.stopPropagation(); onToggleCollapsed() }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 20,
+            height: 20,
+            padding: 0,
+            border: 'none',
+            borderRadius: 'var(--dsw-radius-xs)',
+            background: 'transparent',
+            color: COLORS.tertiary,
+            cursor: 'pointer',
+            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+            transition: 'transform 120ms ease',
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
         <strong style={{ fontSize: 14 }}>{source.slug}</strong>
         <Badge text={source.sourceType === 'git' ? 'git' : 'local'} />
         {source.version !== undefined && (
@@ -492,7 +547,16 @@ function SourceCard({ t, source, skills, busy, onUpdate, onRemove, onToggleSourc
         )}
         {!source.enabled && <Badge text={t('disabled')} tone="warn" />}
         <UpdateBadge t={t} update={update} />
+        {collapsed && (
+          <span style={{ fontSize: 11, color: COLORS.tertiary }}>
+            {t('countSkills', { count: skills.length })}
+          </span>
+        )}
         <span style={{ flex: 1 }} />
+        <span
+          onClick={(event) => { event.stopPropagation() }}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+        >
         <Switch
           checked={source.enabled}
           label={source.enabled ? t('disableSource') : t('enableSource')}
@@ -515,8 +579,9 @@ function SourceCard({ t, source, skills, busy, onUpdate, onRemove, onToggleSourc
         <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { onRemove(source.slug) }}>
           {t('remove')}
         </button>
+        </span>
       </div>
-      {source.sourceUrl !== undefined && (
+      {!collapsed && source.sourceUrl !== undefined && (
         <div style={{ padding: '6px 12px', fontSize: 11, color: COLORS.tertiary, wordBreak: 'break-all' }}>
           {source.sourceUrl}
         </div>
@@ -524,10 +589,10 @@ function SourceCard({ t, source, skills, busy, onUpdate, onRemove, onToggleSourc
       {source.problem !== undefined && (
         <div style={{ padding: '6px 12px', fontSize: 12, color: COLORS.warn }}>{source.problem}</div>
       )}
-      {source.note !== undefined && (
+      {!collapsed && source.note !== undefined && (
         <div style={{ padding: '0 12px 6px', fontSize: 12, color: COLORS.secondary }}>{t('note')}: {source.note}</div>
       )}
-      {skills.length === 0
+      {!collapsed && (skills.length === 0
         ? <div style={{ padding: '10px 12px', fontSize: 12, color: COLORS.tertiary }}>{t('noSkills')}</div>
         : skills.map((skill) => (
           <SkillRow
@@ -539,7 +604,7 @@ function SourceCard({ t, source, skills, busy, onUpdate, onRemove, onToggleSourc
             onToggle={() => { void onToggleSkill(source, skill) }}
             onLink={() => { onLinkSkill(source, skill) }}
           />
-        ))}
+        )))}
     </section>
   )
 }
