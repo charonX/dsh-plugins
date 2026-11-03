@@ -31,6 +31,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const HARNESS = resolve(process.env.DSH_HARNESS_DIR ?? join(ROOT, '..', 'deepseek-harness'))
 const KEEP = process.argv.includes('--keep')
 const PREFIX = '/dsh-skills-manager'
+const PACKAGE = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
+const PACKAGE_RE = PACKAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000
 
 const checks = []
@@ -116,9 +118,8 @@ async function verifyClientBundle(origin, token) {
   const cookieHeader = cookie === null || cookie === undefined ? undefined : cookie.split(';')[0]
   const htmlResponse = await fetch(`${origin}/`, { headers: cookieHeader === undefined ? {} : { cookie: cookieHeader } })
   const html = await htmlResponse.text()
-  assert(html.includes('dsh-skills-manager/client.js'), 'boot graph does not list the client bundle')
-  const match = /href="([^"]*dsh-skills-manager\/client\.js[^"]*)"/u.exec(html)
-    ?? /src="([^"]*dsh-skills-manager\/client\.js[^"]*)"/u.exec(html)
+  assert(html.includes(`${PACKAGE}/client.js`), 'boot graph does not list the client bundle')
+  const match = new RegExp(`(?:href|src)="([^"]*${PACKAGE_RE}/client\\.js[^"]*)"`, 'u').exec(html)
   assert(match !== null, 'boot graph row for the client bundle not found')
   const url = match[1].replaceAll('&amp;', '&')
   const bundle = await fetch(new URL(url, `${origin}/`), {
@@ -126,7 +127,7 @@ async function verifyClientBundle(origin, token) {
   })
   const text = await bundle.text()
   assert(bundle.status === 200, `client bundle answered ${bundle.status}`)
-  assert(/window\.__ModuleLoader__\.load\(\{\s*id:\s*"dsh-skills-manager"/u.test(text), 'client bundle has no loader registration')
+  assert(new RegExp(`window\\.__ModuleLoader__\\.load\\(\\{\\s*id:\\s*"${PACKAGE_RE}"`, 'u').test(text), 'client bundle has no loader registration')
   pass('client bundle served', `${new URL(url, `${origin}/`).pathname.slice(0, 48)}…`)
 }
 

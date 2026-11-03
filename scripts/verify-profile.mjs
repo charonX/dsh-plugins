@@ -26,6 +26,7 @@ const KEEP = process.argv.includes('--keep')
 const LINKED = process.argv.includes('--linked')
 const PROFILE = 'skills-install-test'
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).name
+const PACKAGE_RE = PACKAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const PREFIX = '/dsh-skills-manager'
 const BIN = join(HARNESS, 'apps', 'cli', 'src', 'bin.ts')
 
@@ -99,8 +100,7 @@ async function verifyClientBundle(origin, token) {
     headers: cookie === undefined ? {} : { cookie },
   })).text()
   assert(html.includes(`${PACKAGE}/client.js`), 'boot graph does not list the client bundle')
-  const match = /href="([^"]*dsh-skills-manager\/client\.js[^"]*)"/u.exec(html)
-    ?? /src="([^"]*dsh-skills-manager\/client\.js[^"]*)"/u.exec(html)
+  const match = new RegExp(`(?:href|src)="([^"]*${PACKAGE_RE}/client\\.js[^"]*)"`, 'u').exec(html)
   assert(match !== null, 'client bundle row not found in the boot graph')
   const url = match[1].replaceAll('&amp;', '&')
   const response = await fetch(new URL(url, `${origin}/`), {
@@ -108,7 +108,7 @@ async function verifyClientBundle(origin, token) {
   })
   const text = await response.text()
   assert(response.status === 200, `client bundle answered ${response.status}`)
-  assert(/window\.__ModuleLoader__\.load\(\{\s*id:\s*"dsh-skills-manager"/u.test(text), 'client bundle has no loader registration')
+  assert(new RegExp(`window\\.__ModuleLoader__\\.load\\(\\{\\s*id:\\s*"${PACKAGE_RE}"`, 'u').test(text), 'client bundle has no loader registration')
   pass('installed bundle appears in the boot graph and is served')
 }
 
