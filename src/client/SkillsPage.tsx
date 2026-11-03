@@ -933,6 +933,7 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
   const [overwrite, setOverwrite] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<ImportResponse | null>(null)
+  const [showRoots, setShowRoots] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -1035,11 +1036,47 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
             {t('scanOverwrite')}
           </label>
         </div>
-        <div style={{ padding: '0 14px 6px', fontSize: 11, color: COLORS.tertiary }}>
-          {t('scanOverwriteHint')}
-          {' · '}
-          {t('scanRoots')}: {(scan?.roots ?? []).filter((root) => root.exists).length}/{(scan?.roots ?? []).length}
+        <div style={{ padding: '0 14px 6px', fontSize: 11, color: COLORS.tertiary, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>{t('scanOverwriteHint')}</span>
+          <span>·</span>
+          <span>
+            {t('scanRootsSummary', {
+              exists: (scan?.roots ?? []).filter((root) => root.exists).length,
+              total: (scan?.roots ?? []).length,
+            })}
+          </span>
+          <button
+            type="button"
+            style={{ ...buttonStyle, padding: '0 6px', fontSize: 10 }}
+            onClick={() => { setShowRoots((open) => !open) }}
+          >
+            {showRoots ? t('scanRootsHide') : t('scanRootsShow')}
+          </button>
         </div>
+        {showRoots && (
+          <div style={{
+            margin: '0 14px 8px',
+            padding: '6px 8px',
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 'var(--dsw-radius-sm)',
+            maxHeight: 160,
+            overflow: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}>
+            {(scan?.roots ?? []).map((root) => (
+              <div key={root.key} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11 }}>
+                <span style={{ minWidth: 84, color: COLORS.secondary }}>{root.label}</span>
+                <code style={{ color: COLORS.tertiary, overflow: 'hidden', textOverflow: 'ellipsis' }}>{root.path}</code>
+                <span style={{ marginLeft: 'auto', color: root.exists ? COLORS.success : COLORS.tertiary }}>
+                  {root.exists ? t('scanRootsExists') : t('scanMissingRoot')}
+                </span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: COLORS.tertiary, paddingTop: 2 }}>{t('scanRootsHint')}</div>
+          </div>
+        )}
         <div style={{ overflow: 'auto', padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {loading && <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanLoading')}</p>}
           {error !== null && <p style={{ color: COLORS.error, fontSize: 12 }} role="alert">{error}</p>}
