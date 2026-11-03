@@ -119,7 +119,8 @@ DEEPSEEK_BASE_URL=http://127.0.0.1:8123/v1 DEEPSEEK_API_KEY=mock-key \
 一键版：
 
 ```sh
-pnpm verify:profile        # 打包 → 隔离 DSH_HOME → 建 profile → 安装 → 启动 → API/bundle → 卸载，9 项
+pnpm verify:profile            # tarball：打包 → 隔离 DSH_HOME → 建 profile → 安装 → 启动 → API/bundle → 卸载，9 项
+pnpm verify:profile -- --linked  # 同样 9 项，但装 linked checkout（不打包）
 ```
 
 手工版（真实 profile）与 Desktop 步骤见 [INSTALL.md](INSTALL.md)。要点：

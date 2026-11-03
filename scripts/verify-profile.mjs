@@ -5,8 +5,9 @@
  * bundle. Nothing touches the real `~/.dsh` or the user's profiles.
  *
  * Usage:
- *   pnpm verify:profile                 # build, pack, install, boot, remove
- *   pnpm verify:profile -- --keep       # keep the isolated DSH_HOME and tarball
+ *   pnpm verify:profile                 # pack a tarball (published shape), install, boot, remove
+ *   pnpm verify:profile -- --linked     # install the checkout itself (fast, dev shape)
+ *   pnpm verify:profile -- --keep       # keep the isolated DSH_HOME (and tarball)
  *   DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
  *
  * Requires a built Harness checkout (`pnpm run build`) and network access for
@@ -22,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const HARNESS = resolve(process.env.DSH_HARNESS_DIR ?? join(ROOT, '..', 'deepseek-harness'))
 const KEEP = process.argv.includes('--keep')
+const LINKED = process.argv.includes('--linked')
 const PROFILE = 'skills-install-test'
 const PACKAGE = 'dsh-skills-manager'
 const PREFIX = '/dsh-skills-manager'
@@ -116,12 +118,18 @@ async function main() {
     throw new Error(`Harness build artifacts are missing under ${HARNESS}; run "pnpm run build" there first`)
   }
 
-  console.log('Building and packing the plugin…')
+  console.log(LINKED ? 'Building the plugin (linked install)…' : 'Building and packing the plugin…')
   execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'inherit', timeout: 15 * 60 * 1000 })
-  const packed = execFileSync('npm', ['pack', '--silent'], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n').pop()
-  assert(packed !== undefined && packed.endsWith('.tgz'), 'npm pack did not produce a tarball')
-  tarball = join(ROOT, packed)
-  pass('packed', packed)
+  let spec = ROOT
+  if (!LINKED) {
+    const packed = execFileSync('npm', ['pack', '--silent'], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n').pop()
+    assert(packed !== undefined && packed.endsWith('.tgz'), 'npm pack did not produce a tarball')
+    tarball = join(ROOT, packed)
+    spec = tarball
+    pass('packed', packed)
+  } else {
+    pass('linked checkout', ROOT)
+  }
 
   temporary = mkdtempSync(join(tmpdir(), 'dsh-skills-profile-'))
   const home = join(temporary, 'home')
@@ -132,7 +140,7 @@ async function main() {
   assert(existsSync(join(profileDir, 'package.json')), 'profile was not created from the web template')
   pass('profile created from the web template', profileDir)
 
-  const added = dsh(['plugin', '--profile', PROFILE, 'add', tarball], env)
+  const added = dsh(['plugin', '--profile', PROFILE, 'add', spec], env)
   void added
   const manifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
   assert(manifest.dsh.profile.bundles.includes(PACKAGE), 'bundle was not appended to dsh.profile.bundles')

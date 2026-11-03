@@ -16,10 +16,21 @@
 
 ```sh
 cd dsh-skills-manager
-pnpm verify:profile          # 9 项检查，约 30s
-pnpm verify:profile -- --keep  # 保留隔离的 DSH_HOME 和 tarball 便于排查
+pnpm verify:profile            # tarball 形态（发布路径），9 项检查
+pnpm verify:profile -- --linked  # 目录 linked 形态（开发路径），9 项检查
+pnpm verify:profile -- --keep    # 保留隔离的 DSH_HOME 便于排查
 DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
 ```
+
+**tarball 不是必须的**，两种安装形态只是验证不同东西：
+
+| 形态 | 命令 | 验证什么 | 什么时候用 |
+|---|---|---|---|
+| linked 目录 | `dsh plugin --profile <p> add /abs/path/to/dsh-skills-manager` | profile 装配、`dsh.bundle`/`dsh.client` 清单、宿主加载路径；直接读 checkout 里的 `lib/`、`client/` | 日常开发、改完代码想立刻在真实 profile 里看 |
+| tarball | `npm pack` → `add <tgz>` | 上面全部 + **`files` 白名单、`prepack` 构建、不含源码/测试**，与 npm 用户最终拿到的包一致 | 发布前、排查"本地能跑、装完不行" |
+| registry | `dsh plugin --profile <p> add dsh-skills-manager` | 真实用户路径 | 发布之后 |
+
+linked 形态要求先 `pnpm run build`（profile 读的是构建产物，不会替你编译）；tarball 形态由 `prepack` 自动构建。
 
 它做的事：
 
@@ -42,13 +53,14 @@ DSH_HARNESS_DIR=/path/to/deepseek-harness pnpm verify:profile
 # 1) 用 Web 模板建 profile（--dump-config 只创建并打印，不启动）
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null
 
-# 2) 打包并安装（二选一）
+# 2) 安装（二选一）
 cd /path/to/dsh-skills-manager
+# a) linked checkout：开发迭代，先构建
 npm run build
-npm pack                                  # 产出 dsh-skills-manager-0.1.0.tgz
-dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
-# 或者直接装 linked checkout（迭代更快，行为等价）
 dsh plugin --profile skills-test add "$PWD"
+# b) tarball：发布前验证打包
+npm pack
+dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
 
 # 3) 检查装配
 dsh --profile skills-test --dump-config | grep -A2 "== dsh-skills-manager"

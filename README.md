@@ -31,17 +31,24 @@ dsh --profile web --dump-config    # should show a "# == dsh-skills-manager" lay
 dsh --profile web
 ```
 
-As a profile bundle (the published path — this is what [docs/INSTALL.md](docs/INSTALL.md) covers in detail):
+As a profile bundle. Use a **linked checkout** while developing and a **tarball** only to validate the published package (`files`, `prepack`, no sources); both are one command for `dsh plugin add`:
 
 ```sh
-npm pack
 dsh --profile skills-test --from-default-profile web --dump-config >/dev/null   # create profile, no boot
+
+# development: the profile links this checkout (build first)
+pnpm run build
+dsh plugin --profile skills-test add "$PWD"
+
+# release check: only what npm would ship
+npm pack
 dsh plugin --profile skills-test add "$PWD/dsh-skills-manager-0.1.0.tgz"
+
 dsh --profile skills-test --no-open --port 3099
 dsh plugin --profile skills-test remove dsh-skills-manager
 ```
 
-`pnpm verify:profile` automates exactly that in an isolated `DSH_HOME` (9 checks: pack → install → dump-config → boot → API → client bundle → remove).
+`pnpm verify:profile` automates the tarball shape in an isolated `DSH_HOME`; `pnpm verify:profile -- --linked` does the same with a linked checkout (9 checks each).
 
 From a Harness source checkout, select the built host entry with an overlay:
 
