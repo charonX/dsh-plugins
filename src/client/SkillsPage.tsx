@@ -144,7 +144,8 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [log, setLog] = useState<{ slug: string; text: string } | null>(null)
-  const [collapsed, setCollapsed] = useState<readonly string[]>([])
+  const [expandedSources, setExpandedSources] = useState<readonly string[]>([])
+  const [expandedProjects, setExpandedProjects] = useState<readonly string[]>([])
   const [installOpen, setInstallOpen] = useState(false)
   const [linkTarget, setLinkTarget] = useState<{ source: SourceView; skillName?: string } | null>(null)
   const [pendingRemove, setPendingRemove] = useState<string | null>(null)
@@ -280,10 +281,15 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
     })
   }, [mergeReport, projects, runAction, t])
 
-  const toggleCollapsed = useCallback((slug: string): void => {
-    setCollapsed((current) => current.includes(slug)
+  const toggleSourceExpanded = useCallback((slug: string): void => {
+    setExpandedSources((current) => current.includes(slug)
       ? current.filter((entry) => entry !== slug)
       : [...current, slug])
+  }, [])
+  const toggleProjectExpanded = useCallback((project: string): void => {
+    setExpandedProjects((current) => current.includes(project)
+      ? current.filter((entry) => entry !== project)
+      : [...current, project])
   }, [])
 
   const filtered = useFiltered(snapshot, query)
@@ -320,6 +326,22 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           />
           <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { void refresh() }}>
             {t('refresh')}
+          </button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={busy !== null || (snapshot?.sources.length ?? 0) === 0}
+            onClick={() => { setExpandedSources((snapshot?.sources ?? []).map((source) => source.slug)) }}
+          >
+            {t('expandAll')}
+          </button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={busy !== null || expandedSources.length === 0}
+            onClick={() => { setExpandedSources([]) }}
+          >
+            {t('collapseAll')}
           </button>
           <button
             type="button"
@@ -371,8 +393,8 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           source={source}
           skills={skills}
           busy={busy}
-          collapsed={collapsed.includes(source.slug)}
-          onToggleCollapsed={() => { toggleCollapsed(source.slug) }}
+          expanded={query.trim() !== '' || expandedSources.includes(source.slug)}
+          onToggle={() => { toggleSourceExpanded(source.slug) }}
           onUpdate={onUpdate}
           onRemove={(slug) => { setPendingRemove(slug) }}
           onToggleSource={onToggleSource}
@@ -389,6 +411,10 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           projects={projects}
           agents={agents}
           busy={busy}
+          expanded={expandedProjects}
+          onToggleProject={toggleProjectExpanded}
+          onExpandAll={() => { setExpandedProjects(projects.map((project) => project.project)) }}
+          onCollapseAll={() => { setExpandedProjects([]) }}
           onResync={onResyncProject}
           onUnlink={onUnlinkProject}
           onToggleEntry={onToggleEntry}
@@ -471,8 +497,8 @@ interface SourceCardProps extends TranslateProps {
   readonly source: SourceView
   readonly skills: readonly SkillView[]
   readonly busy: string | null
-  readonly collapsed: boolean
-  onToggleCollapsed(): void
+  readonly expanded: boolean
+  onToggle(): void
   onUpdate(source: SourceView): Promise<void>
   onRemove(slug: string): void
   onToggleSource(source: SourceView): Promise<void>
@@ -487,8 +513,8 @@ function SourceCard({
   source,
   skills,
   busy,
-  collapsed,
-  onToggleCollapsed,
+  expanded,
+  onToggle,
   onUpdate,
   onRemove,
   onToggleSource,
@@ -503,7 +529,7 @@ function SourceCard({
   return (
     <section style={cardStyle} aria-label={source.slug}>
       <div
-        onClick={onToggleCollapsed}
+        onClick={onToggle}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -511,15 +537,15 @@ function SourceCard({
           flexWrap: 'wrap',
           padding: '10px 12px',
           cursor: 'pointer',
-          borderBottom: skills.length === 0 || collapsed ? undefined : `1px solid ${COLORS.border}`,
+          borderBottom: skills.length === 0 || !expanded ? undefined : `1px solid ${COLORS.border}`,
         }}
       >
         <button
           type="button"
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? t('expandSource') : t('collapseSource')}
-          title={collapsed ? t('expandSource') : t('collapseSource')}
-          onClick={(event) => { event.stopPropagation(); onToggleCollapsed() }}
+          aria-expanded={expanded}
+          aria-label={expanded ? t('collapseSource') : t('expandSource')}
+          title={expanded ? t('collapseSource') : t('expandSource')}
+          onClick={(event) => { event.stopPropagation(); onToggle() }}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -532,7 +558,7 @@ function SourceCard({
             background: 'transparent',
             color: COLORS.tertiary,
             cursor: 'pointer',
-            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+            transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
             transition: 'transform 120ms ease',
           }}
         >
@@ -547,7 +573,7 @@ function SourceCard({
         )}
         {!source.enabled && <Badge text={t('disabled')} tone="warn" />}
         <UpdateBadge t={t} update={update} />
-        {collapsed && (
+        {!expanded && (
           <span style={{ fontSize: 11, color: COLORS.tertiary }}>
             {t('countSkills', { count: skills.length })}
           </span>
@@ -581,7 +607,7 @@ function SourceCard({
         </button>
         </span>
       </div>
-      {!collapsed && source.sourceUrl !== undefined && (
+      {expanded && source.sourceUrl !== undefined && (
         <div style={{ padding: '6px 12px', fontSize: 11, color: COLORS.tertiary, wordBreak: 'break-all' }}>
           {source.sourceUrl}
         </div>
@@ -589,10 +615,10 @@ function SourceCard({
       {source.problem !== undefined && (
         <div style={{ padding: '6px 12px', fontSize: 12, color: COLORS.warn }}>{source.problem}</div>
       )}
-      {!collapsed && source.note !== undefined && (
+      {expanded && source.note !== undefined && (
         <div style={{ padding: '0 12px 6px', fontSize: 12, color: COLORS.secondary }}>{t('note')}: {source.note}</div>
       )}
-      {!collapsed && (skills.length === 0
+      {expanded && (skills.length === 0
         ? <div style={{ padding: '10px 12px', fontSize: 12, color: COLORS.tertiary }}>{t('noSkills')}</div>
         : skills.map((skill) => (
           <SkillRow
@@ -668,27 +694,49 @@ interface ProjectsSectionProps extends TranslateProps {
   readonly projects: readonly ProjectLinkView[]
   readonly agents: readonly AgentTargetView[]
   readonly busy: string | null
+  readonly expanded: readonly string[]
+  onToggleProject(project: string): void
+  onExpandAll(): void
+  onCollapseAll(): void
   onResync(project: string): Promise<void>
   onUnlink(project: string): Promise<void>
   onToggleEntry(project: string, entry: LinkEntryView, enabled: boolean): Promise<void>
   onUnlinkEntry(project: string, entry: LinkEntryView): Promise<void>
 }
 
+/** Entries of a project, each row collapsing to one line with its agent names. */
 function ProjectsSection({
   t,
   projects,
   agents,
   busy,
+  expanded,
+  onToggleProject,
+  onExpandAll,
+  onCollapseAll,
   onResync,
   onUnlink,
   onToggleEntry,
   onUnlinkEntry,
 }: ProjectsSectionProps): ReactElement {
+  const nameOf = (key: string): string => agents.find((agent) => agent.name === key)?.displayName ?? key
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{t('linkedProjects')}</h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{t('linkedProjects')}</h3>
+        <span style={{ flex: 1 }} />
+        <button type="button" style={buttonStyle} onClick={onExpandAll}>{t('expandAll')}</button>
+        <button
+          type="button"
+          style={buttonStyle}
+          disabled={expanded.length === 0}
+          onClick={onCollapseAll}
+        >
+          {t('collapseAll')}
+        </button>
+      </div>
       {projects.map((project) => {
-        const nameOf = (key: string): string => agents.find((agent) => agent.name === key)?.displayName ?? key
+        const open = expanded.includes(project.project)
         const working = busy === `link:${project.project}`
         const counts = project.targets.reduce<Record<string, number>>((total, target) => {
           total[target.state] = (total[target.state] ?? 0) + 1
@@ -696,87 +744,151 @@ function ProjectsSection({
         }, {})
         return (
           <div key={project.project} style={cardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 12px' }}>
-              <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{project.project}</code>
+            <div
+              onClick={() => { onToggleProject(project.project) }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                flexWrap: 'wrap',
+                padding: '10px 12px',
+                cursor: 'pointer',
+                borderBottom: open && project.exists ? `1px solid ${COLORS.border}` : undefined,
+              }}
+            >
+              <button
+                type="button"
+                aria-expanded={open}
+                aria-label={open ? t('collapseProject') : t('expandProject')}
+                onClick={(event) => { event.stopPropagation(); onToggleProject(project.project) }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 20,
+                  height: 20,
+                  padding: 0,
+                  border: 'none',
+                  borderRadius: 'var(--dsw-radius-xs)',
+                  background: 'transparent',
+                  color: COLORS.tertiary,
+                  cursor: 'pointer',
+                  transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+                  transition: 'transform 120ms ease',
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <code
+                title={project.project}
+                style={{
+                  fontSize: 12,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: '42%',
+                }}
+              >
+                {project.project}
+              </code>
               {!project.exists && <Badge text={t('projectMissing')} tone="warn" />}
               <span style={{ fontSize: 11, color: COLORS.tertiary }}>
                 {project.agents.map(nameOf).join(' · ')}
               </span>
+              {!open && (
+                <span style={{ fontSize: 11, color: COLORS.tertiary }}>
+                  {t('countSkills', { count: project.entries.length })}
+                </span>
+              )}
               <span style={{ flex: 1 }} />
               {Object.entries(counts).map(([state, count]) => (
                 <span key={state} style={{ fontSize: 11, color: STATE_COLORS[state] ?? COLORS.tertiary }}>
                   {t(STATE_KEYS[state] ?? state)} {count}
                 </span>
               ))}
-              <button
-                type="button"
-                style={buttonStyle}
-                disabled={busy !== null || !project.exists}
-                onClick={() => { void onResync(project.project) }}
+              <span
+                onClick={(event) => { event.stopPropagation() }}
+                style={{ display: 'inline-flex', gap: 8 }}
               >
-                {working ? t('loading') : t('resync')}
-              </button>
-              <button
-                type="button"
-                style={buttonStyle}
-                disabled={busy !== null || !project.exists}
-                onClick={() => { void onUnlink(project.project) }}
-              >
-                {t('unlinkAll')}
-              </button>
-            </div>
-            <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: '6px 12px 10px' }}>
-              {project.entries.map((entry) => {
-                return (
-                  <div
-                    key={`${entry.source}/${entry.skillName}`}
-                    style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0' }}
-                  >
-                    <Switch
-                      checked={entry.enabled}
-                      label={entry.enabled ? t('disabled') : t('enabled')}
-                      disabled={busy !== null || !project.exists}
-                      onChange={() => { void onToggleEntry(project.project, entry, !entry.enabled) }}
-                    />
-                    <code style={{ color: COLORS.secondary }}>{entry.source}/{entry.skillName}</code>
-                    {!entry.enabled && <Badge text={t('disabled')} tone="warn" />}
-                    <span style={{ flex: 1 }} />
-                    <button
-                      type="button"
-                      style={{ ...buttonStyle, padding: '0 6px', fontSize: 10 }}
-                      disabled={busy !== null || !project.exists}
-                      onClick={() => { void onUnlinkEntry(project.project, entry) }}
-                    >
-                      {t('unlinkOne')}
-                    </button>
-                  </div>
-                )
-              })}
-              {project.targets.map((target) => (
-                <div
-                  key={`${target.path}:${target.state}`}
-                  style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 11, padding: '2px 0 2px 42px' }}
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  disabled={busy !== null || !project.exists}
+                  onClick={() => { void onResync(project.project) }}
                 >
-                  <span style={{ color: STATE_COLORS[target.state] ?? COLORS.tertiary, minWidth: 64 }}>
-                    {t(STATE_KEYS[target.state] ?? target.state)}
-                  </span>
-                  <code style={{ color: COLORS.secondary }}>{target.skillsDir}/{target.skillName}</code>
-                  {target.problem !== undefined && (
-                    <span style={{ color: COLORS.tertiary }}>{target.problem}</span>
-                  )}
-                </div>
-              ))}
-              {project.stale.map((entry) => (
-                <div key={`stale:${entry.source}/${entry.skillName}`} style={{ fontSize: 11, color: COLORS.warn, padding: '2px 0 2px 42px' }}>
-                  {t('staleEntry')} <code>{entry.source}/{entry.skillName}</code>
-                </div>
-              ))}
+                  {working ? t('loading') : t('resync')}
+                </button>
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  disabled={busy !== null || !project.exists}
+                  onClick={() => { void onUnlink(project.project) }}
+                >
+                  {t('unlinkAll')}
+                </button>
+              </span>
             </div>
+            {open && project.exists && (
+              <div style={{ padding: '6px 12px 10px' }}>
+                {project.entries.map((entry) => {
+                  const stale = project.stale.some((candidate) =>
+                    candidate.source === entry.source && candidate.skillName === entry.skillName)
+                  const states = entryStates(project, entry)
+                  return (
+                    <div
+                      key={`${entry.source}/${entry.skillName}`}
+                      style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0' }}
+                    >
+                      <Switch
+                        checked={entry.enabled}
+                        label={entry.enabled ? t('disabled') : t('enabled')}
+                        disabled={busy !== null}
+                        onChange={() => { void onToggleEntry(project.project, entry, !entry.enabled) }}
+                      />
+                      <code style={{ color: COLORS.secondary }}>{entry.source}/{entry.skillName}</code>
+                      {stale
+                        ? <span style={{ color: COLORS.warn }}>{t('staleEntry')}</span>
+                        : entry.enabled === false
+                          ? <Badge text={t('disabled')} tone="warn" />
+                          : states.map(({ state, agents: agentKeys }) => (
+                            <span key={state} style={{ color: STATE_COLORS[state] ?? COLORS.tertiary }}>
+                              {t(STATE_KEYS[state] ?? state)} {agentKeys.map(nameOf).join(' · ')}
+                            </span>
+                          ))}
+                      <span style={{ flex: 1 }} />
+                      <button
+                        type="button"
+                        style={{ ...buttonStyle, padding: '0 6px', fontSize: 10 }}
+                        disabled={busy !== null}
+                        onClick={() => { void onUnlinkEntry(project.project, entry) }}
+                      >
+                        {t('unlinkOne')}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )
       })}
     </section>
   )
+}
+
+/** Aggregate one entry's link positions into state → agent names. */
+function entryStates(project: ProjectLinkView, entry: LinkEntryView): { state: string; agents: string[] }[] {
+  const byState = new Map<string, Set<string>>()
+  for (const target of project.targets) {
+    if (target.skillName !== entry.skillName) continue
+    if (target.source !== undefined && target.source !== entry.source) continue
+    const set = byState.get(target.state) ?? new Set<string>()
+    for (const agent of target.agents) set.add(agent)
+    byState.set(target.state, set)
+  }
+  return [...byState.entries()].map(([state, agents]) => ({ state, agents: [...agents] }))
 }
 
 interface LinkDialogProps extends TranslateProps {

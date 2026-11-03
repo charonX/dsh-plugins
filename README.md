@@ -83,7 +83,8 @@ Select **Skills** in the left sidebar (below **Plugins** and **Automation tasks*
   - **Resync** rebuilds recorded links, repairs hand-repointed library links, and drops broken links and stale records.
   - **Per-project switch** — each recorded skill has its own switch in the project panel. Turning it off removes only that project's links and keeps the record, so the same skill can be on in one project and off in another.
   - **Two switch levels**: the library switch is the master (a globally disabled skill is unavailable everywhere); the per-project switch controls distribution into that project. Global disable detaches links but keeps project records, so re-enabling restores them automatically — except entries the user switched off in that project.
-- **Search** filters by source, skill name, and description.
+- **Search** filters by source, skill name, and description; a non-empty search expands matching sources.
+- **Collapsible lists** — every source card and every linked project starts collapsed and expands on click; the toolbar has **Expand all / Collapse all** for sources, and the linked-projects header has the same pair. A project's rows show the state plus the agent names (`linked dsh · claude-code`), not individual paths.
 - Invalid or duplicated `SKILL.md` files stay visible with the reason, so a broken source is fixable instead of silently missing.
 
 ## Configuration
