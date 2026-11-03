@@ -33,11 +33,23 @@
      --title "vX.Y.Z" --notes-file CHANGELOG.md
    ```
 
-5. 发布 npm（需要 `npm login`，且拥有 `@charonx` scope）：
+5. 发布 npm。两种方式：
+
+   **交互式（当前可用）**：`npm login` 后执行，终端会要求 6 位 OTP：
 
    ```sh
    npm publish --access public
+   # 或非交互：npm publish --access public --otp=123456
    ```
+
+   **Trusted Publishing（推荐，长期）**：在 npm 包设置里添加 Trusted Publisher：
+   - Publisher: GitHub Actions
+   - Organization/user: `charonX`
+   - Repository: `dsh-skills-manager`
+   - Workflow filename: `release.yml`
+   - Environment: 留空
+
+   之后推送 `v*` tag 即由 `.github/workflows/release.yml` 以 OIDC 发布（`--provenance`），不再需要长期 token。注意：npm 已宣布 **约 2027 年 1 月起 2FA-bypass GAT 不能直接发布**，自动化发布应迁移到 OIDC 或 staged publishing。
 
 6. 发布后验证两条路径：
 
