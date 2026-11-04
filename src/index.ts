@@ -22,7 +22,7 @@ export { IntentRouter } from './core/router.js'
 export * from './shared/types.js'
 
 export const name = 'autoloop'
-export const inject = ['workspaceRegistry?', 'sessions?', 'sessionTitle?']
+export const inject = []
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

@@ -23,7 +23,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export const name = 'autoloop'
-export const inject = ['slots', 'locale', 'workspaces?', 'sessions?']
+export const inject = ['slots', 'locale']
 
 const PANEL_ID = 'autoloop'
 
