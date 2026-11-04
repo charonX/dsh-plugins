@@ -236,61 +236,95 @@ window.__ModuleLoader__.load({
 		* @module dsh-skills-manager/client/SkillsPage
 		*/
 		const COLORS = {
+			bgLayer1: "var(--dsw-alias-bg-layer-1)",
+			bgLayer2: "var(--dsw-alias-bg-layer-2)",
+			bgLayer3: "var(--dsw-alias-bg-layer-3)",
+			bgMask: "var(--dsw-alias-bg-mask-2)",
+			surface: "var(--dsw-alias-bg-layer-2)",
+			surfaceAlt: "var(--dsw-alias-bg-layer-1)",
+			surfaceElevated: "var(--dsw-alias-bg-layer-3)",
 			text: "var(--dsw-alias-label-primary)",
 			secondary: "var(--dsw-alias-label-secondary)",
 			tertiary: "var(--dsw-alias-label-tertiary)",
+			borderSubtle: "var(--dsw-alias-border-l1)",
 			border: "var(--dsw-alias-border-l2)",
+			borderInput: "var(--dsw-alias-border-l3)",
 			borderStrong: "var(--dsw-alias-border-l4)",
-			surface: "var(--dsw-alias-bg-layer-2)",
-			surfaceAlt: "var(--dsw-alias-bg-layer-1)",
+			brand: "var(--dsw-alias-brand-primary)",
+			onBrand: "var(--dsw-alias-label-primary-foreground)",
 			error: "var(--dsw-alias-state-error-primary)",
 			success: "var(--dsw-alias-state-success-primary)",
 			warn: "var(--dsw-alias-state-warn-primary)",
-			brand: "var(--dsw-alias-brand-primary)",
-			onBrand: "var(--dsw-alias-label-primary-foreground)"
+			interactiveHover: "var(--dsw-alias-interactive-bg-hover)",
+			interactiveActive: "var(--dsw-alias-interactive-bg-active)",
+			codeBlock: "var(--dsw-alias-markdown-code-block)",
+			switchTrack: "var(--dsw-alias-bg-module-platform)",
+			switchThumb: "var(--dsw-alias-switch-thumb)"
 		};
 		const cardStyle = {
-			border: `1px solid ${COLORS.border}`,
-			borderRadius: "var(--dsw-radius-md)",
-			background: COLORS.surface,
+			border: `0.5px solid ${COLORS.border}`,
+			borderRadius: "var(--dsw-radius-md, 8px)",
+			background: COLORS.bgLayer2,
+			boxShadow: "var(--dsw-elevation-panel)",
+			overflow: "hidden"
+		};
+		const dialogCardStyle = {
+			border: `0.5px solid ${COLORS.borderInput}`,
+			borderRadius: "var(--dsw-radius-lg, 12px)",
+			background: COLORS.bgLayer2,
+			boxShadow: "var(--dsw-elevation-overlay, 0 16px 36px rgba(0,0,0,0.22))",
 			overflow: "hidden"
 		};
 		const buttonStyle = {
-			border: `1px solid ${COLORS.borderStrong}`,
-			borderRadius: "var(--dsw-radius-sm)",
-			background: "transparent",
+			border: `0.5px solid ${COLORS.borderStrong}`,
+			borderRadius: "var(--dsw-radius-md, 8px)",
+			background: COLORS.bgLayer2,
 			color: COLORS.text,
-			padding: "4px 10px",
+			padding: "5px 12px",
 			fontSize: 12,
-			cursor: "pointer"
+			fontWeight: 500,
+			cursor: "pointer",
+			display: "inline-flex",
+			alignItems: "center",
+			justifyContent: "center",
+			gap: 6,
+			lineHeight: "18px",
+			transition: "background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease"
 		};
 		const primaryButtonStyle = {
 			...buttonStyle,
 			background: COLORS.brand,
 			borderColor: COLORS.brand,
-			color: COLORS.onBrand
+			color: COLORS.onBrand,
+			fontWeight: 600
 		};
 		const inputStyle = {
 			width: "100%",
 			boxSizing: "border-box",
-			border: `1px solid ${COLORS.borderStrong}`,
-			borderRadius: "var(--dsw-radius-sm)",
-			background: "transparent",
+			height: 32,
+			border: `0.5px solid ${COLORS.borderStrong}`,
+			borderRadius: "var(--dsw-radius-md, 8px)",
+			background: COLORS.bgLayer1,
 			color: COLORS.text,
-			padding: "6px 8px",
+			padding: "0 10px",
 			fontSize: 13,
-			fontFamily: "inherit"
+			fontFamily: "inherit",
+			outline: "none",
+			transition: "border-color 0.15s ease, box-shadow 0.15s ease"
 		};
 		const logStyle = {
 			margin: 0,
-			padding: "8px 12px",
+			padding: "10px 14px",
 			maxHeight: 220,
 			overflow: "auto",
 			whiteSpace: "pre-wrap",
 			wordBreak: "break-word",
-			fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+			fontFamily: "var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)",
 			fontSize: 11,
-			color: COLORS.secondary
+			lineHeight: "18px",
+			background: COLORS.codeBlock,
+			color: COLORS.secondary,
+			borderRadius: "var(--dsw-radius-sm, 6px)"
 		};
 		const STATE_COLORS = {
 			linked: COLORS.success,
@@ -485,18 +519,79 @@ window.__ModuleLoader__.load({
 			const filtered = useFiltered(snapshot, query);
 			const counts = useCounts(snapshot);
 			const existingSlugs = (0, react.useMemo)(() => (snapshot?.sources ?? []).map((source) => source.slug), [snapshot]);
-			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 				style: {
 					display: "flex",
 					flexDirection: "column",
 					gap: 16,
 					color: COLORS.text,
+					background: COLORS.bgLayer1,
 					height: "100%",
 					overflowY: "auto",
 					boxSizing: "border-box",
-					padding: "24px 28px 48px"
+					padding: "24px 28px 48px",
+					fontFamily: "var(--dsw-font-family, inherit)",
+					["--dsh-scrollbar-thumb"]: "var(--dsw-alias-scrollbar-bg-l2)",
+					["--dsh-scrollbar-thumb-hover"]: "var(--dsw-alias-scrollbar-hover-l2)"
 				},
-				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+				children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("style", { children: `
+        .dsh-sm-btn {
+          transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .dsh-sm-btn:hover:not(:disabled) {
+          background: var(--dsw-alias-interactive-bg-hover) !important;
+          border-color: var(--dsw-alias-border-l4) !important;
+        }
+        .dsh-sm-btn:active:not(:disabled) {
+          background: var(--dsw-alias-interactive-bg-active) !important;
+        }
+        .dsh-sm-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed !important;
+        }
+        .dsh-sm-btn-primary:hover:not(:disabled) {
+          opacity: 0.92;
+          filter: brightness(1.05);
+        }
+        .dsh-sm-btn-primary:active:not(:disabled) {
+          opacity: 0.85;
+        }
+        .dsh-sm-btn-danger {
+          background: var(--dsw-alias-state-error-primary) !important;
+          border-color: var(--dsw-alias-state-error-primary) !important;
+          color: var(--dsw-alias-label-primary-foreground) !important;
+        }
+        .dsh-sm-btn-danger:hover:not(:disabled) {
+          opacity: 0.92;
+          filter: brightness(1.05);
+        }
+        .dsh-sm-input:focus {
+          border-color: var(--dsw-alias-brand-primary) !important;
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent);
+        }
+        .dsh-sm-input::placeholder {
+          color: var(--dsw-alias-label-tertiary);
+        }
+        .dsh-sm-row-header {
+          transition: background 0.12s ease;
+        }
+        .dsh-sm-row-header:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+        }
+        .dsh-sm-icon-btn {
+          transition: background 0.12s ease, color 0.12s ease;
+        }
+        .dsh-sm-icon-btn:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+          color: var(--dsw-alias-label-primary) !important;
+        }
+        .dsh-sm-opt-hover {
+          transition: background 0.12s ease;
+        }
+        .dsh-sm-opt-hover:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+        }
+      ` }), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
 						width: "100%",
 						maxWidth: 1080,
@@ -556,6 +651,7 @@ window.__ModuleLoader__.load({
 									},
 									children: [
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+											className: "dsh-sm-input",
 											style: {
 												...inputStyle,
 												width: 240
@@ -569,6 +665,7 @@ window.__ModuleLoader__.load({
 										}),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
+											className: "dsh-sm-btn",
 											style: buttonStyle,
 											disabled: busy !== null,
 											onClick: () => {
@@ -578,6 +675,7 @@ window.__ModuleLoader__.load({
 										}),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
+											className: "dsh-sm-btn",
 											style: buttonStyle,
 											disabled: busy !== null || (snapshot?.sources.length ?? 0) === 0,
 											onClick: () => {
@@ -587,6 +685,7 @@ window.__ModuleLoader__.load({
 										}),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
+											className: "dsh-sm-btn",
 											style: buttonStyle,
 											disabled: busy !== null || expandedSources.length === 0,
 											onClick: () => {
@@ -596,6 +695,7 @@ window.__ModuleLoader__.load({
 										}),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
+											className: "dsh-sm-btn",
 											style: buttonStyle,
 											disabled: busy !== null,
 											onClick: () => {
@@ -605,6 +705,7 @@ window.__ModuleLoader__.load({
 										}),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
 											type: "button",
+											className: "dsh-sm-btn dsh-sm-btn-primary",
 											style: primaryButtonStyle,
 											disabled: busy !== null,
 											onClick: () => {
@@ -616,25 +717,35 @@ window.__ModuleLoader__.load({
 								})
 							]
 						}),
-						notice !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						notice !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
 								...cardStyle,
-								padding: "8px 12px",
+								padding: "10px 14px",
+								background: "color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, var(--dsw-alias-bg-layer-2))",
+								borderColor: "color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent)",
 								color: COLORS.success,
-								fontSize: 13
+								fontSize: 13,
+								display: "flex",
+								alignItems: "center",
+								gap: 8
 							},
 							role: "status",
-							children: notice
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "✓" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: notice })]
 						}),
-						error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
+						error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
 								...cardStyle,
-								padding: "8px 12px",
+								padding: "10px 14px",
+								background: "color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, var(--dsw-alias-bg-layer-2))",
+								borderColor: "color-mix(in srgb, var(--dsw-alias-state-error-primary) 35%, transparent)",
 								color: COLORS.error,
-								fontSize: 13
+								fontSize: 13,
+								display: "flex",
+								alignItems: "center",
+								gap: 8
 							},
 							role: "alert",
-							children: t("failed", { message: `${error.message} (${error.code})` })
+							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: "⚠" }), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("failed", { message: `${error.message} (${error.code})` }) })]
 						}),
 						log !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: cardStyle,
@@ -643,7 +754,7 @@ window.__ModuleLoader__.load({
 									padding: "8px 12px",
 									fontSize: 12,
 									color: COLORS.secondary,
-									borderBottom: `1px solid ${COLORS.border}`
+									borderBottom: `1px solid ${COLORS.borderSubtle}`
 								},
 								children: t("installLog")
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("pre", {
@@ -793,7 +904,7 @@ window.__ModuleLoader__.load({
 							}
 						})
 					]
-				})
+				})]
 			});
 		}
 		function useFiltered(snapshot, query) {
@@ -839,14 +950,15 @@ window.__ModuleLoader__.load({
 				children: [
 					/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						onClick: onToggle,
+						className: "dsh-sm-row-header",
 						style: {
 							display: "flex",
 							alignItems: "center",
 							gap: 10,
 							flexWrap: "wrap",
-							padding: "10px 12px",
+							padding: "10px 14px",
 							cursor: "pointer",
-							borderBottom: skills.length === 0 || !expanded ? void 0 : `1px solid ${COLORS.border}`
+							borderBottom: skills.length === 0 || !expanded ? void 0 : `1px solid ${COLORS.borderSubtle}`
 						},
 						children: [
 							/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
@@ -858,15 +970,16 @@ window.__ModuleLoader__.load({
 									event.stopPropagation();
 									onToggle();
 								},
+								className: "dsh-sm-icon-btn",
 								style: {
 									display: "inline-flex",
 									alignItems: "center",
 									justifyContent: "center",
-									width: 20,
-									height: 20,
+									width: 22,
+									height: 22,
 									padding: 0,
 									border: "none",
-									borderRadius: "var(--dsw-radius-xs)",
+									borderRadius: "var(--dsw-radius-xs, 4px)",
 									background: "transparent",
 									color: COLORS.tertiary,
 									cursor: "pointer",
@@ -937,6 +1050,7 @@ window.__ModuleLoader__.load({
 									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null,
 										onClick: () => {
@@ -946,6 +1060,7 @@ window.__ModuleLoader__.load({
 									}),
 									source.sourceType === "git" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null,
 										onClick: () => {
@@ -955,6 +1070,7 @@ window.__ModuleLoader__.load({
 									}),
 									source.sourceType === "git" && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null,
 										onClick: () => {
@@ -964,6 +1080,7 @@ window.__ModuleLoader__.load({
 									}),
 									/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null,
 										onClick: () => {
@@ -977,7 +1094,7 @@ window.__ModuleLoader__.load({
 					}),
 					expanded && source.sourceUrl !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: {
-							padding: "6px 12px",
+							padding: "6px 14px",
 							fontSize: 11,
 							color: COLORS.tertiary,
 							wordBreak: "break-all"
@@ -986,7 +1103,7 @@ window.__ModuleLoader__.load({
 					}),
 					source.problem !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: {
-							padding: "6px 12px",
+							padding: "6px 14px",
 							fontSize: 12,
 							color: COLORS.warn
 						},
@@ -994,7 +1111,7 @@ window.__ModuleLoader__.load({
 					}),
 					expanded && source.note !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 						style: {
-							padding: "0 12px 6px",
+							padding: "0 14px 6px",
 							fontSize: 12,
 							color: COLORS.secondary
 						},
@@ -1006,7 +1123,7 @@ window.__ModuleLoader__.load({
 					}),
 					expanded && (skills.length === 0 ? /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 						style: {
-							padding: "10px 12px",
+							padding: "10px 14px",
 							fontSize: 12,
 							color: COLORS.tertiary
 						},
@@ -1033,8 +1150,8 @@ window.__ModuleLoader__.load({
 					display: "flex",
 					alignItems: "flex-start",
 					gap: 10,
-					padding: "10px 12px",
-					borderTop: `1px solid ${COLORS.border}`,
+					padding: "10px 14px",
+					borderTop: `1px solid ${COLORS.borderSubtle}`,
 					opacity: disabledBySource ? .55 : 1
 				},
 				children: [
@@ -1107,6 +1224,7 @@ window.__ModuleLoader__.load({
 					}),
 					/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 						type: "button",
+						className: "dsh-sm-btn",
 						style: buttonStyle,
 						disabled: busy || disabledBySource,
 						onClick: onLink,
@@ -1149,12 +1267,14 @@ window.__ModuleLoader__.load({
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1 } }),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "dsh-sm-btn",
 							style: buttonStyle,
 							onClick: onExpandAll,
 							children: t("expandAll")
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "dsh-sm-btn",
 							style: buttonStyle,
 							disabled: expanded.length === 0,
 							onClick: onCollapseAll,
@@ -1174,14 +1294,15 @@ window.__ModuleLoader__.load({
 							onClick: () => {
 								onToggleProject(project.project);
 							},
+							className: "dsh-sm-row-header",
 							style: {
 								display: "flex",
 								alignItems: "center",
 								gap: 10,
 								flexWrap: "wrap",
-								padding: "10px 12px",
+								padding: "10px 14px",
 								cursor: "pointer",
-								borderBottom: open && project.exists ? `1px solid ${COLORS.border}` : void 0
+								borderBottom: open && project.exists ? `1px solid ${COLORS.borderSubtle}` : void 0
 							},
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
@@ -1192,15 +1313,16 @@ window.__ModuleLoader__.load({
 										event.stopPropagation();
 										onToggleProject(project.project);
 									},
+									className: "dsh-sm-icon-btn",
 									style: {
 										display: "inline-flex",
 										alignItems: "center",
 										justifyContent: "center",
-										width: 20,
-										height: 20,
+										width: 22,
+										height: 22,
 										padding: 0,
 										border: "none",
-										borderRadius: "var(--dsw-radius-xs)",
+										borderRadius: "var(--dsw-radius-xs, 4px)",
 										background: "transparent",
 										color: COLORS.tertiary,
 										cursor: "pointer",
@@ -1273,6 +1395,7 @@ window.__ModuleLoader__.load({
 									},
 									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null || !project.exists,
 										onClick: () => {
@@ -1281,6 +1404,7 @@ window.__ModuleLoader__.load({
 										children: working ? t("loading") : t("resync")
 									}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 										type: "button",
+										className: "dsh-sm-btn",
 										style: buttonStyle,
 										disabled: busy !== null || !project.exists,
 										onClick: () => {
@@ -1291,7 +1415,7 @@ window.__ModuleLoader__.load({
 								})
 							]
 						}), open && project.exists && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
-							style: { padding: "6px 12px 10px" },
+							style: { padding: "6px 14px 10px" },
 							children: project.entries.map((entry) => {
 								const stale = project.stale.some((candidate) => candidate.source === entry.source && candidate.skillName === entry.skillName);
 								const states = entryStates(project, entry);
@@ -1301,7 +1425,7 @@ window.__ModuleLoader__.load({
 										gap: 8,
 										alignItems: "center",
 										fontSize: 12,
-										padding: "3px 0"
+										padding: "4px 0"
 									},
 									children: [
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)(Switch, {
@@ -1337,10 +1461,11 @@ window.__ModuleLoader__.load({
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1 } }),
 										/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 											type: "button",
+											className: "dsh-sm-btn",
 											style: {
 												...buttonStyle,
-												padding: "0 6px",
-												fontSize: 10
+												padding: "2px 8px",
+												fontSize: 11
 											},
 											disabled: busy !== null,
 											onClick: () => {
@@ -1450,18 +1575,17 @@ window.__ModuleLoader__.load({
 				onClose: busy ? void 0 : onClose,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
-						...cardStyle,
+						...dialogCardStyle,
 						width: "min(720px, 94vw)",
 						maxHeight: "86vh",
 						display: "flex",
-						flexDirection: "column",
-						background: COLORS.surfaceAlt
+						flexDirection: "column"
 					},
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: "12px 14px",
-								borderBottom: `1px solid ${COLORS.border}`
+								padding: "14px 16px",
+								borderBottom: `1px solid ${COLORS.borderSubtle}`
 							},
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 								style: { fontWeight: 600 },
@@ -1477,7 +1601,7 @@ window.__ModuleLoader__.load({
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: "10px 14px",
+								padding: "10px 16px",
 								display: "flex",
 								gap: 8,
 								alignItems: "center",
@@ -1485,6 +1609,7 @@ window.__ModuleLoader__.load({
 							},
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+									className: "dsh-sm-input",
 									style: {
 										...inputStyle,
 										width: 220
@@ -1510,12 +1635,14 @@ window.__ModuleLoader__.load({
 										alignItems: "center",
 										gap: 6,
 										fontSize: 12,
-										color: COLORS.secondary
+										color: COLORS.secondary,
+										cursor: "pointer"
 									},
 									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 										type: "checkbox",
 										checked: overwrite,
 										disabled: busy,
+										style: { accentColor: COLORS.brand },
 										onChange: (event) => {
 											setOverwrite(event.target.checked);
 											if (!event.target.checked) setSelected((current) => current.filter((path) => {
@@ -1529,7 +1656,7 @@ window.__ModuleLoader__.load({
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: "0 14px 6px",
+								padding: "0 16px 8px",
 								fontSize: 11,
 								color: COLORS.tertiary,
 								display: "flex",
@@ -1551,7 +1678,7 @@ window.__ModuleLoader__.load({
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
 								overflow: "auto",
-								padding: "0 14px 10px",
+								padding: "0 16px 12px",
 								display: "flex",
 								flexDirection: "column",
 								gap: 2
@@ -1586,8 +1713,8 @@ window.__ModuleLoader__.load({
 											display: "flex",
 											alignItems: "baseline",
 											gap: 8,
-											padding: "4px 2px",
-											borderBottom: `1px solid ${COLORS.border}`
+											padding: "6px 4px",
+											borderBottom: `1px solid ${COLORS.borderSubtle}`
 										},
 										children: [
 											/* @__PURE__ */ (0, react_jsx_runtime.jsx)("strong", {
@@ -1630,12 +1757,14 @@ window.__ModuleLoader__.load({
 										return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
 											htmlFor: checkboxId,
 											title: skill.path,
+											className: "dsh-sm-opt-hover",
 											style: {
 												display: "flex",
 												gap: 8,
 												alignItems: "flex-start",
-												padding: "6px 4px 6px 12px",
-												borderBottom: `1px solid ${COLORS.border}`,
+												padding: "6px 6px 6px 12px",
+												borderBottom: `1px solid ${COLORS.borderSubtle}`,
+												borderRadius: "var(--dsw-radius-xs, 4px)",
 												opacity: selectable(skill) ? 1 : .6,
 												cursor: selectable(skill) ? "pointer" : "default"
 											},
@@ -1647,7 +1776,10 @@ window.__ModuleLoader__.load({
 												onChange: () => {
 													toggle(skill.path);
 												},
-												style: { marginTop: 3 }
+												style: {
+													marginTop: 3,
+													accentColor: COLORS.brand
+												}
 											}), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
 												style: {
 													display: "flex",
@@ -1712,9 +1844,9 @@ window.__ModuleLoader__.load({
 						}),
 						counts !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: "8px 14px",
+								padding: "8px 16px",
 								fontSize: 12,
-								borderTop: `1px solid ${COLORS.border}`,
+								borderTop: `1px solid ${COLORS.borderSubtle}`,
 								display: "flex",
 								gap: 12,
 								flexWrap: "wrap"
@@ -1754,17 +1886,19 @@ window.__ModuleLoader__.load({
 								display: "flex",
 								justifyContent: "flex-end",
 								gap: 8,
-								padding: "10px 14px",
-								borderTop: `1px solid ${COLORS.border}`
+								padding: "12px 16px",
+								borderTop: `1px solid ${COLORS.borderSubtle}`
 							},
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn",
 								style: buttonStyle,
 								disabled: busy,
 								onClick: onClose,
 								children: counts === null ? t("cancel") : t("scanDone")
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn dsh-sm-btn-primary",
 								style: primaryButtonStyle,
 								disabled: busy || selected.length === 0,
 								onClick: () => {
@@ -1795,10 +1929,26 @@ window.__ModuleLoader__.load({
 			const [projects, setProjects] = (0, react.useState)([]);
 			const [customPath, setCustomPath] = (0, react.useState)("");
 			const [pickerOpen, setPickerOpen] = (0, react.useState)(false);
+			const pickerRef = (0, react.useRef)(null);
 			const [selected, setSelected] = (0, react.useState)(["dsh"]);
 			const [agentQuery, setAgentQuery] = (0, react.useState)("");
 			const [busy, setBusy] = (0, react.useState)(false);
 			const [error, setError] = (0, react.useState)(null);
+			(0, react.useEffect)(() => {
+				if (!pickerOpen) return;
+				const handleOutsideClick = (e) => {
+					if (pickerRef.current && !pickerRef.current.contains(e.target)) setPickerOpen(false);
+				};
+				const handleKeyDown = (e) => {
+					if (e.key === "Escape") setPickerOpen(false);
+				};
+				document.addEventListener("mousedown", handleOutsideClick);
+				document.addEventListener("keydown", handleKeyDown);
+				return () => {
+					document.removeEventListener("mousedown", handleOutsideClick);
+					document.removeEventListener("keydown", handleKeyDown);
+				};
+			}, [pickerOpen]);
 			const visibleAgents = (0, react.useMemo)(() => {
 				const needle = agentQuery.trim().toLowerCase();
 				if (needle === "") return agents;
@@ -1864,46 +2014,53 @@ window.__ModuleLoader__.load({
 				onClose: busy ? void 0 : onClose,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
-						...cardStyle,
+						...dialogCardStyle,
 						overflow: "visible",
-						width: "min(620px, 94vw)",
-						background: COLORS.surfaceAlt
+						width: "min(620px, 94vw)"
 					},
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							style: {
-								padding: "12px 14px",
-								borderBottom: `1px solid ${COLORS.border}`,
+								padding: "14px 16px",
+								borderBottom: `0.5px solid ${COLORS.borderSubtle}`,
 								fontWeight: 600
 							},
 							children: t("linkTitle", { slug: skillName === void 0 ? source.slug : `${source.slug}/${skillName}` })
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: 14,
+								padding: 16,
 								display: "flex",
 								flexDirection: "column",
-								gap: 10
+								gap: 12
 							},
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 									style: {
 										display: "flex",
 										flexDirection: "column",
-										gap: 4,
+										gap: 6,
 										fontSize: 12,
 										color: COLORS.secondary
 									},
 									children: [t("linkProject"), /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										ref: pickerRef,
 										style: { position: "relative" },
-										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("button", {
-											type: "button",
+										children: [/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											role: "combobox",
+											tabIndex: busy ? -1 : 0,
 											"aria-expanded": pickerOpen,
 											"aria-label": t("selectProjects"),
-											disabled: busy,
 											onClick: () => {
-												setPickerOpen((open) => !open);
+												if (!busy) setPickerOpen((open) => !open);
 											},
+											onKeyDown: (e) => {
+												if (e.key === "Enter" || e.key === " ") {
+													e.preventDefault();
+													if (!busy) setPickerOpen((open) => !open);
+												}
+											},
+											className: "dsh-sm-input",
 											style: {
 												...inputStyle,
 												display: "flex",
@@ -1911,12 +2068,20 @@ window.__ModuleLoader__.load({
 												gap: 6,
 												flexWrap: "wrap",
 												minHeight: 34,
+												height: "auto",
+												padding: "4px 8px",
 												textAlign: "left",
-												cursor: "pointer"
+												cursor: busy ? "not-allowed" : "pointer",
+												borderColor: pickerOpen ? COLORS.brand : COLORS.borderStrong,
+												boxShadow: pickerOpen ? "0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent)" : "none"
 											},
 											children: [
 												projects.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
-													style: { color: COLORS.tertiary },
+													style: {
+														color: COLORS.tertiary,
+														fontSize: 13,
+														padding: "2px 4px"
+													},
 													children: t("selectProjects")
 												}),
 												projects.map((path) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
@@ -1924,10 +2089,13 @@ window.__ModuleLoader__.load({
 														display: "inline-flex",
 														alignItems: "center",
 														gap: 4,
-														padding: "2px 6px",
-														borderRadius: 999,
-														border: `1px solid ${COLORS.border}`,
-														fontSize: 12
+														padding: "2px 8px",
+														borderRadius: "var(--dsw-radius-sm, 6px)",
+														border: `0.5px solid ${COLORS.borderInput}`,
+														background: COLORS.bgLayer2,
+														fontSize: 12,
+														fontWeight: 500,
+														color: COLORS.text
 													},
 													children: [projectLabel(path), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 														role: "button",
@@ -1945,85 +2113,129 @@ window.__ModuleLoader__.load({
 														},
 														style: {
 															cursor: "pointer",
-															color: COLORS.tertiary
+															color: COLORS.tertiary,
+															fontSize: 13,
+															lineHeight: 1
 														},
 														children: "×"
 													})]
 												}, path)),
-												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 													style: {
 														marginLeft: "auto",
-														color: COLORS.tertiary
+														flexShrink: 0,
+														display: "inline-flex",
+														alignItems: "center",
+														justifyContent: "center",
+														color: "var(--dsw-alias-label-caption, #81858c)",
+														transform: pickerOpen ? "rotate(180deg)" : "none",
+														transition: "transform 140ms ease"
 													},
-													children: pickerOpen ? "▴" : "▾"
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("svg", {
+														width: "12",
+														height: "12",
+														viewBox: "0 0 12 12",
+														fill: "none",
+														children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
+															d: "M3 4.5L6 7.5L9 4.5",
+															stroke: "currentColor",
+															strokeWidth: "1.5",
+															strokeLinecap: "round",
+															strokeLinejoin: "round"
+														})
+													})
 												})
 											]
-										}), pickerOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(react_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+										}), pickerOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+											role: "listbox",
 											style: {
 												position: "absolute",
 												top: "calc(100% + 4px)",
 												left: 0,
 												right: 0,
-												zIndex: 5,
-												border: `1px solid ${COLORS.borderStrong}`,
-												borderRadius: "var(--dsw-radius-sm)",
-												background: "var(--dsw-alias-bg-layer-1)",
-												boxShadow: "0 8px 24px var(--dsw-alias-bg-mask-2)",
+												zIndex: 1100,
+												boxSizing: "border-box",
+												border: `0.5px solid ${COLORS.border}`,
+												borderRadius: "var(--dsw-radius-lg, 10px)",
+												background: COLORS.bgLayer2,
+												boxShadow: "var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,0.18))",
 												maxHeight: 260,
-												overflow: "auto",
-												padding: 6
+												overflowY: "auto",
+												padding: 4
+											},
+											onClick: (e) => {
+												e.stopPropagation();
 											},
 											children: [
 												workspaces.length === 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 													style: {
-														padding: "4px 6px",
+														padding: "8px 10px",
 														fontSize: 12,
 														color: COLORS.tertiary
 													},
 													children: t("customProjectPath")
 												}),
-												workspaces.map((workspace) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
-													title: workspace.path,
-													style: {
-														display: "flex",
-														alignItems: "center",
-														gap: 8,
-														padding: "4px 6px",
-														fontSize: 12,
-														cursor: "pointer"
-													},
-													children: [
-														/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
-															type: "checkbox",
-															checked: projects.includes(workspace.path),
-															disabled: busy,
-															onChange: () => {
-																toggleProject(workspace.path);
-															}
-														}),
-														/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: workspace.title }),
-														/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", {
-															style: {
-																fontSize: 10,
-																color: COLORS.tertiary,
-																marginLeft: "auto"
-															},
-															children: workspace.path
-														})
-													]
-												}, workspace.path)),
+												workspaces.map((workspace) => {
+													const isChecked = projects.includes(workspace.path);
+													return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+														title: workspace.path,
+														className: "dsh-sm-opt-hover",
+														style: {
+															display: "flex",
+															alignItems: "center",
+															gap: 8,
+															padding: "6px 10px",
+															minHeight: 32,
+															boxSizing: "border-box",
+															fontSize: 13,
+															cursor: "pointer",
+															borderRadius: "var(--dsw-radius-md, 6px)",
+															background: isChecked ? "rgba(37, 99, 235, 0.05)" : "transparent"
+														},
+														children: [
+															/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+																type: "checkbox",
+																checked: isChecked,
+																disabled: busy,
+																onChange: () => {
+																	toggleProject(workspace.path);
+																},
+																style: { accentColor: COLORS.brand }
+															}),
+															/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
+																style: {
+																	fontWeight: isChecked ? 600 : 400,
+																	color: isChecked ? COLORS.brand : COLORS.text
+																},
+																children: workspace.title
+															}),
+															/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", {
+																style: {
+																	fontSize: 11,
+																	color: COLORS.tertiary,
+																	marginLeft: "auto",
+																	fontFamily: "var(--ds-font-family-code, monospace)"
+																},
+																children: workspace.path
+															})
+														]
+													}, workspace.path);
+												}),
 												/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 													style: {
 														display: "flex",
 														gap: 6,
 														padding: 6,
 														marginTop: 4,
-														borderTop: `1px solid ${COLORS.border}`
+														borderTop: `0.5px solid ${COLORS.borderSubtle}`
 													},
 													children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+														className: "dsh-sm-input",
 														style: {
 															...inputStyle,
-															padding: "2px 6px"
+															padding: "4px 8px",
+															height: 28,
+															fontSize: 12
 														},
 														value: customPath,
 														placeholder: t("customProjectPath"),
@@ -2040,14 +2252,19 @@ window.__ModuleLoader__.load({
 														}
 													}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 														type: "button",
-														style: buttonStyle,
+														className: "dsh-sm-btn",
+														style: {
+															...buttonStyle,
+															padding: "3px 10px",
+															height: 28
+														},
 														disabled: busy || customPath.trim() === "",
 														onClick: addCustomProject,
 														children: t("addProject")
 													})]
 												})
 											]
-										}) })]
+										})]
 									})]
 								}),
 								/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -2073,10 +2290,11 @@ window.__ModuleLoader__.load({
 												}),
 												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: { flex: 1 } }),
 												/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+													className: "dsh-sm-input",
 													style: {
 														...inputStyle,
 														width: 160,
-														padding: "2px 6px"
+														padding: "3px 8px"
 													},
 													value: agentQuery,
 													placeholder: t("agentsSearch"),
@@ -2091,19 +2309,22 @@ window.__ModuleLoader__.load({
 											style: {
 												maxHeight: 200,
 												overflow: "auto",
-												border: `1px solid ${COLORS.border}`,
-												borderRadius: "var(--dsw-radius-sm)",
-												padding: "4px 8px"
+												border: `1px solid ${COLORS.borderInput}`,
+												borderRadius: "var(--dsw-radius-sm, 6px)",
+												background: COLORS.bgLayer1,
+												padding: "4px 6px"
 											},
 											children: visibleAgents.map((agent) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
+												className: "dsh-sm-opt-hover",
 												style: {
 													display: "flex",
 													alignItems: "center",
 													gap: 8,
-													padding: "3px 0",
+													padding: "4px 6px",
 													fontSize: 12,
 													color: COLORS.text,
-													cursor: "pointer"
+													cursor: "pointer",
+													borderRadius: "var(--dsw-radius-xs, 4px)"
 												},
 												children: [
 													/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
@@ -2112,7 +2333,8 @@ window.__ModuleLoader__.load({
 														disabled: busy,
 														onChange: () => {
 															toggleAgent(agent.name);
-														}
+														},
+														style: { accentColor: COLORS.brand }
 													}),
 													/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: agent.displayName }),
 													/* @__PURE__ */ (0, react_jsx_runtime.jsx)("code", {
@@ -2148,17 +2370,19 @@ window.__ModuleLoader__.load({
 								display: "flex",
 								justifyContent: "flex-end",
 								gap: 8,
-								padding: "10px 14px",
-								borderTop: `1px solid ${COLORS.border}`
+								padding: "12px 16px",
+								borderTop: `1px solid ${COLORS.borderSubtle}`
 							},
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn",
 								style: buttonStyle,
 								disabled: busy,
 								onClick: onClose,
 								children: t("cancel")
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn dsh-sm-btn-primary",
 								style: primaryButtonStyle,
 								disabled: busy,
 								onClick: () => {
@@ -2220,38 +2444,66 @@ window.__ModuleLoader__.load({
 				onClick: onChange,
 				style: {
 					position: "relative",
-					width: 34,
+					width: 36,
 					height: 20,
 					flex: "0 0 auto",
 					padding: 0,
 					borderRadius: 999,
 					border: "none",
-					background: checked ? COLORS.brand : COLORS.borderStrong,
-					cursor: disabled ? "default" : "pointer",
-					opacity: disabled ? .5 : 1
+					background: checked ? COLORS.brand : COLORS.switchTrack,
+					cursor: disabled ? "not-allowed" : "pointer",
+					opacity: disabled ? .45 : 1,
+					transition: "background 0.2s ease, opacity 0.15s ease",
+					outline: "none"
 				},
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { style: {
 					position: "absolute",
 					top: 2,
-					left: checked ? 16 : 2,
+					left: checked ? 18 : 2,
 					width: 16,
 					height: 16,
 					borderRadius: "50%",
-					background: COLORS.onBrand,
-					transition: "left 120ms ease"
+					background: checked ? COLORS.onBrand : COLORS.switchThumb,
+					boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)",
+					transition: "left 0.2s ease, background 0.2s ease"
 				} })
 			});
 		}
 		function Badge({ text, tone = "neutral" }) {
+			const toneStyles = {
+				neutral: {
+					background: "var(--dsw-alias-interactive-bg-hover)",
+					border: `1px solid ${COLORS.borderSubtle}`,
+					color: COLORS.secondary
+				},
+				warn: {
+					background: "color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent)",
+					border: "1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent)",
+					color: COLORS.warn
+				},
+				success: {
+					background: "color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent)",
+					border: "1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent)",
+					color: COLORS.success
+				},
+				brand: {
+					background: "color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent)",
+					border: "1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent)",
+					color: COLORS.brand
+				}
+			};
+			const current = toneStyles[tone] ?? toneStyles.neutral;
 			return /* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", {
 				style: {
-					fontSize: 10,
-					lineHeight: "16px",
-					padding: "0 6px",
+					fontSize: 11,
+					lineHeight: "18px",
+					padding: "0 7px",
 					borderRadius: 999,
-					border: `1px solid ${tone === "warn" ? COLORS.warn : COLORS.border}`,
-					color: tone === "warn" ? COLORS.warn : COLORS.tertiary,
-					letterSpacing: .4
+					letterSpacing: .2,
+					fontWeight: 500,
+					display: "inline-flex",
+					alignItems: "center",
+					...current
 				},
 				children: text
 			});
@@ -2294,31 +2546,30 @@ window.__ModuleLoader__.load({
 				onClose: busy ? void 0 : onClose,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
-						...cardStyle,
-						width: "min(560px, 92vw)",
-						background: COLORS.surfaceAlt
+						...dialogCardStyle,
+						width: "min(560px, 92vw)"
 					},
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 							style: {
-								padding: "12px 14px",
-								borderBottom: `1px solid ${COLORS.border}`,
+								padding: "14px 16px",
+								borderBottom: `1px solid ${COLORS.borderSubtle}`,
 								fontWeight: 600
 							},
 							children: t("installTitle")
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 							style: {
-								padding: 14,
+								padding: 16,
 								display: "flex",
 								flexDirection: "column",
-								gap: 10
+								gap: 12
 							},
 							children: [
 								/* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
 									style: {
 										display: "flex",
-										gap: 14
+										gap: 16
 									},
 									children: ["git", "local"].map((value) => /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
 										style: {
@@ -2335,7 +2586,8 @@ window.__ModuleLoader__.load({
 											disabled: busy,
 											onChange: () => {
 												setSourceType(value);
-											}
+											},
+											style: { accentColor: COLORS.brand }
 										}), value === "git" ? t("sourceTypeGit") : t("sourceTypeLocal")]
 									}, value))
 								}),
@@ -2343,11 +2595,12 @@ window.__ModuleLoader__.load({
 									style: {
 										display: "flex",
 										flexDirection: "column",
-										gap: 4,
+										gap: 6,
 										fontSize: 12,
 										color: COLORS.secondary
 									},
 									children: [sourceType === "git" ? t("identifierGit") : t("identifierLocal"), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
+										className: "dsh-sm-input",
 										style: inputStyle,
 										value: identifier,
 										disabled: busy,
@@ -2367,7 +2620,8 @@ window.__ModuleLoader__.load({
 										alignItems: "center",
 										gap: 6,
 										fontSize: 12,
-										color: COLORS.secondary
+										color: COLORS.secondary,
+										cursor: "pointer"
 									},
 									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {
 										type: "checkbox",
@@ -2375,7 +2629,8 @@ window.__ModuleLoader__.load({
 										disabled: busy,
 										onChange: (event) => {
 											setForce(event.target.checked);
-										}
+										},
+										style: { accentColor: COLORS.brand }
 									}), t("forceLocal")]
 								}),
 								error !== null && /* @__PURE__ */ (0, react_jsx_runtime.jsx)("div", {
@@ -2390,7 +2645,8 @@ window.__ModuleLoader__.load({
 									style: {
 										...cardStyle,
 										maxHeight: 220,
-										overflow: "auto"
+										overflow: "auto",
+										background: COLORS.codeBlock
 									},
 									children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("pre", {
 										style: logStyle,
@@ -2404,17 +2660,19 @@ window.__ModuleLoader__.load({
 								display: "flex",
 								justifyContent: "flex-end",
 								gap: 8,
-								padding: "10px 14px",
-								borderTop: `1px solid ${COLORS.border}`
+								padding: "12px 16px",
+								borderTop: `1px solid ${COLORS.borderSubtle}`
 							},
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn",
 								style: buttonStyle,
 								disabled: busy,
 								onClick: onClose,
 								children: t("cancel")
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn dsh-sm-btn-primary",
 								style: primaryButtonStyle,
 								disabled: busy || identifier.trim() === "",
 								onClick: () => {
@@ -2432,10 +2690,9 @@ window.__ModuleLoader__.load({
 				onClose: onCancel,
 				children: /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
 					style: {
-						...cardStyle,
+						...dialogCardStyle,
 						width: "min(440px, 92vw)",
-						padding: 16,
-						background: COLORS.surfaceAlt
+						padding: 18
 					},
 					children: [
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("h3", {
@@ -2447,7 +2704,7 @@ window.__ModuleLoader__.load({
 						}),
 						/* @__PURE__ */ (0, react_jsx_runtime.jsx)("p", {
 							style: {
-								margin: "0 0 14px",
+								margin: "0 0 16px",
 								fontSize: 13,
 								color: COLORS.secondary
 							},
@@ -2461,11 +2718,13 @@ window.__ModuleLoader__.load({
 							},
 							children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn",
 								style: buttonStyle,
 								onClick: onCancel,
 								children: t("cancel")
 							}), /* @__PURE__ */ (0, react_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "dsh-sm-btn dsh-sm-btn-danger",
 								style: {
 									...primaryButtonStyle,
 									background: COLORS.error,
@@ -2491,7 +2750,8 @@ window.__ModuleLoader__.load({
 					display: "flex",
 					alignItems: "center",
 					justifyContent: "center",
-					background: "var(--dsw-alias-bg-mask-2)"
+					background: COLORS.bgMask,
+					backdropFilter: "blur(3px)"
 				},
 				onClick: () => {
 					onClose?.();

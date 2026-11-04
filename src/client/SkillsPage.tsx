@@ -4,8 +4,9 @@
  * @module dsh-skills-manager/client/SkillsPage
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   AgentTargetView,
   ImportResponse,
@@ -20,6 +21,7 @@ import type {
   UpdateCheck,
   WorkspaceOptionView,
 } from '../shared/api.ts'
+import type { MessageKey } from './locales.ts'
 import {
   ApiFailure,
   checkSource,
@@ -41,8 +43,14 @@ import {
   waitForJob,
 } from './api.ts'
 
-/** Localized translate function supplied by the slot's `locale` declaration. */
-export type Translate = (key: string, params?: Record<string, unknown>) => string
+/**
+ * Localized translate function supplied by the slot's `locale` declaration.
+ *
+ * This is the host's namespace-addressed translate seat, not a looser
+ * `(key: string) => string`: a component that accepted any key would be
+ * incompatible with the framework-injected `t` the slot composition passes.
+ */
+export type Translate = TranslateNS<'skills-manager'>
 
 /** Props every section of this tab receives. */
 export interface TranslateProps {
@@ -51,67 +59,115 @@ export interface TranslateProps {
 }
 
 const COLORS = {
+  // Container & Layers
+  bgLayer1: 'var(--dsw-alias-bg-layer-1)',
+  bgLayer2: 'var(--dsw-alias-bg-layer-2)',
+  bgLayer3: 'var(--dsw-alias-bg-layer-3)',
+  bgMask: 'var(--dsw-alias-bg-mask-2)',
+
+  // Legacy surface aliases
+  surface: 'var(--dsw-alias-bg-layer-2)',
+  surfaceAlt: 'var(--dsw-alias-bg-layer-1)',
+  surfaceElevated: 'var(--dsw-alias-bg-layer-3)',
+
+  // Typography
   text: 'var(--dsw-alias-label-primary)',
   secondary: 'var(--dsw-alias-label-secondary)',
   tertiary: 'var(--dsw-alias-label-tertiary)',
+
+  // Border hierarchy (l1 -> l4)
+  borderSubtle: 'var(--dsw-alias-border-l1)',
   border: 'var(--dsw-alias-border-l2)',
+  borderInput: 'var(--dsw-alias-border-l3)',
   borderStrong: 'var(--dsw-alias-border-l4)',
-  surface: 'var(--dsw-alias-bg-layer-2)',
-  surfaceAlt: 'var(--dsw-alias-bg-layer-1)',
+
+  // Brand & States
+  brand: 'var(--dsw-alias-brand-primary)',
+  onBrand: 'var(--dsw-alias-label-primary-foreground)',
   error: 'var(--dsw-alias-state-error-primary)',
   success: 'var(--dsw-alias-state-success-primary)',
   warn: 'var(--dsw-alias-state-warn-primary)',
-  brand: 'var(--dsw-alias-brand-primary)',
-  onBrand: 'var(--dsw-alias-label-primary-foreground)',
+
+  // Interactive
+  interactiveHover: 'var(--dsw-alias-interactive-bg-hover)',
+  interactiveActive: 'var(--dsw-alias-interactive-bg-active)',
+
+  // Dedicated widgets
+  codeBlock: 'var(--dsw-alias-markdown-code-block)',
+  switchTrack: 'var(--dsw-alias-bg-module-platform)',
+  switchThumb: 'var(--dsw-alias-switch-thumb)',
 } as const
 
-const cardStyle = {
-  border: `1px solid ${COLORS.border}`,
-  borderRadius: 'var(--dsw-radius-md)',
-  background: COLORS.surface,
+const cardStyle: React.CSSProperties = {
+  border: `0.5px solid ${COLORS.border}`,
+  borderRadius: 'var(--dsw-radius-md, 8px)',
+  background: COLORS.bgLayer2,
+  boxShadow: 'var(--dsw-elevation-panel)',
   overflow: 'hidden',
-} as const
+}
 
-const buttonStyle = {
-  border: `1px solid ${COLORS.borderStrong}`,
-  borderRadius: 'var(--dsw-radius-sm)',
-  background: 'transparent',
+const dialogCardStyle: React.CSSProperties = {
+  border: `0.5px solid ${COLORS.borderInput}`,
+  borderRadius: 'var(--dsw-radius-lg, 12px)',
+  background: COLORS.bgLayer2,
+  boxShadow: 'var(--dsw-elevation-overlay, 0 16px 36px rgba(0,0,0,0.22))',
+  overflow: 'hidden',
+}
+
+const buttonStyle: React.CSSProperties = {
+  border: `0.5px solid ${COLORS.borderStrong}`,
+  borderRadius: 'var(--dsw-radius-md, 8px)',
+  background: COLORS.bgLayer2,
   color: COLORS.text,
-  padding: '4px 10px',
+  padding: '5px 12px',
   fontSize: 12,
+  fontWeight: 500,
   cursor: 'pointer',
-} as const
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  lineHeight: '18px',
+  transition: 'background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease',
+}
 
-const primaryButtonStyle = {
+const primaryButtonStyle: React.CSSProperties = {
   ...buttonStyle,
   background: COLORS.brand,
   borderColor: COLORS.brand,
   color: COLORS.onBrand,
-} as const
+  fontWeight: 600,
+}
 
-const inputStyle = {
+const inputStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
-  border: `1px solid ${COLORS.borderStrong}`,
-  borderRadius: 'var(--dsw-radius-sm)',
-  background: 'transparent',
+  height: 32,
+  border: `0.5px solid ${COLORS.borderStrong}`,
+  borderRadius: 'var(--dsw-radius-md, 8px)',
+  background: COLORS.bgLayer1,
   color: COLORS.text,
-  padding: '6px 8px',
+  padding: '0 10px',
   fontSize: 13,
   fontFamily: 'inherit',
-} as const
+  outline: 'none',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+}
 
-const logStyle = {
+const logStyle: React.CSSProperties = {
   margin: 0,
-  padding: '8px 12px',
+  padding: '10px 14px',
   maxHeight: 220,
   overflow: 'auto',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontFamily: 'var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace)',
   fontSize: 11,
+  lineHeight: '18px',
+  background: COLORS.codeBlock,
   color: COLORS.secondary,
-} as const
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+}
 
 const STATE_COLORS: Record<string, string> = {
   linked: COLORS.success,
@@ -121,7 +177,7 @@ const STATE_COLORS: Record<string, string> = {
   external: COLORS.tertiary,
 }
 
-const STATE_KEYS: Record<string, string> = {
+const STATE_KEYS: Record<string, MessageKey> = {
   linked: 'linkStateLinked',
   missing: 'linkStateMissing',
   broken: 'linkStateBroken',
@@ -303,16 +359,81 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
   const existingSlugs = useMemo(() => (snapshot?.sources ?? []).map((source) => source.slug), [snapshot])
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 16,
-      color: COLORS.text,
-      height: '100%',
-      overflowY: 'auto',
-      boxSizing: 'border-box',
-      padding: '24px 28px 48px',
-    }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        color: COLORS.text,
+        background: COLORS.bgLayer1,
+        height: '100%',
+        overflowY: 'auto',
+        boxSizing: 'border-box',
+        padding: '24px 28px 48px',
+        fontFamily: 'var(--dsw-font-family, inherit)',
+        // Native DSH scrollbar tokens
+        ['--dsh-scrollbar-thumb' as string]: 'var(--dsw-alias-scrollbar-bg-l2)',
+        ['--dsh-scrollbar-thumb-hover' as string]: 'var(--dsw-alias-scrollbar-hover-l2)',
+      }}
+    >
+      <style>{`
+        .dsh-sm-btn {
+          transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .dsh-sm-btn:hover:not(:disabled) {
+          background: var(--dsw-alias-interactive-bg-hover) !important;
+          border-color: var(--dsw-alias-border-l4) !important;
+        }
+        .dsh-sm-btn:active:not(:disabled) {
+          background: var(--dsw-alias-interactive-bg-active) !important;
+        }
+        .dsh-sm-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed !important;
+        }
+        .dsh-sm-btn-primary:hover:not(:disabled) {
+          opacity: 0.92;
+          filter: brightness(1.05);
+        }
+        .dsh-sm-btn-primary:active:not(:disabled) {
+          opacity: 0.85;
+        }
+        .dsh-sm-btn-danger {
+          background: var(--dsw-alias-state-error-primary) !important;
+          border-color: var(--dsw-alias-state-error-primary) !important;
+          color: var(--dsw-alias-label-primary-foreground) !important;
+        }
+        .dsh-sm-btn-danger:hover:not(:disabled) {
+          opacity: 0.92;
+          filter: brightness(1.05);
+        }
+        .dsh-sm-input:focus {
+          border-color: var(--dsw-alias-brand-primary) !important;
+          box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent);
+        }
+        .dsh-sm-input::placeholder {
+          color: var(--dsw-alias-label-tertiary);
+        }
+        .dsh-sm-row-header {
+          transition: background 0.12s ease;
+        }
+        .dsh-sm-row-header:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+        }
+        .dsh-sm-icon-btn {
+          transition: background 0.12s ease, color 0.12s ease;
+        }
+        .dsh-sm-icon-btn:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+          color: var(--dsw-alias-label-primary) !important;
+        }
+        .dsh-sm-opt-hover {
+          transition: background 0.12s ease;
+        }
+        .dsh-sm-opt-hover:hover {
+          background: var(--dsw-alias-interactive-bg-hover);
+        }
+      `}</style>
       <div style={{ width: '100%', maxWidth: 1080, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
       <header style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -324,17 +445,19 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
         <p style={{ margin: 0, color: COLORS.secondary, fontSize: 13 }}>{t('subtitle')}</p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
+            className="dsh-sm-input"
             style={{ ...inputStyle, width: 240 }}
             value={query}
             placeholder={t('search')}
             aria-label={t('search')}
             onChange={(event) => { setQuery(event.target.value) }}
           />
-          <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { void refresh() }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy !== null} onClick={() => { void refresh() }}>
             {t('refresh')}
           </button>
           <button
             type="button"
+            className="dsh-sm-btn"
             style={buttonStyle}
             disabled={busy !== null || (snapshot?.sources.length ?? 0) === 0}
             onClick={() => { setExpandedSources((snapshot?.sources ?? []).map((source) => source.slug)) }}
@@ -343,6 +466,7 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           </button>
           <button
             type="button"
+            className="dsh-sm-btn"
             style={buttonStyle}
             disabled={busy !== null || expandedSources.length === 0}
             onClick={() => { setExpandedSources([]) }}
@@ -351,6 +475,7 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           </button>
           <button
             type="button"
+            className="dsh-sm-btn"
             style={buttonStyle}
             disabled={busy !== null}
             onClick={() => { setScanOpen(true) }}
@@ -359,6 +484,7 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
           </button>
           <button
             type="button"
+            className="dsh-sm-btn dsh-sm-btn-primary"
             style={primaryButtonStyle}
             disabled={busy !== null}
             onClick={() => { setInstallOpen(true) }}
@@ -369,18 +495,46 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
       </header>
 
       {notice !== null && (
-        <div style={{ ...cardStyle, padding: '8px 12px', color: COLORS.success, fontSize: 13 }} role="status">
-          {notice}
+        <div
+          style={{
+            ...cardStyle,
+            padding: '10px 14px',
+            background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, var(--dsw-alias-bg-layer-2))',
+            borderColor: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent)',
+            color: COLORS.success,
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+          role="status"
+        >
+          <span>✓</span>
+          <span>{notice}</span>
         </div>
       )}
       {error !== null && (
-        <div style={{ ...cardStyle, padding: '8px 12px', color: COLORS.error, fontSize: 13 }} role="alert">
-          {t('failed', { message: `${error.message} (${error.code})` })}
+        <div
+          style={{
+            ...cardStyle,
+            padding: '10px 14px',
+            background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, var(--dsw-alias-bg-layer-2))',
+            borderColor: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 35%, transparent)',
+            color: COLORS.error,
+            fontSize: 13,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+          role="alert"
+        >
+          <span>⚠</span>
+          <span>{t('failed', { message: `${error.message} (${error.code})` })}</span>
         </div>
       )}
       {log !== null && (
         <div style={cardStyle}>
-          <div style={{ padding: '8px 12px', fontSize: 12, color: COLORS.secondary, borderBottom: `1px solid ${COLORS.border}` }}>
+          <div style={{ padding: '8px 12px', fontSize: 12, color: COLORS.secondary, borderBottom: `1px solid ${COLORS.borderSubtle}` }}>
             {t('installLog')}
           </div>
           <pre style={logStyle}>{log.text === '' ? '…' : log.text}</pre>
@@ -557,14 +711,15 @@ function SourceCard({
     <section style={cardStyle} aria-label={source.slug}>
       <div
         onClick={onToggle}
+        className="dsh-sm-row-header"
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 10,
           flexWrap: 'wrap',
-          padding: '10px 12px',
+          padding: '10px 14px',
           cursor: 'pointer',
-          borderBottom: skills.length === 0 || !expanded ? undefined : `1px solid ${COLORS.border}`,
+          borderBottom: skills.length === 0 || !expanded ? undefined : `1px solid ${COLORS.borderSubtle}`,
         }}
       >
         <button
@@ -573,15 +728,16 @@ function SourceCard({
           aria-label={expanded ? t('collapseSource') : t('expandSource')}
           title={expanded ? t('collapseSource') : t('expandSource')}
           onClick={(event) => { event.stopPropagation(); onToggle() }}
+          className="dsh-sm-icon-btn"
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 20,
-            height: 20,
+            width: 22,
+            height: 22,
             padding: 0,
             border: 'none',
-            borderRadius: 'var(--dsw-radius-xs)',
+            borderRadius: 'var(--dsw-radius-xs, 4px)',
             background: 'transparent',
             color: COLORS.tertiary,
             cursor: 'pointer',
@@ -616,37 +772,37 @@ function SourceCard({
           disabled={busy !== null}
           onChange={() => { void onToggleSource(source) }}
         />
-        <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { onLink(source) }}>
+        <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy !== null} onClick={() => { onLink(source) }}>
           {t('link')}
         </button>
         {source.sourceType === 'git' && (
-          <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { void onCheck(source) }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy !== null} onClick={() => { void onCheck(source) }}>
             {checking ? t('checking') : t('checkUpdates')}
           </button>
         )}
         {source.sourceType === 'git' && (
-          <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { void onUpdate(source) }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy !== null} onClick={() => { void onUpdate(source) }}>
             {working ? t('updating') : t('update')}
           </button>
         )}
-        <button type="button" style={buttonStyle} disabled={busy !== null} onClick={() => { onRemove(source.slug) }}>
+        <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy !== null} onClick={() => { onRemove(source.slug) }}>
           {t('remove')}
         </button>
         </span>
       </div>
       {expanded && source.sourceUrl !== undefined && (
-        <div style={{ padding: '6px 12px', fontSize: 11, color: COLORS.tertiary, wordBreak: 'break-all' }}>
+        <div style={{ padding: '6px 14px', fontSize: 11, color: COLORS.tertiary, wordBreak: 'break-all' }}>
           {source.sourceUrl}
         </div>
       )}
       {source.problem !== undefined && (
-        <div style={{ padding: '6px 12px', fontSize: 12, color: COLORS.warn }}>{source.problem}</div>
+        <div style={{ padding: '6px 14px', fontSize: 12, color: COLORS.warn }}>{source.problem}</div>
       )}
       {expanded && source.note !== undefined && (
-        <div style={{ padding: '0 12px 6px', fontSize: 12, color: COLORS.secondary }}>{t('note')}: {source.note}</div>
+        <div style={{ padding: '0 14px 6px', fontSize: 12, color: COLORS.secondary }}>{t('note')}: {source.note}</div>
       )}
       {expanded && (skills.length === 0
-        ? <div style={{ padding: '10px 12px', fontSize: 12, color: COLORS.tertiary }}>{t('noSkills')}</div>
+        ? <div style={{ padding: '10px 14px', fontSize: 12, color: COLORS.tertiary }}>{t('noSkills')}</div>
         : skills.map((skill) => (
           <SkillRow
             key={skill.skillName}
@@ -677,8 +833,8 @@ function SkillRow({ t, source, skill, busy, onToggle, onLink }: SkillRowProps): 
       display: 'flex',
       alignItems: 'flex-start',
       gap: 10,
-      padding: '10px 12px',
-      borderTop: `1px solid ${COLORS.border}`,
+      padding: '10px 14px',
+      borderTop: `1px solid ${COLORS.borderSubtle}`,
       opacity: disabledBySource ? 0.55 : 1,
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0 }}>
@@ -701,6 +857,7 @@ function SkillRow({ t, source, skill, busy, onToggle, onLink }: SkillRowProps): 
       </div>
       <button
         type="button"
+        className="dsh-sm-btn"
         style={buttonStyle}
         disabled={busy || disabledBySource}
         onClick={onLink}
@@ -752,9 +909,10 @@ function ProjectsSection({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{t('linkedProjects')}</h3>
         <span style={{ flex: 1 }} />
-        <button type="button" style={buttonStyle} onClick={onExpandAll}>{t('expandAll')}</button>
+        <button type="button" className="dsh-sm-btn" style={buttonStyle} onClick={onExpandAll}>{t('expandAll')}</button>
         <button
           type="button"
+          className="dsh-sm-btn"
           style={buttonStyle}
           disabled={expanded.length === 0}
           onClick={onCollapseAll}
@@ -773,14 +931,15 @@ function ProjectsSection({
           <div key={project.project} style={cardStyle}>
             <div
               onClick={() => { onToggleProject(project.project) }}
+              className="dsh-sm-row-header"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 10,
                 flexWrap: 'wrap',
-                padding: '10px 12px',
+                padding: '10px 14px',
                 cursor: 'pointer',
-                borderBottom: open && project.exists ? `1px solid ${COLORS.border}` : undefined,
+                borderBottom: open && project.exists ? `1px solid ${COLORS.borderSubtle}` : undefined,
               }}
             >
               <button
@@ -788,15 +947,16 @@ function ProjectsSection({
                 aria-expanded={open}
                 aria-label={open ? t('collapseProject') : t('expandProject')}
                 onClick={(event) => { event.stopPropagation(); onToggleProject(project.project) }}
+                className="dsh-sm-icon-btn"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  width: 20,
-                  height: 20,
+                  width: 22,
+                  height: 22,
                   padding: 0,
                   border: 'none',
-                  borderRadius: 'var(--dsw-radius-xs)',
+                  borderRadius: 'var(--dsw-radius-xs, 4px)',
                   background: 'transparent',
                   color: COLORS.tertiary,
                   cursor: 'pointer',
@@ -832,7 +992,7 @@ function ProjectsSection({
               <span style={{ flex: 1 }} />
               {Object.entries(counts).map(([state, count]) => (
                 <span key={state} style={{ fontSize: 11, color: STATE_COLORS[state] ?? COLORS.tertiary }}>
-                  {t(STATE_KEYS[state] ?? state)} {count}
+                  {t(STATE_KEYS[state] ?? (state as MessageKey))} {count}
                 </span>
               ))}
               <span
@@ -841,6 +1001,7 @@ function ProjectsSection({
               >
                 <button
                   type="button"
+                  className="dsh-sm-btn"
                   style={buttonStyle}
                   disabled={busy !== null || !project.exists}
                   onClick={() => { void onResync(project.project) }}
@@ -849,6 +1010,7 @@ function ProjectsSection({
                 </button>
                 <button
                   type="button"
+                  className="dsh-sm-btn"
                   style={buttonStyle}
                   disabled={busy !== null || !project.exists}
                   onClick={() => { void onUnlink(project.project) }}
@@ -858,7 +1020,7 @@ function ProjectsSection({
               </span>
             </div>
             {open && project.exists && (
-              <div style={{ padding: '6px 12px 10px' }}>
+              <div style={{ padding: '6px 14px 10px' }}>
                 {project.entries.map((entry) => {
                   const stale = project.stale.some((candidate) =>
                     candidate.source === entry.source && candidate.skillName === entry.skillName)
@@ -866,7 +1028,7 @@ function ProjectsSection({
                   return (
                     <div
                       key={`${entry.source}/${entry.skillName}`}
-                      style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '3px 0' }}
+                      style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '4px 0' }}
                     >
                       <Switch
                         checked={entry.enabled}
@@ -881,13 +1043,14 @@ function ProjectsSection({
                           ? <Badge text={t('disabled')} tone="warn" />
                           : states.map(({ state, agents: agentKeys }) => (
                             <span key={state} style={{ color: STATE_COLORS[state] ?? COLORS.tertiary }}>
-                              {t(STATE_KEYS[state] ?? state)} {agentKeys.map(nameOf).join(' · ')}
+                              {t(STATE_KEYS[state] ?? (state as MessageKey))} {agentKeys.map(nameOf).join(' · ')}
                             </span>
                           ))}
                       <span style={{ flex: 1 }} />
                       <button
                         type="button"
-                        style={{ ...buttonStyle, padding: '0 6px', fontSize: 10 }}
+                        className="dsh-sm-btn"
+                        style={{ ...buttonStyle, padding: '2px 8px', fontSize: 11 }}
                         disabled={busy !== null}
                         onClick={() => { void onUnlinkEntry(project.project, entry) }}
                       >
@@ -1004,19 +1167,19 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
   return (
     <Overlay onClose={busy ? undefined : onClose}>
       <div style={{
-        ...cardStyle,
+        ...dialogCardStyle,
         width: 'min(720px, 94vw)',
         maxHeight: '86vh',
         display: 'flex',
         flexDirection: 'column',
-        background: COLORS.surfaceAlt,
       }}>
-        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${COLORS.border}` }}>
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${COLORS.borderSubtle}` }}>
           <div style={{ fontWeight: 600 }}>{t('scanTitle')}</div>
           <div style={{ marginTop: 4, fontSize: 12, color: COLORS.secondary }}>{t('scanSubtitle')}</div>
         </div>
-        <div style={{ padding: '10px 14px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
+            className="dsh-sm-input"
             style={{ ...inputStyle, width: 220 }}
             value={query}
             placeholder={t('scanSearch')}
@@ -1025,11 +1188,12 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
           />
           <span style={{ fontSize: 11, color: COLORS.tertiary }}>{t('scanSelected', { count: selected.length })}</span>
           <span style={{ flex: 1 }} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary, cursor: 'pointer' }}>
             <input
               type="checkbox"
               checked={overwrite}
               disabled={busy}
+              style={{ accentColor: COLORS.brand }}
               onChange={(event) => {
                 setOverwrite(event.target.checked)
                 if (!event.target.checked) {
@@ -1043,7 +1207,7 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
             {t('scanOverwrite')}
           </label>
         </div>
-        <div style={{ padding: '0 14px 6px', fontSize: 11, color: COLORS.tertiary, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ padding: '0 16px 8px', fontSize: 11, color: COLORS.tertiary, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{t('scanOverwriteHint')}</span>
           <span>·</span>
           <span>
@@ -1055,7 +1219,7 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
           <span>·</span>
           <span>{t('scanRootsHint')}</span>
         </div>
-        <div style={{ overflow: 'auto', padding: '0 14px 10px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ overflow: 'auto', padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
           {loading && <p style={{ color: COLORS.secondary, fontSize: 13 }}>{t('scanLoading')}</p>}
           {error !== null && <p style={{ color: COLORS.error, fontSize: 12 }} role="alert">{error}</p>}
           {!loading && groups.length === 0 && (
@@ -1067,8 +1231,8 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
                 display: 'flex',
                 alignItems: 'baseline',
                 gap: 8,
-                padding: '4px 2px',
-                borderBottom: `1px solid ${COLORS.border}`,
+                padding: '6px 4px',
+                borderBottom: `1px solid ${COLORS.borderSubtle}`,
               }}>
                 <strong style={{ fontSize: 12 }}>{root.label}</strong>
                 <code
@@ -1092,12 +1256,14 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
                     key={skill.path}
                     htmlFor={checkboxId}
                     title={skill.path}
+                    className="dsh-sm-opt-hover"
                     style={{
                       display: 'flex',
                       gap: 8,
                       alignItems: 'flex-start',
-                      padding: '6px 4px 6px 12px',
-                      borderBottom: `1px solid ${COLORS.border}`,
+                      padding: '6px 6px 6px 12px',
+                      borderBottom: `1px solid ${COLORS.borderSubtle}`,
+                      borderRadius: 'var(--dsw-radius-xs, 4px)',
                       opacity: selectable(skill) ? 1 : 0.6,
                       cursor: selectable(skill) ? 'pointer' : 'default',
                     }}
@@ -1108,7 +1274,7 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
                       checked={selected.includes(skill.path)}
                       disabled={busy || !selectable(skill)}
                       onChange={() => { toggle(skill.path) }}
-                      style={{ marginTop: 3 }}
+                      style={{ marginTop: 3, accentColor: COLORS.brand }}
                     />
                     <span style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1135,7 +1301,7 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
           ))}
         </div>
         {counts !== null && (
-          <div style={{ padding: '8px 14px', fontSize: 12, borderTop: `1px solid ${COLORS.border}`, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ padding: '8px 16px', fontSize: 12, borderTop: `1px solid ${COLORS.borderSubtle}`, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ color: COLORS.success }}>{t('scanResultImported', { count: counts.imported })}</span>
             <span style={{ color: COLORS.tertiary }}>{t('scanResultSkipped', { count: counts.skipped })}</span>
             {counts.conflict > 0 && <span style={{ color: COLORS.warn }}>{t('scanResultConflicts', { count: counts.conflict })}</span>}
@@ -1148,12 +1314,13 @@ function ScanDialog({ t, onClose, onImported }: ScanDialogProps): ReactElement {
               ))}
           </div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 14px', borderTop: `1px solid ${COLORS.border}` }}>
-          <button type="button" style={buttonStyle} disabled={busy} onClick={onClose}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: `1px solid ${COLORS.borderSubtle}` }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy} onClick={onClose}>
             {counts === null ? t('cancel') : t('scanDone')}
           </button>
           <button
             type="button"
+            className="dsh-sm-btn dsh-sm-btn-primary"
             style={primaryButtonStyle}
             disabled={busy || selected.length === 0}
             onClick={() => { void submit() }}
@@ -1192,10 +1359,31 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
   const [projects, setProjects] = useState<readonly string[]>([])
   const [customPath, setCustomPath] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<readonly string[]>(['dsh'])
   const [agentQuery, setAgentQuery] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!pickerOpen) return
+    const handleOutsideClick = (e: MouseEvent): void => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setPickerOpen(false)
+      }
+    }
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [pickerOpen])
 
   const visibleAgents = useMemo(() => {
     const needle = agentQuery.trim().toLowerCase()
@@ -1266,24 +1454,30 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
   return (
     <Overlay onClose={busy ? undefined : onClose}>
       <div style={{
-        ...cardStyle,
+        ...dialogCardStyle,
         overflow: 'visible',
         width: 'min(620px, 94vw)',
-        background: COLORS.surfaceAlt,
       }}>
-        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${COLORS.border}`, fontWeight: 600 }}>
+        <div style={{ padding: '14px 16px', borderBottom: `0.5px solid ${COLORS.borderSubtle}`, fontWeight: 600 }}>
           {t('linkTitle', { slug: skillName === undefined ? source.slug : `${source.slug}/${skillName}` })}
         </div>
-        <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: COLORS.secondary }}>
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: COLORS.secondary }}>
             {t('linkProject')}
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
+            <div ref={pickerRef} style={{ position: 'relative' }}>
+              <div
+                role="combobox"
+                tabIndex={busy ? -1 : 0}
                 aria-expanded={pickerOpen}
                 aria-label={t('selectProjects')}
-                disabled={busy}
-                onClick={() => { setPickerOpen((open) => !open) }}
+                onClick={() => { if (!busy) setPickerOpen((open) => !open) }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    if (!busy) setPickerOpen((open) => !open)
+                  }
+                }}
+                className="dsh-sm-input"
                 style={{
                   ...inputStyle,
                   display: 'flex',
@@ -1291,11 +1485,15 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                   gap: 6,
                   flexWrap: 'wrap',
                   minHeight: 34,
+                  height: 'auto',
+                  padding: '4px 8px',
                   textAlign: 'left',
-                  cursor: 'pointer',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  borderColor: pickerOpen ? COLORS.brand : COLORS.borderStrong,
+                  boxShadow: pickerOpen ? '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent)' : 'none',
                 }}
               >
-                {projects.length === 0 && <span style={{ color: COLORS.tertiary }}>{t('selectProjects')}</span>}
+                {projects.length === 0 && <span style={{ color: COLORS.tertiary, fontSize: 13, padding: '2px 4px' }}>{t('selectProjects')}</span>}
                 {projects.map((path) => (
                   <span
                     key={path}
@@ -1303,10 +1501,13 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
-                      padding: '2px 6px',
-                      borderRadius: 999,
-                      border: `1px solid ${COLORS.border}`,
+                      padding: '2px 8px',
+                      borderRadius: 'var(--dsw-radius-sm, 6px)',
+                      border: `0.5px solid ${COLORS.borderInput}`,
+                      background: COLORS.bgLayer2,
                       fontSize: 12,
+                      fontWeight: 500,
+                      color: COLORS.text,
                     }}
                   >
                     {projectLabel(path)}
@@ -1321,90 +1522,124 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                           toggleProject(path)
                         }
                       }}
-                      style={{ cursor: 'pointer', color: COLORS.tertiary }}
+                      style={{ cursor: 'pointer', color: COLORS.tertiary, fontSize: 13, lineHeight: 1 }}
                     >
                       ×
                     </span>
                   </span>
                 ))}
-                <span style={{ marginLeft: 'auto', color: COLORS.tertiary }}>{pickerOpen ? '▴' : '▾'}</span>
-              </button>
+                <div
+                  style={{
+                    marginLeft: 'auto',
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--dsw-alias-label-caption, #81858c)',
+                    transform: pickerOpen ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 140ms ease',
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+
               {pickerOpen && (
-                <>
-                  <div style={{
+                <div
+                  role="listbox"
+                  style={{
                     position: 'absolute',
                     top: 'calc(100% + 4px)',
                     left: 0,
                     right: 0,
-                    zIndex: 5,
-                    border: `1px solid ${COLORS.borderStrong}`,
-                    borderRadius: 'var(--dsw-radius-sm)',
-                    background: 'var(--dsw-alias-bg-layer-1)',
-                    boxShadow: '0 8px 24px var(--dsw-alias-bg-mask-2)',
+                    zIndex: 1100,
+                    boxSizing: 'border-box',
+                    border: `0.5px solid ${COLORS.border}`,
+                    borderRadius: 'var(--dsw-radius-lg, 10px)',
+                    background: COLORS.bgLayer2,
+                    boxShadow: 'var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,0.18))',
                     maxHeight: 260,
-                    overflow: 'auto',
-                    padding: 6,
-                  }}>
-                    {workspaces.length === 0 && (
-                      <div style={{ padding: '4px 6px', fontSize: 12, color: COLORS.tertiary }}>
-                        {t('customProjectPath')}
-                      </div>
-                    )}
-                    {workspaces.map((workspace) => (
+                    overflowY: 'auto',
+                    padding: 4,
+                  }}
+                  onClick={(e) => { e.stopPropagation() }}
+                >
+                  {workspaces.length === 0 && (
+                    <div style={{ padding: '8px 10px', fontSize: 12, color: COLORS.tertiary }}>
+                      {t('customProjectPath')}
+                    </div>
+                  )}
+                  {workspaces.map((workspace) => {
+                    const isChecked = projects.includes(workspace.path)
+                    return (
                       <label
                         key={workspace.path}
                         title={workspace.path}
+                        className="dsh-sm-opt-hover"
                         style={{
                           display: 'flex',
                           alignItems: 'center',
                           gap: 8,
-                          padding: '4px 6px',
-                          fontSize: 12,
+                          padding: '6px 10px',
+                          minHeight: 32,
+                          boxSizing: 'border-box',
+                          fontSize: 13,
                           cursor: 'pointer',
+                          borderRadius: 'var(--dsw-radius-md, 6px)',
+                          background: isChecked ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
                         }}
                       >
                         <input
                           type="checkbox"
-                          checked={projects.includes(workspace.path)}
+                          checked={isChecked}
                           disabled={busy}
                           onChange={() => { toggleProject(workspace.path) }}
+                          style={{ accentColor: COLORS.brand }}
                         />
-                        <span>{workspace.title}</span>
-                        <code style={{ fontSize: 10, color: COLORS.tertiary, marginLeft: 'auto' }}>{workspace.path}</code>
+                        <span style={{ fontWeight: isChecked ? 600 : 400, color: isChecked ? COLORS.brand : COLORS.text }}>
+                          {workspace.title}
+                        </span>
+                        <code style={{ fontSize: 11, color: COLORS.tertiary, marginLeft: 'auto', fontFamily: 'var(--ds-font-family-code, monospace)' }}>
+                          {workspace.path}
+                        </code>
                       </label>
-                    ))}
-                    <div style={{
-                      display: 'flex',
-                      gap: 6,
-                      padding: 6,
-                      marginTop: 4,
-                      borderTop: `1px solid ${COLORS.border}`,
-                    }}>
-                      <input
-                        style={{ ...inputStyle, padding: '2px 6px' }}
-                        value={customPath}
-                        placeholder={t('customProjectPath')}
-                        aria-label={t('customProjectPath')}
-                        disabled={busy}
-                        onChange={(event) => { setCustomPath(event.target.value) }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            addCustomProject()
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        style={buttonStyle}
-                        disabled={busy || customPath.trim() === ''}
-                        onClick={addCustomProject}
-                      >
-                        {t('addProject')}
-                      </button>
-                    </div>
+                    )
+                  })}
+                  <div style={{
+                    display: 'flex',
+                    gap: 6,
+                    padding: 6,
+                    marginTop: 4,
+                    borderTop: `0.5px solid ${COLORS.borderSubtle}`,
+                  }}>
+                    <input
+                      className="dsh-sm-input"
+                      style={{ ...inputStyle, padding: '4px 8px', height: 28, fontSize: 12 }}
+                      value={customPath}
+                      placeholder={t('customProjectPath')}
+                      aria-label={t('customProjectPath')}
+                      disabled={busy}
+                      onChange={(event) => { setCustomPath(event.target.value) }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          addCustomProject()
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="dsh-sm-btn"
+                      style={{ ...buttonStyle, padding: '3px 10px', height: 28 }}
+                      disabled={busy || customPath.trim() === ''}
+                      onClick={addCustomProject}
+                    >
+                      {t('addProject')}
+                    </button>
                   </div>
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -1414,7 +1649,8 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
               <span style={{ color: COLORS.tertiary }}>{t('agentCount', { count: selected.length })}</span>
               <span style={{ flex: 1 }} />
               <input
-                style={{ ...inputStyle, width: 160, padding: '2px 6px' }}
+                className="dsh-sm-input"
+                style={{ ...inputStyle, width: 160, padding: '3px 8px' }}
                 value={agentQuery}
                 placeholder={t('agentsSearch')}
                 aria-label={t('agentsSearch')}
@@ -1424,25 +1660,32 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
             <div style={{
               maxHeight: 200,
               overflow: 'auto',
-              border: `1px solid ${COLORS.border}`,
-              borderRadius: 'var(--dsw-radius-sm)',
-              padding: '4px 8px',
+              border: `1px solid ${COLORS.borderInput}`,
+              borderRadius: 'var(--dsw-radius-sm, 6px)',
+              background: COLORS.bgLayer1,
+              padding: '4px 6px',
             }}>
               {visibleAgents.map((agent) => (
-                <label key={agent.name} style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '3px 0',
-                  fontSize: 12,
-                  color: COLORS.text,
-                  cursor: 'pointer',
-                }}>
+                <label
+                  key={agent.name}
+                  className="dsh-sm-opt-hover"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '4px 6px',
+                    fontSize: 12,
+                    color: COLORS.text,
+                    cursor: 'pointer',
+                    borderRadius: 'var(--dsw-radius-xs, 4px)',
+                  }}
+                >
                   <input
                     type="checkbox"
                     checked={selected.includes(agent.name)}
                     disabled={busy}
                     onChange={() => { toggleAgent(agent.name) }}
+                    style={{ accentColor: COLORS.brand }}
                   />
                   <span>{agent.displayName}</span>
                   <code style={{ fontSize: 10, color: COLORS.tertiary }}>{agent.skillsDir}</code>
@@ -1456,10 +1699,11 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
             <div style={{ fontSize: 12, color: COLORS.error, whiteSpace: 'pre-wrap' }} role="alert">{error}</div>
           )}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 14px', borderTop: `1px solid ${COLORS.border}` }}>
-          <button type="button" style={buttonStyle} disabled={busy} onClick={onClose}>{t('cancel')}</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: `1px solid ${COLORS.borderSubtle}` }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy} onClick={onClose}>{t('cancel')}</button>
           <button
             type="button"
+            className="dsh-sm-btn dsh-sm-btn-primary"
             style={primaryButtonStyle}
             disabled={busy}
             onClick={() => { void submit() }}
@@ -1510,41 +1754,69 @@ function Switch({ checked, label, disabled = false, onChange }: SwitchProps): Re
       onClick={onChange}
       style={{
         position: 'relative',
-        width: 34,
+        width: 36,
         height: 20,
         flex: '0 0 auto',
         padding: 0,
         borderRadius: 999,
         border: 'none',
-        background: checked ? COLORS.brand : COLORS.borderStrong,
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.5 : 1,
+        background: checked ? COLORS.brand : COLORS.switchTrack,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        transition: 'background 0.2s ease, opacity 0.15s ease',
+        outline: 'none',
       }}
     >
       <span style={{
         position: 'absolute',
         top: 2,
-        left: checked ? 16 : 2,
+        left: checked ? 18 : 2,
         width: 16,
         height: 16,
         borderRadius: '50%',
-        background: COLORS.onBrand,
-        transition: 'left 120ms ease',
+        background: checked ? COLORS.onBrand : COLORS.switchThumb,
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)',
+        transition: 'left 0.2s ease, background 0.2s ease',
       }} />
     </button>
   )
 }
 
-function Badge({ text, tone = 'neutral' }: { readonly text: string; readonly tone?: 'neutral' | 'warn' }): ReactElement {
+function Badge({ text, tone = 'neutral' }: { readonly text: string; readonly tone?: 'neutral' | 'warn' | 'success' | 'brand' }): ReactElement {
+  const toneStyles: Record<string, React.CSSProperties> = {
+    neutral: {
+      background: 'var(--dsw-alias-interactive-bg-hover)',
+      border: `1px solid ${COLORS.borderSubtle}`,
+      color: COLORS.secondary,
+    },
+    warn: {
+      background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 30%, transparent)',
+      color: COLORS.warn,
+    },
+    success: {
+      background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent)',
+      color: COLORS.success,
+    },
+    brand: {
+      background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent)',
+      border: '1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent)',
+      color: COLORS.brand,
+    },
+  }
+  const current = toneStyles[tone] ?? toneStyles.neutral
   return (
     <span style={{
-      fontSize: 10,
-      lineHeight: '16px',
-      padding: '0 6px',
+      fontSize: 11,
+      lineHeight: '18px',
+      padding: '0 7px',
       borderRadius: 999,
-      border: `1px solid ${tone === 'warn' ? COLORS.warn : COLORS.border}`,
-      color: tone === 'warn' ? COLORS.warn : COLORS.tertiary,
-      letterSpacing: 0.4,
+      letterSpacing: 0.2,
+      fontWeight: 500,
+      display: 'inline-flex',
+      alignItems: 'center',
+      ...current,
     }}>
       {text}
     </span>
@@ -1589,12 +1861,12 @@ function InstallDialog({ t, existingSlugs, onClose, onInstalled }: InstallDialog
 
   return (
     <Overlay onClose={busy ? undefined : onClose}>
-      <div style={{ ...cardStyle, width: 'min(560px, 92vw)', background: COLORS.surfaceAlt }}>
-        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${COLORS.border}`, fontWeight: 600 }}>
+      <div style={{ ...dialogCardStyle, width: 'min(560px, 92vw)' }}>
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${COLORS.borderSubtle}`, fontWeight: 600 }}>
           {t('installTitle')}
         </div>
-        <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', gap: 14 }}>
+        <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 16 }}>
             {(['git', 'local'] as const).map((value) => (
               <label key={value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
                 <input
@@ -1603,14 +1875,16 @@ function InstallDialog({ t, existingSlugs, onClose, onInstalled }: InstallDialog
                   checked={sourceType === value}
                   disabled={busy}
                   onChange={() => { setSourceType(value) }}
+                  style={{ accentColor: COLORS.brand }}
                 />
                 {value === 'git' ? t('sourceTypeGit') : t('sourceTypeLocal')}
               </label>
             ))}
           </div>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: COLORS.secondary }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: COLORS.secondary }}>
             {sourceType === 'git' ? t('identifierGit') : t('identifierLocal')}
             <input
+              className="dsh-sm-input"
               style={inputStyle}
               value={identifier}
               disabled={busy}
@@ -1623,22 +1897,29 @@ function InstallDialog({ t, existingSlugs, onClose, onInstalled }: InstallDialog
             />
           </label>
           {sourceType === 'local' && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary }}>
-              <input type="checkbox" checked={force} disabled={busy} onChange={(event) => { setForce(event.target.checked) }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={force}
+                disabled={busy}
+                onChange={(event) => { setForce(event.target.checked) }}
+                style={{ accentColor: COLORS.brand }}
+              />
               {t('forceLocal')}
             </label>
           )}
           {error !== null && <div style={{ fontSize: 12, color: COLORS.error }} role="alert">{error}</div>}
           {log !== null && (
-            <div style={{ ...cardStyle, maxHeight: 220, overflow: 'auto' }}>
+            <div style={{ ...cardStyle, maxHeight: 220, overflow: 'auto', background: COLORS.codeBlock }}>
               <pre style={logStyle}>{log === '' ? '…' : log}</pre>
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 14px', borderTop: `1px solid ${COLORS.border}` }}>
-          <button type="button" style={buttonStyle} disabled={busy} onClick={onClose}>{t('cancel')}</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px', borderTop: `1px solid ${COLORS.borderSubtle}` }}>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} disabled={busy} onClick={onClose}>{t('cancel')}</button>
           <button
             type="button"
+            className="dsh-sm-btn dsh-sm-btn-primary"
             style={primaryButtonStyle}
             disabled={busy || identifier.trim() === ''}
             onClick={() => { void submit() }}
@@ -1660,15 +1941,16 @@ interface ConfirmRemoveProps extends TranslateProps {
 function ConfirmRemove({ t, slug, onCancel, onConfirm }: ConfirmRemoveProps): ReactElement {
   return (
     <Overlay onClose={onCancel}>
-      <div style={{ ...cardStyle, width: 'min(440px, 92vw)', padding: 16, background: COLORS.surfaceAlt }}>
+      <div style={{ ...dialogCardStyle, width: 'min(440px, 92vw)', padding: 18 }}>
         <h3 style={{ margin: '0 0 8px', fontSize: 16 }}>{t('removeTitle')}</h3>
-        <p style={{ margin: '0 0 14px', fontSize: 13, color: COLORS.secondary }}>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: COLORS.secondary }}>
           {t('removeMessage', { slug })}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" style={buttonStyle} onClick={onCancel}>{t('cancel')}</button>
+          <button type="button" className="dsh-sm-btn" style={buttonStyle} onClick={onCancel}>{t('cancel')}</button>
           <button
             type="button"
+            className="dsh-sm-btn dsh-sm-btn-danger"
             style={{ ...primaryButtonStyle, background: COLORS.error, borderColor: COLORS.error }}
             onClick={() => { onConfirm(slug) }}
           >
@@ -1691,7 +1973,8 @@ function Overlay({ children, onClose }: { readonly children: ReactNode; onClose?
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--dsw-alias-bg-mask-2)',
+        background: COLORS.bgMask,
+        backdropFilter: 'blur(3px)',
       }}
       onClick={() => { onClose?.() }}
     >

@@ -65,7 +65,7 @@
     "debug:ui": "node scripts/debug-ui.mjs"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.2-alpha.3",
     "yaml": "^2.8.1"
   },
   "peerDependencies": {
@@ -74,23 +74,23 @@
     "@deepseek-ai/schemastery": "~3.18.6-alpha.1"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.6-alpha.1",
-    "@deepseek-ai/dsh-client-locale": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-host-webserver": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-skill": "0.2.2-alpha.2",
-    "@deepseek-ai/schemastery": "~3.18.6-alpha.1",
+    "@deepseek-ai/cordis": "~4.0.6-alpha.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-host-webserver": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-skill": "0.2.2-alpha.3",
+    "@deepseek-ai/schemastery": "~3.18.6-alpha.2",
     "@types/node": "^22.20.1",
     "@types/react": "~18.3.1",
     "react": "^18.3.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.11",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-llm": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-scope": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-alpha.2",
-    "@deepseek-ai/dsh-client-ui-sidebar": "0.2.2-alpha.2"
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-llm": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-scope": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-sidebar": "0.2.2-alpha.3"
   },
   "publishConfig": {
     "access": "public"
