@@ -75,6 +75,8 @@ Add to your DeepSeek Harness profile's `cordis.patch.yml`:
 | `defaultWorkspacePath` | `process.cwd()` | Fallback workspace for tickets that name none. |
 | `offpeakStart` / `offpeakEnd` | `23:00` / `07:00` | Host-local `HH:mm` quiet-hours window. Equal bounds keep it open all day. |
 | `maxConcurrent` | `2` | Tickets executing at once; further due tickets wait for a slot. |
+| `completedRetentionDays` | `14` | Days a finished ticket stays in the journal and on the board. Active tickets are never dropped. |
+| `journalCompactLines` | `2000` | Journal length that triggers a rewrite into one snapshot entry. |
 
 ## Execution Timing
 
@@ -96,7 +98,7 @@ process alive.
 ## Human Intervention
 
 - `POST /events` — create a ticket (`payload.scheduleMode`, `payload.scheduledAt`).
-- `GET /snapshot` — board state plus the configured window (`offpeak`) and dispatch ceiling (`limits`).
+- `GET /snapshot?doneLimit=&doneOffset=` — board state. `stats` covers every ticket, `active` returns all unfinished work, `done` is one page of finished tickets (`doneTotal` is the unpaged count), plus the configured window (`offpeak`) and dispatch ceiling (`limits`). `doneLimit` is clamped to 1–500 and defaults to 100; malformed bounds fall back to the defaults.
 - `POST /tickets/run-now` — start a pending, failed, or circuit-broken ticket immediately without rewriting its timing plan.
 - `POST /tickets/retry` — requeue one failed or circuit-broken ticket (HTTP 409 when it is not retryable).
 - `POST /tickets/schedule` — change a queued ticket's mode/instant (`scheduleMode`, `scheduledAt`); HTTP 400 for an unusable timing, 409 for a ticket that is not queued.
@@ -104,6 +106,29 @@ process alive.
 
 A ticket left `running` by a crash is requeued when the executor mounts, so an
 interrupted run cannot occupy a slot forever.
+
+## Journal, Retention, and Compaction
+
+The journal (`<DSH_HOME>/autoloop/journal.jsonl`) is append-only during normal
+operation: every state change is one JSON line, and boot replays the file to
+rebuild memory. Two bounds keep that from growing forever:
+
+- **Retention.** A finished ticket (`completed`, `failed`, `circuit_broken`) is
+  kept for `completedRetentionDays` (default 14) after its last change. Tickets
+  that are `pending`, `running`, or `waiting_attention` are never dropped.
+- **Compaction.** When the log reaches `journalCompactLines` (default 2000), or
+  when expired history is still present, the store rewrites the log as a single
+  `snapshot` entry holding every retained ticket and renames it over the old
+  file. A failed rewrite keeps the previous log and logs a warning; a `snapshot`
+  line is a baseline, so replay clears state before loading it.
+
+Two durability rules: an append writes to disk **before** it applies to memory,
+so a failed write throws and leaves state unchanged; and an undecodable line is
+counted (`corruptLineCount`) and warned about rather than silently skipped.
+
+Because finished tickets are bounded, `GET /snapshot` pages them instead of
+returning the full history: the board loads 100 at a time (up to 500) and keeps
+loaded pages across polls.
 
 ## Plugin Ports & Integration
 

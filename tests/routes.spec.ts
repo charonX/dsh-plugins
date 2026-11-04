@@ -121,7 +121,9 @@ describe('HTTP routes', () => {
 
     expect(resState.statusCode).toBe(200)
     const json = JSON.parse(resState.body)
-    expect(json).toHaveProperty('tickets')
+    expect(json).toHaveProperty('active')
+    expect(json).toHaveProperty('done')
+    expect(json).toHaveProperty('doneTotal')
     expect(json).toHaveProperty('stats')
   })
 
@@ -263,5 +265,26 @@ describe('HTTP routes', () => {
     missing.req.emit('end')
     await missingPromise
     expect(missing.resState.statusCode).toBe(409)
+  })
+  it('honors the Done page query and tolerates malformed bounds', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({ prefix: '/api/autoloop', kernel, ctx: mockCtx, defaultWorkspacePath })
+
+    const beyond = createMockReqRes('GET', '/api/autoloop/snapshot?doneLimit=5&doneOffset=999')
+    const beyondPromise = handler(beyond.req, beyond.res)
+    beyond.req.emit('end')
+    await beyondPromise
+    expect(beyond.resState.statusCode).toBe(200)
+    const beyondJson = JSON.parse(beyond.resState.body)
+    expect(beyondJson.done).toEqual([])
+    expect(typeof beyondJson.doneTotal).toBe('number')
+
+    // Malformed bounds fall back to the defaults instead of failing the poll.
+    const malformed = createMockReqRes('GET', '/api/autoloop/snapshot?doneLimit=abc&doneOffset=-1')
+    const malformedPromise = handler(malformed.req, malformed.res)
+    malformed.req.emit('end')
+    await malformedPromise
+    expect(malformed.resState.statusCode).toBe(200)
+    expect(Array.isArray(JSON.parse(malformed.resState.body).done)).toBe(true)
   })
 })

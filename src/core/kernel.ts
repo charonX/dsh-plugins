@@ -17,6 +17,7 @@ import type {
   ApprovalChannel,
   AttentionRequest,
   IngressEvent,
+  JournalLogger,
   KernelStateSnapshot,
   OffpeakWindow,
   Ticket,
@@ -39,11 +40,17 @@ export interface KernelOptions {
   offpeak?: OffpeakWindow
   /** Maximum tickets executing at once; defaults to 2. */
   maxConcurrent?: number
-  logger?: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void }
+  logger?: JournalLogger
 }
 
 /** Interval between admission sweeps, in milliseconds. */
 const DRAIN_INTERVAL_MS = 20_000
+
+/** Default page size of the Done column. */
+export const DEFAULT_DONE_PAGE = 100
+
+/** Largest Done page the board may request. */
+export const MAX_DONE_PAGE = 500
 
 export class AutoloopKernel {
   public readonly maxHops: number
@@ -94,22 +101,40 @@ export class AutoloopKernel {
     }
   }
 
-  /** Get snapshot of kernel state for UI and inspection */
-  getStateSnapshot(): KernelStateSnapshot {
+  /**
+   * Board state for the monitor.
+   *
+   * Stats cover every ticket. `active` is returned whole (it is bounded by the
+   * concurrency ceiling plus suspended work); finished tickets are paged so a
+   * long-running deployment cannot push an unbounded payload on every poll.
+   *
+   * @param options - Done-column page size and offset.
+   * @returns Stats, active tickets, one Done page, and the timing surfaces.
+   */
+  getStateSnapshot(options: { doneLimit?: number; doneOffset?: number } = {}): KernelStateSnapshot {
     const all = this.store.getAllTickets()
     let pendingCount = 0
     let runningCount = 0
     let attentionCount = 0
     let completedCount = 0
     let failedCount = 0
+    const active: Ticket[] = []
+    const done: Ticket[] = []
 
-    for (const t of all) {
-      if (t.status === 'pending') pendingCount++
-      else if (t.status === 'running') runningCount++
-      else if (t.status === 'waiting_attention') attentionCount++
-      else if (t.status === 'completed') completedCount++
-      else if (t.status === 'failed' || t.status === 'circuit_broken') failedCount++
+    for (const ticket of all) {
+      switch (ticket.status) {
+        case 'pending': pendingCount += 1; active.push(ticket); break
+        case 'running': runningCount += 1; active.push(ticket); break
+        case 'waiting_attention': attentionCount += 1; active.push(ticket); break
+        case 'completed': completedCount += 1; done.push(ticket); break
+        default: failedCount += 1; done.push(ticket); break
+      }
     }
+
+    const doneLimit = Math.min(MAX_DONE_PAGE, Math.max(1, Math.trunc(options.doneLimit ?? DEFAULT_DONE_PAGE)))
+    const doneOffset = Math.max(0, Math.trunc(options.doneOffset ?? 0))
+    active.sort((a, b) => b.createdAt - a.createdAt)
+    done.sort((a, b) => b.updatedAt - a.updatedAt)
 
     return {
       stats: {
@@ -120,7 +145,9 @@ export class AutoloopKernel {
         completedCount,
         failedCount,
       },
-      tickets: all.sort((a, b) => b.createdAt - a.createdAt),
+      active,
+      done: done.slice(doneOffset, doneOffset + doneLimit),
+      doneTotal: done.length,
       maxHops: this.maxHops,
       offpeak: describeOffpeakView(new Date(), this.offpeak),
       limits: { maxConcurrent: this.maxConcurrent, runningCount },

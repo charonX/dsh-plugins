@@ -138,9 +138,18 @@ export class IntentRouter {
 
     const explicitCategory = event.payload?.category
     if (typeof explicitCategory === 'string' && explicitCategory && explicitCategory !== 'auto') {
-      intent = explicitCategory
-      categoryLabel = explicitCategory
-      matchedRules.push(`用户指定分类: ${categoryLabel}`)
+      const knownRule = CATEGORY_RULES.find(r => r.id === explicitCategory || r.label === explicitCategory)
+      if (knownRule) {
+        intent = knownRule.id
+        categoryLabel = knownRule.label
+        skills = [...knownRule.skills]
+        preferReasoner = Boolean(knownRule.preferReasoner)
+        matchedRules.push(`用户指定分类: ${knownRule.label}`)
+      } else {
+        intent = explicitCategory
+        categoryLabel = explicitCategory
+        matchedRules.push(`用户指定分类: ${categoryLabel}`)
+      }
     } else {
       // Evaluate open category rules
       let matched = false

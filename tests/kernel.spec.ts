@@ -262,7 +262,10 @@ describe('AutoloopKernel', () => {
     expect(ticket?.scheduleMode).toBe('offpeak')
     expect(ticket?.status).toBe('pending')
     expect(executed).toBe(false)
-    expect(scoped.getStateSnapshot().offpeak.open).toBe(false)
+    const queued = scoped.getStateSnapshot({ doneLimit: 1 })
+    expect(queued.offpeak.open).toBe(false)
+    // Active work is returned whole; only finished tickets are paged.
+    expect(queued.active.map(t => t.id)).toContain(res.ticketId)
 
     const ok = await scoped.runTicketNow(res.ticketId)
     expect(ok).toBe(true)
@@ -504,5 +507,32 @@ describe('AutoloopKernel', () => {
     expect(store.getTicket(res.ticketId)?.status).toBe('completed')
     expect(await scoped.rescheduleTicket(res.ticketId, 'immediate')).toBe(false)
     scoped.stop()
+  })
+  it('pages finished tickets while returning active work whole', async () => {
+    kernel.registerExecutor({ name: 'mock', execute: async () => ({ summary: 'ok' }) })
+    for (let index = 0; index < 5; index += 1) {
+      await kernel.ingestEvent({
+        id: `ev-page-${index}`,
+        source: 'manual-ui',
+        threadId: `th-page-${index}`,
+        type: 'task.create',
+        summary: `分页任务 ${index}`,
+      })
+    }
+    await flush()
+
+    const first = kernel.getStateSnapshot({ doneLimit: 2 })
+    expect(first.doneTotal).toBe(5)
+    expect(first.done).toHaveLength(2)
+    expect(first.active).toHaveLength(0)
+
+    const second = kernel.getStateSnapshot({ doneLimit: 2, doneOffset: 2 })
+    expect(second.done).toHaveLength(2)
+    const seen = new Set([...first.done, ...second.done].map(ticket => ticket.id))
+    expect(seen.size).toBe(4)
+
+    // The board may ask for more than the ceiling; the kernel clamps it.
+    expect(kernel.getStateSnapshot({ doneLimit: 10_000 }).done).toHaveLength(5)
+    expect(kernel.getStateSnapshot({ doneLimit: 0 }).done).toHaveLength(1)
   })
 })

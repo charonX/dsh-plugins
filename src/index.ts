@@ -51,7 +51,11 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     : process.cwd()
 
   // 1. Initialize Event-Sourcing Store
-  const store = new JournalStore(journalPath)
+  const store = new JournalStore(journalPath, {
+    completedRetentionDays: config.completedRetentionDays ?? 14,
+    compactAfterLines: config.journalCompactLines ?? 2000,
+    logger: ctx.logger,
+  })
 
   // One window value serves the kernel, the router narrative, and the monitor.
   const offpeak = resolveOffpeakWindow(config)

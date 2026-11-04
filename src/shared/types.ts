@@ -238,8 +238,16 @@ export interface Ticket {
   updatedAt: number
 }
 
+/** Logger sink accepted by the kernel and the journal store. */
+export interface JournalLogger {
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+}
+
 /** Event sourcing journal entry types */
 export type JournalEntry =
+  | { type: 'snapshot'; tickets: Ticket[]; at: number }
   | { type: 'ticket.created'; ticket: Ticket; at: number }
   | { type: 'ticket.input_added'; ticketId: string; input: TicketInput; at: number }
   | { type: 'ticket.status_changed'; ticketId: string; status: TicketStatus; at: number }
@@ -259,7 +267,12 @@ export interface KernelStateSnapshot {
     completedCount: number
     failedCount: number
   }
-  tickets: Ticket[]
+  /** Tickets awaiting or holding execution, newest first. */
+  active: Ticket[]
+  /** Terminal tickets page, newest completion first. */
+  done: Ticket[]
+  /** Terminal tickets in the journal, ignoring the page bound. */
+  doneTotal: number
   maxHops: number
   /** Configured execution window and its state at snapshot time. */
   offpeak: OffpeakView

@@ -66,6 +66,17 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
   res.end(JSON.stringify(data))
 }
 
+/**
+ * Read a nonnegative integer query parameter.
+ * @param raw - Raw query value.
+ * @returns The number, or undefined when absent, malformed, or negative.
+ */
+function readPositiveInt(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === '') return undefined
+  const value = Number(raw)
+  return Number.isInteger(value) && value >= 0 ? value : undefined
+}
+
 function getWorkspacesWithSessions(ctx: Context, fallbackPath: string): WorkspaceItemView[] {
   let list: unknown[] = []
   let archivedSet = new Set<string>()

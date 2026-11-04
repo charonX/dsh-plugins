@@ -1,8 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import type { KernelStateSnapshot, Ticket, ModelCatalogView } from '../shared/types.ts'
 import type { MessageKey } from './locales.ts'
 
 export type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
+
+/** Done-column page step; the host clamps the request to its own maximum. */
+const DONE_PAGE_SIZE = 100
+/** Largest Done page the board asks for. */
+const MAX_DONE_PAGE = 500
 
 export interface WorkspaceSessionView {
   id: string
@@ -615,7 +620,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   const [threadSelection, setThreadSelection] = useState('')
   const [customThreadId, setCustomThreadId] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('')
+  const [customCategory, setCustomCategory] = useState('')
   const [selectedSource, setSelectedSource] = useState('')
+  const [customSource, setCustomSource] = useState('')
   const [selectedPriority, setSelectedPriority] = useState('auto')
   const [selectedSchedule, setSelectedSchedule] = useState('immediate')
   const [scheduledAtInput, setScheduledAtInput] = useState('')
@@ -629,11 +636,14 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   const [summary, setSummary] = useState('')
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
   const [copyNotice, setCopyNotice] = useState(false)
+  // Done-column page: the poll must not drop pages the operator already loaded.
+  const doneLimitRef = useRef(DONE_PAGE_SIZE)
+  const [doneLimit, setDoneLimit] = useState(DONE_PAGE_SIZE)
 
   const fetchSnapshot = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await request<KernelStateSnapshot>('/snapshot')
+      const data = await request<KernelStateSnapshot>(`/snapshot?doneLimit=${doneLimitRef.current}`)
       setSnapshot(data)
     } catch {
       // Ignore network errors in polling
@@ -715,6 +725,20 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       finalThreadId = threadSelection
     }
 
+    let finalCategory: string | undefined = undefined
+    if (selectedCategory === '__custom__') {
+      finalCategory = customCategory.trim() || undefined
+    } else if (selectedCategory && selectedCategory !== 'auto') {
+      finalCategory = selectedCategory.trim()
+    }
+
+    let finalSource: string | undefined = undefined
+    if (selectedSource === '__custom__') {
+      finalSource = customSource.trim() || undefined
+    } else if (selectedSource && selectedSource !== 'auto') {
+      finalSource = selectedSource.trim()
+    }
+
     let modelPayload: { provider?: string; model?: string } | undefined = undefined
     if (selectedModel && selectedModel !== 'default') {
       if (selectedModel.includes('/')) {
@@ -729,12 +753,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       await request('/events', {
         method: 'POST',
         body: JSON.stringify({
-          source: selectedSource.trim() && selectedSource !== 'auto' ? selectedSource.trim() : undefined,
+          source: finalSource,
           summary: summary.trim(),
           threadId: finalThreadId,
           payload: {
             workspacePath: effectiveWorkspacePath,
-            category: selectedCategory.trim() && selectedCategory !== 'auto' ? selectedCategory.trim() : undefined,
+            category: finalCategory,
             priority: selectedPriority !== 'auto' ? selectedPriority : undefined,
             scheduleMode: selectedSchedule,
             scheduledAt,
@@ -747,7 +771,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       setThreadSelection('')
       setCustomThreadId('')
       setSelectedCategory('')
+      setCustomCategory('')
       setSelectedSource('')
+      setCustomSource('')
       setSelectedPriority('auto')
       setSelectedSchedule('immediate')
       setScheduledAtInput('')
@@ -819,15 +845,26 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     }
   }
 
-  const tickets = snapshot?.tickets ?? []
+  const tickets = snapshot?.active ?? []
   const pending = tickets.filter(t => t.status === 'pending')
   const running = tickets.filter(t => t.status === 'running')
   const attention = tickets.filter(t => t.status === 'waiting_attention')
-  const done = tickets.filter(t => t.status === 'completed' || t.status === 'failed' || t.status === 'circuit_broken')
+  const done = snapshot?.done ?? []
+  const doneTotal = snapshot?.doneTotal ?? 0
+
+  /** Fetch the next Done page; the server clamps the request to its maximum. */
+  const loadMoreDone = () => {
+    const next = Math.min(MAX_DONE_PAGE, doneLimitRef.current + DONE_PAGE_SIZE)
+    doneLimitRef.current = next
+    setDoneLimit(next)
+    void fetchSnapshot()
+  }
 
   const currentWorkspace = workspaces.find(w => w.path === selectedWorkspacePath) || workspaces[0]
   const availableSessions = currentWorkspace?.sessions ?? []
-  const activeTicket = selectedTicket ? (tickets.find(t => t.id === selectedTicket.id) ?? selectedTicket) : null
+  const activeTicket = selectedTicket
+    ? ([...tickets, ...done].find(t => t.id === selectedTicket.id) ?? selectedTicket)
+    : null
 
   const workspaceOptions: SelectOption[] = workspaces.map(w => ({
     value: w.path,
@@ -859,8 +896,40 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     },
   ]
 
+  const categoryOptions: SelectOption[] = [
+    { value: '', label: t('categoryAuto'), subLabel: 'Router 智能研判' },
+    { value: 'bugfix', label: t('catBugfix') },
+    { value: 'feature', label: t('catFeature') },
+    { value: 'ui_design', label: t('catUiDesign') },
+    { value: 'ppt', label: t('catPpt') },
+    { value: 'ops', label: t('catOps') },
+    { value: 'operation', label: t('catOperation') },
+    { value: 'refactor', label: t('catRefactor') },
+    { value: 'data', label: t('catData') },
+    { value: 'testing', label: t('catTesting') },
+    { value: 'documentation', label: t('catDocs') },
+    { value: 'review', label: t('catReview') },
+    { value: 'general', label: t('catGeneral') },
+    { value: '__custom__', label: t('customCategoryOption') },
+  ]
+
+  const sourceOptions: SelectOption[] = [
+    { value: '', label: t('sourceAuto'), subLabel: 'Router 自动提取' },
+    { value: '中台创建', label: t('srcManual') },
+    { value: '飞书', label: t('srcFeishu') },
+    { value: 'GitHub', label: t('srcGithub') },
+    { value: 'Sentry', label: t('srcSentry') },
+    { value: 'TAPD', label: t('srcTapd') },
+    { value: '钉钉', label: t('srcDingTalk') },
+    { value: '企业微信', label: t('srcWecom') },
+    { value: 'GitLab', label: t('srcGitlab') },
+    { value: 'Jira', label: t('srcJira') },
+    { value: '定时巡检', label: t('srcCron') },
+    { value: '__custom__', label: t('customSourceOption') },
+  ]
+
   const priorityOptions: SelectOption[] = [
-    { value: 'auto', label: t('priorityAuto'), subLabel: 'Router智能评级' },
+    { value: 'auto', label: t('priorityAuto'), subLabel: 'Router 智能评级' },
     { value: 'p0', label: t('prioP0'), badge: '紧急', badgeColor: { bg: 'rgba(239, 68, 68, 0.1)', color: 'var(--dsw-alias-state-error-primary, #ef4444)' } },
     { value: 'p1', label: t('prioP1'), badge: '高优', badgeColor: { bg: 'rgba(245, 158, 11, 0.12)', color: '#c2410c' } },
     { value: 'p2', label: t('prioP2'), badge: '普通', badgeColor: { bg: 'rgba(37, 99, 235, 0.1)', color: 'var(--dsw-alias-brand-primary, #2563eb)' } },
@@ -888,7 +957,6 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         {
           value: 'default',
           label: `${t('modelDefault')}${modelCatalog?.defaultSelection?.model ? ` (${modelCatalog.defaultSelection.model})` : ''}`,
-          subLabel: '推荐',
         },
       ],
     },
@@ -1265,7 +1333,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     )
   }
 
-  const renderColumn = (title: string, count: number, items: Ticket[], headerColor: string) => (
+  const renderColumn = (
+    title: string,
+    count: number,
+    items: Ticket[],
+    headerColor: string,
+    footer?: React.ReactNode,
+  ) => (
     <div
       style={{
         flex: 1,
@@ -1313,6 +1387,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           items.map(renderCard)
         )}
       </div>
+      {footer}
     </div>
   )
 
@@ -1388,7 +1463,24 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         {renderColumn(t('colPending'), pending.length, pending, COLORS.tertiary)}
         {renderColumn(t('colRunning'), running.length, running, COLORS.brand)}
         {renderColumn(t('colAttention'), attention.length, attention, COLORS.warn)}
-        {renderColumn(t('colDone'), done.length, done, COLORS.success)}
+        {renderColumn(
+          t('colDone'),
+          doneTotal,
+          done,
+          COLORS.success,
+          doneTotal > done.length ? (
+            <button
+              type="button"
+              onClick={() => loadMoreDone()}
+              disabled={doneLimit >= MAX_DONE_PAGE}
+              style={{ ...buttonBaseStyle, marginTop: '10px', width: '100%', justifyContent: 'center' }}
+            >
+              {doneLimit >= MAX_DONE_PAGE
+                ? t('donePageCapped', { shown: done.length, total: doneTotal })
+                : t('doneLoadMore', { shown: done.length, total: doneTotal })}
+            </button>
+          ) : undefined,
+        )}
       </div>
 
       {/* Create Task Modal */}
@@ -1468,7 +1560,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               </div>
 
               {/* Linked Thread / Conversation Selector */}
-              <div style={{ marginBottom: '16px' }}>
+              <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('threadIdLabel')}
                 </label>
@@ -1490,192 +1582,113 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 )}
               </div>
 
-              {/* Category and Source Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: COLORS.text }}>
-                      {t('categoryLabel')}
-                    </label>
-                    <span style={{ fontSize: '11px', color: COLORS.brand }}>Router 智能研判</span>
-                  </div>
+              {/* Category Selector */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('categoryLabel')}
+                </label>
+                <DshSelect
+                  value={selectedCategory}
+                  onChange={val => setSelectedCategory(val)}
+                  options={categoryOptions}
+                />
+                {selectedCategory === '__custom__' && (
                   <input
                     type="text"
-                    value={selectedCategory}
-                    onChange={e => setSelectedCategory(e.target.value)}
-                    placeholder="留空自动研判，或输入自定义分类..."
-                    list="autoloop-categories"
+                    value={customCategory}
+                    onChange={e => setCustomCategory(e.target.value)}
+                    placeholder={t('customCategoryPlaceholder')}
                     className="dsh-autoloop-input"
-                    style={inputStyle}
+                    style={{ ...inputStyle, marginTop: '8px' }}
                   />
-                  <datalist id="autoloop-categories">
-                    <option value="缺陷修复" />
-                    <option value="PPT设计" />
-                    <option value="视觉设计" />
-                    <option value="运营策略" />
-                    <option value="运维部署" />
-                    <option value="功能开发" />
-                    <option value="数据分析" />
-                    <option value="架构治理" />
-                    <option value="测试验证" />
-                    <option value="文档方案" />
-                  </datalist>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
-                    {['缺陷修复', 'PPT设计', '视觉设计', '运营策略', '运维部署', '功能开发'].map(c => (
-                      <button
-                        key={c}
-                        type="button"
-                        onClick={() => setSelectedCategory(c)}
-                        style={{
-                          fontSize: '10px',
-                          padding: '2px 6px',
-                          borderRadius: '999px',
-                          border: `0.5px solid ${selectedCategory === c ? COLORS.brand : COLORS.borderSubtle}`,
-                          background: selectedCategory === c ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
-                          color: selectedCategory === c ? COLORS.brand : COLORS.secondary,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {c}
-                      </button>
-                    ))}
-                    {selectedCategory && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCategory('')}
-                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: COLORS.error, cursor: 'pointer' }}
-                      >
-                        重置
-                      </button>
-                    )}
-                  </div>
-                </div>
+                )}
+              </div>
 
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600, color: COLORS.text }}>
-                      {t('sourceFormLabel')}
-                    </label>
-                    <span style={{ fontSize: '11px', color: COLORS.brand }}>Router 自动提取</span>
-                  </div>
+              {/* Source Selector */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('sourceFormLabel')}
+                </label>
+                <DshSelect
+                  value={selectedSource}
+                  onChange={val => setSelectedSource(val)}
+                  options={sourceOptions}
+                />
+                {selectedSource === '__custom__' && (
                   <input
                     type="text"
-                    value={selectedSource}
-                    onChange={e => setSelectedSource(e.target.value)}
-                    placeholder="留空自动识别渠道，或输入自定义来源..."
-                    list="autoloop-sources"
+                    value={customSource}
+                    onChange={e => setCustomSource(e.target.value)}
+                    placeholder={t('customSourcePlaceholder')}
                     className="dsh-autoloop-input"
-                    style={inputStyle}
+                    style={{ ...inputStyle, marginTop: '8px' }}
                   />
-                  <datalist id="autoloop-sources">
-                    <option value="飞书" />
-                    <option value="GitHub" />
-                    <option value="Sentry" />
-                    <option value="TAPD" />
-                    <option value="Jira" />
-                    <option value="钉钉" />
-                    <option value="企业微信" />
-                    <option value="定时巡检" />
-                    <option value="中台创建" />
-                  </datalist>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
-                    {['飞书', 'GitHub', 'Sentry', 'TAPD', '钉钉', '巡检'].map(s => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => setSelectedSource(s)}
-                        style={{
-                          fontSize: '10px',
-                          padding: '2px 6px',
-                          borderRadius: '999px',
-                          border: `0.5px solid ${selectedSource === s ? COLORS.brand : COLORS.borderSubtle}`,
-                          background: selectedSource === s ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
-                          color: selectedSource === s ? COLORS.brand : COLORS.secondary,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                    {selectedSource && (
-                      <button
-                        type="button"
-                        onClick={() => setSelectedSource('')}
-                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: COLORS.error, cursor: 'pointer' }}
-                      >
-                        重置
-                      </button>
-                    )}
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Priority and Schedule Mode Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
-                    {t('priorityLabel')}
-                  </label>
-                  <DshSelect
-                    value={selectedPriority}
-                    onChange={val => setSelectedPriority(val)}
-                    options={priorityOptions}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
-                    {t('scheduleLabel')}
-                  </label>
-                  <DshSelect
-                    value={selectedSchedule}
-                    onChange={val => setSelectedSchedule(val)}
-                    options={scheduleOptions}
-                  />
-                </div>
+              {/* Priority Selector */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('priorityLabel')}
+                </label>
+                <DshSelect
+                  value={selectedPriority}
+                  onChange={val => setSelectedPriority(val)}
+                  options={priorityOptions}
+                />
               </div>
 
-              {/* Committed instant for the custom-time mode */}
-              {selectedSchedule === 'scheduled' && (
-                <div style={{ marginBottom: '14px' }}>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
-                    {t('scheduleAtLabel')}
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={scheduledAtInput}
-                    onChange={event => setScheduledAtInput(event.target.value)}
-                    style={inputStyle}
-                  />
-                  <div style={{ marginTop: '5px', fontSize: '11px', color: COLORS.tertiary }}>
-                    {t('scheduleAtHint')}
+              {/* Schedule Mode Selector */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('scheduleLabel')}
+                </label>
+                <DshSelect
+                  value={selectedSchedule}
+                  onChange={val => setSelectedSchedule(val)}
+                  options={scheduleOptions}
+                />
+                {selectedSchedule === 'scheduled' && (
+                  <div style={{ marginTop: '8px' }}>
+                    <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: COLORS.secondary, marginBottom: '4px' }}>
+                      {t('scheduleAtLabel')}
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledAtInput}
+                      onChange={event => setScheduledAtInput(event.target.value)}
+                      style={inputStyle}
+                      className="dsh-autoloop-input"
+                    />
+                    <div style={{ marginTop: '4px', fontSize: '11px', color: COLORS.tertiary }}>
+                      {t('scheduleAtHint')}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* Dynamic Model (from DSH) and Permission Settings Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
-                    {t('modelLabel')}
-                  </label>
-                  <DshSelect
-                    value={selectedModel}
-                    onChange={val => setSelectedModel(val)}
-                    groups={modelGroups}
-                  />
-                </div>
+              {/* Model Selector */}
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('modelLabel')}
+                </label>
+                <DshSelect
+                  value={selectedModel}
+                  onChange={val => setSelectedModel(val)}
+                  groups={modelGroups}
+                />
+              </div>
 
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
-                    {t('permissionLabel')}
-                  </label>
-                  <DshSelect
-                    value={selectedPermission}
-                    onChange={val => setSelectedPermission(val)}
-                    options={permissionOptions}
-                  />
-                </div>
+              {/* Permissions Selector */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                  {t('permissionLabel')}
+                </label>
+                <DshSelect
+                  value={selectedPermission}
+                  onChange={val => setSelectedPermission(val)}
+                  options={permissionOptions}
+                />
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>

@@ -24,6 +24,10 @@ export interface Config {
   offpeakEnd?: string
   /** Maximum tickets executing at once; further due tickets wait for a free slot. */
   maxConcurrent?: number
+  /** Days a finished ticket stays in the journal and on the board; defaults to 14. */
+  completedRetentionDays?: number
+  /** Journal line count that triggers a rewrite into one snapshot entry; defaults to 2000. */
+  journalCompactLines?: number
 }
 
 const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/u
@@ -40,4 +44,8 @@ export const Config: Schema<Config> = Schema.object({
     .description('Off-peak window end in host-local HH:mm; equal to the start keeps the window open all day'),
   maxConcurrent: Schema.number().default(2)
     .description('Maximum tickets executing at once; due tickets beyond the ceiling wait for a slot'),
+  completedRetentionDays: Schema.number().default(14)
+    .description('Days a finished ticket stays in the journal and on the board; active tickets are never dropped'),
+  journalCompactLines: Schema.number().default(2000)
+    .description('Journal line count that triggers a compaction into one snapshot entry'),
 })
