@@ -9,18 +9,22 @@
 
 import type {
   IngressEvent,
+  OffpeakWindow,
   PriorityLevel,
   RouterTriage,
   ScheduleMode,
   TaskCategory,
   TicketMandate,
 } from '../shared/types.js'
+import { DEFAULT_OFFPEAK_WINDOW, describeOffpeak, resolveSchedule } from '../shared/schedule.js'
 import { SecurityGuard } from './security.js'
 
 export interface RouterOptions {
   defaultWorkspacePath: string
   flagshipModel?: { provider?: string; model?: string }
   fastModel?: { provider?: string; model?: string }
+  /** Configured quiet-hours window; narration reads it instead of a literal. */
+  offpeak?: OffpeakWindow
 }
 
 export interface DynamicCategoryRule {
@@ -227,25 +231,26 @@ export class IntentRouter {
       }
     }
 
-    // 5. Dynamic Execution Schedule (immediate, nightly, scheduled)
-    let scheduleMode: ScheduleMode = 'immediate'
-    let scheduledAt: number | undefined = undefined
+    // 5. Execution Timing: the configured window plus an optional committed instant.
+    const offpeak = this.options.offpeak ?? DEFAULT_OFFPEAK_WINDOW
+    const offpeakLabel = describeOffpeak(offpeak)
     const explicitSchedule = event.payload?.scheduleMode
-
+    let requestedMode: unknown = explicitSchedule
     if (typeof explicitSchedule === 'string' && explicitSchedule) {
-      scheduleMode = explicitSchedule as ScheduleMode
-      matchedRules.push(`指定执行时机: ${scheduleMode === 'nightly' ? '夜间低峰' : scheduleMode === 'scheduled' ? '定时执行' : '立即执行'}`)
-    } else if (/nightly|夜间|晚上|低峰|闲时|节省token|非工作时间/i.test(text)) {
-      scheduleMode = 'nightly'
-      matchedRules.push('检测到夜间/闲时意图 -> 自动排入夜间低峰队列')
+      matchedRules.push(`指定执行时机: ${explicitSchedule}`)
+    } else if (/offpeak|nightly|夜间|低峰|闲时|节省\s*token|非工作时间/i.test(text)) {
+      requestedMode = 'offpeak'
+      matchedRules.push(`检测到闲时意图 -> 排入配置窗口 ${offpeakLabel}`)
     } else {
-      scheduleMode = 'immediate'
+      requestedMode = 'immediate'
       matchedRules.push('默认调度策略 -> 立即调度执行')
     }
 
-    if (typeof event.payload?.scheduledAt === 'number' && event.payload.scheduledAt > 0) {
-      scheduledAt = event.payload.scheduledAt
-    }
+    // Rejects an unknown mode and a missing or past instant, so no ingress path
+    // can persist a timing the kernel would never honor.
+    const schedule = resolveSchedule(requestedMode, event.payload?.scheduledAt, Date.now())
+    const scheduleMode: ScheduleMode = schedule.mode
+    const scheduledAt = schedule.scheduledAt
 
     // 6. Model Selection
     let model = this.options.fastModel ?? { provider: 'deepseek-official', model: 'deepseek-chat' }
@@ -283,10 +288,10 @@ export class IntentRouter {
     })
 
     // 8. Synthesize Human-Readable Triage Narrative
-    const scheduleDesc = scheduleMode === 'nightly'
-      ? '已排入「夜间低峰时段 (23:00~07:00)」自动批处理（可节省模型费用，支持随时一键唤醒）。'
+    const scheduleDesc = scheduleMode === 'offpeak'
+      ? `已排入配置的执行窗口「${offpeakLabel}」（窗口外保持排队，支持随时一键立即执行）。`
       : scheduleMode === 'scheduled'
-      ? `已设定为「定时执行」(时间: ${scheduledAt ? new Date(scheduledAt).toLocaleString() : '待定'})。`
+      ? `已设定为「定时执行」(时间: ${new Date(scheduledAt ?? Date.now()).toLocaleString()})。`
       : '设定为「立即执行」，创建后自动分发至 Agent 实时运行。'
 
     const reasoning = [

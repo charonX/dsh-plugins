@@ -1,11 +1,35 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { join } from 'node:path'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { AutoloopKernel } from '../src/core/kernel.ts'
 import { IntentRouter } from '../src/core/router.ts'
 import { JournalStore } from '../src/core/store.ts'
-import type { AgentExecutor, AttentionRequest, Ticket } from '../src/shared/types.ts'
+import type { AgentExecutor, AttentionRequest, OffpeakWindow, Ticket } from '../src/shared/types.ts'
+import { ScheduleInputError } from '../src/shared/schedule.ts'
+
+/** Let queued dispatch continuations settle. */
+function flush(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
+
+/** Local `HH:mm` of `now` shifted by whole hours. */
+function clockOffset(now: Date, hours: number): string {
+  const shifted = new Date(now.getTime() + hours * 3_600_000)
+  return `${String(shifted.getHours()).padStart(2, '0')}:${String(shifted.getMinutes()).padStart(2, '0')}`
+}
+
+/** Window that never contains the current instant. */
+function closedWindow(): OffpeakWindow {
+  const now = new Date()
+  return { start: clockOffset(now, 1), end: clockOffset(now, 2) }
+}
+
+/** Window that always contains the current instant. */
+function openWindow(): OffpeakWindow {
+  const now = new Date()
+  return { start: clockOffset(now, -1), end: clockOffset(now, 1) }
+}
 
 describe('AutoloopKernel', () => {
   let tempDir: string
@@ -209,41 +233,276 @@ describe('AutoloopKernel', () => {
     expect(ticket?.triage?.categoryLabel).toBe('PPT设计')
   })
 
-  it('defers nightly tickets and allows manual runTicketNow trigger', async () => {
+  it('defers offpeak tickets outside the configured window and honors a manual run', async () => {
     let executed = false
-    const mockExecutor: AgentExecutor = {
+    const scoped = new AutoloopKernel({
+      store,
+      router,
+      defaultWorkspacePath: '/test/workspace',
+      offpeak: closedWindow(),
+    })
+    scoped.registerExecutor({
       name: 'mock',
       execute: async () => {
         executed = true
-        return { summary: 'Nightly done' }
+        return { summary: 'Off-peak done' }
       },
-    }
-    kernel.registerExecutor(mockExecutor)
+    })
 
-    const res = await kernel.ingestEvent({
-      id: 'ev-nightly',
+    const res = await scoped.ingestEvent({
+      id: 'ev-offpeak',
       source: 'manual-ui',
-      threadId: 'th-nightly-1',
+      threadId: 'th-offpeak-1',
       type: 'task.create',
       summary: '重构老旧缓存模块，夜间低峰执行节省Token',
-      payload: { scheduleMode: 'nightly' },
       receivedAt: Date.now(),
     })
 
     const ticket = store.getTicket(res.ticketId)
-    expect(ticket?.scheduleMode).toBe('nightly')
+    expect(ticket?.scheduleMode).toBe('offpeak')
+    expect(ticket?.status).toBe('pending')
+    expect(executed).toBe(false)
+    expect(scoped.getStateSnapshot().offpeak.open).toBe(false)
 
-    // If current test time is not between 23:00 and 07:00, it stays pending:
-    const hour = new Date().getHours()
-    if (hour >= 7 && hour < 23) {
-      expect(ticket?.status).toBe('pending')
-      expect(executed).toBe(false)
+    const ok = await scoped.runTicketNow(res.ticketId)
+    expect(ok).toBe(true)
+    await flush()
+    expect(executed).toBe(true)
+    expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    // The manual run must not rewrite the ticket's timing plan.
+    expect(store.getTicket(res.ticketId)?.scheduleMode).toBe('offpeak')
 
-      // Manually trigger execution via runTicketNow
-      const ok = await kernel.runTicketNow(res.ticketId)
-      expect(ok).toBe(true)
-      expect(executed).toBe(true)
-      expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    scoped.stop()
+  })
+
+  it('starts offpeak tickets inside the configured window', async () => {
+    const scoped = new AutoloopKernel({
+      store,
+      router,
+      defaultWorkspacePath: '/test/workspace',
+      offpeak: openWindow(),
+    })
+    scoped.registerExecutor({ name: 'mock', execute: async () => ({ summary: 'ran' }) })
+
+    const res = await scoped.ingestEvent({
+      id: 'ev-offpeak-open',
+      source: 'manual-ui',
+      threadId: 'th-offpeak-open',
+      type: 'task.create',
+      summary: '闲时执行的任务',
+      payload: { scheduleMode: 'offpeak' },
+      receivedAt: Date.now(),
+    })
+
+    await flush()
+    expect(scoped.getStateSnapshot().offpeak.open).toBe(true)
+    expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    scoped.stop()
+  })
+
+  it('rejects a scheduled ticket whose instant is missing or past', async () => {
+    await expect(kernel.ingestEvent({
+      id: 'ev-sched-past',
+      source: 'manual-ui',
+      threadId: 'th-sched-past',
+      type: 'task.create',
+      summary: '定时任务',
+      payload: { scheduleMode: 'scheduled', scheduledAt: Date.now() - 60_000 },
+      receivedAt: Date.now(),
+    })).rejects.toThrow(ScheduleInputError)
+
+    await expect(kernel.ingestEvent({
+      id: 'ev-sched-none',
+      source: 'manual-ui',
+      threadId: 'th-sched-none',
+      type: 'task.create',
+      summary: '定时任务',
+      payload: { scheduleMode: 'scheduled' },
+      receivedAt: Date.now(),
+    })).rejects.toThrow(/scheduledAt/u)
+  })
+
+  it('keeps a scheduled ticket pending until its committed instant', async () => {
+    let executed = false
+    kernel.registerExecutor({
+      name: 'mock',
+      execute: async () => {
+        executed = true
+        return { summary: 'ran' }
+      },
+    })
+
+    const at = Date.now() + 3_600_000
+    const res = await kernel.ingestEvent({
+      id: 'ev-sched-future',
+      source: 'manual-ui',
+      threadId: 'th-sched-future',
+      type: 'task.create',
+      summary: '定时任务',
+      payload: { scheduleMode: 'scheduled', scheduledAt: at },
+      receivedAt: Date.now(),
+    })
+
+    const ticket = store.getTicket(res.ticketId)
+    expect(ticket?.scheduleMode).toBe('scheduled')
+    expect(ticket?.scheduledAt).toBe(at)
+    expect(ticket?.status).toBe('pending')
+    expect(executed).toBe(false)
+
+    // A manual run bypasses the wait without clearing the committed instant.
+    await kernel.runTicketNow(res.ticketId)
+    await flush()
+    expect(executed).toBe(true)
+    expect(store.getTicket(res.ticketId)?.scheduledAt).toBe(at)
+  })
+
+  it('holds tickets beyond the concurrency ceiling until a slot frees up', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const started: string[] = []
+    const scoped = new AutoloopKernel({
+      store,
+      router,
+      defaultWorkspacePath: '/test/workspace',
+      maxConcurrent: 1,
+    })
+    scoped.registerExecutor({
+      name: 'mock',
+      execute: async (ticket) => {
+        started.push(ticket.id)
+        await gate
+        return { summary: 'done' }
+      },
+    })
+
+    const first = await scoped.ingestEvent({
+      id: 'ev-c1', source: 'manual-ui', threadId: 'th-c1', type: 'task.create', summary: '第一个任务',
+    })
+    const second = await scoped.ingestEvent({
+      id: 'ev-c2', source: 'manual-ui', threadId: 'th-c2', type: 'task.create', summary: '第二个任务',
+    })
+    await flush()
+
+    expect(started).toEqual([first.ticketId])
+    expect(store.getTicket(first.ticketId)?.status).toBe('running')
+    expect(store.getTicket(second.ticketId)?.status).toBe('pending')
+    expect(scoped.getStateSnapshot().limits).toEqual({ maxConcurrent: 1, runningCount: 1 })
+
+    release()
+    await flush()
+    expect(store.getTicket(first.ticketId)?.status).toBe('completed')
+
+    // The next admission sweep hands the free slot to the older pending ticket.
+    const third = await scoped.ingestEvent({
+      id: 'ev-c3', source: 'manual-ui', threadId: 'th-c3', type: 'task.create', summary: '第三个任务',
+    })
+    await flush()
+    expect(store.getTicket(second.ticketId)?.status).toBe('completed')
+    expect(store.getTicket(third.ticketId)?.status).toBe('pending')
+    scoped.stop()
+  })
+
+  it('requeues tickets left running by a previous run', async () => {
+    const orphan: Ticket = {
+      id: 'tk-orphan',
+      threadId: 'th-orphan',
+      title: 'Interrupted task',
+      source: 'manual-ui',
+      status: 'running',
+      priority: 'p1',
+      scheduleMode: 'immediate',
+      mandate: {
+        intent: 'general',
+        workspacePath: '/test/workspace',
+        model: { model: 'deepseek-chat' },
+        skills: [],
+        instruction: 'Finish the interrupted work',
+      },
+      workspace: { sourceRoot: '/test/workspace' },
+      assignment: { assignmentId: 'as-orphan', startedAt: 1000 },
+      inputs: [],
+      hopCount: 0,
+      createdAt: 1000,
+      updatedAt: 1000,
     }
+    writeFileSync(
+      journalPath,
+      `${JSON.stringify({ type: 'ticket.created', ticket: orphan, at: 1000 })}\n`
+      + `${JSON.stringify({ type: 'ticket.assignment_started', ticketId: orphan.id, assignment: orphan.assignment, at: 1100 })}\n`,
+      'utf8',
+    )
+
+    const recoveredStore = new JournalStore(journalPath)
+    const scoped = new AutoloopKernel({ store: recoveredStore, router, defaultWorkspacePath: '/test/workspace' })
+    scoped.registerExecutor({ name: 'mock', execute: async () => ({ summary: 'resumed' }) })
+    await flush()
+
+    expect(recoveredStore.getTicket(orphan.id)?.status).toBe('completed')
+    expect(recoveredStore.getTicket(orphan.id)?.assignment?.resultSummary).toBe('resumed')
+    scoped.stop()
+  })
+
+  it('retries a failed ticket', async () => {
+    let succeed = false
+    kernel.registerExecutor({
+      name: 'mock',
+      execute: async () => (succeed ? { summary: 'recovered' } : { error: 'boom' }),
+    })
+
+    const res = await kernel.ingestEvent({
+      id: 'ev-fail', source: 'manual-ui', threadId: 'th-fail', type: 'task.create', summary: '会失败的改造',
+    })
+    await flush()
+    expect(store.getTicket(res.ticketId)?.status).toBe('failed')
+
+    expect(await kernel.retryTicket(res.ticketId)).toBe(true)
+    await flush()
+    expect(store.getTicket(res.ticketId)?.status).toBe('failed')
+
+    succeed = true
+    expect(await kernel.retryTicket(res.ticketId)).toBe(true)
+    await flush()
+    expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    expect(store.getTicket(res.ticketId)?.assignment?.resultSummary).toBe('recovered')
+
+    // Completed tickets are not retryable.
+    expect(await kernel.retryTicket(res.ticketId)).toBe(false)
+  })
+
+  it('publishes the configured window and dispatch ceiling', () => {
+    const snapshot = kernel.getStateSnapshot()
+    expect(snapshot.offpeak.start).toBe('23:00')
+    expect(snapshot.offpeak.end).toBe('07:00')
+    expect(snapshot.limits.maxConcurrent).toBe(2)
+  })
+  it('reschedules a queued ticket and refuses a finished one', async () => {
+    const scoped = new AutoloopKernel({
+      store,
+      router,
+      defaultWorkspacePath: '/test/workspace',
+      offpeak: closedWindow(),
+    })
+    const res = await scoped.ingestEvent({
+      id: 'ev-reschedule', source: 'manual-ui', threadId: 'th-reschedule', type: 'task.create', summary: '调整执行时机',
+    })
+    expect(store.getTicket(res.ticketId)?.status).toBe('pending')
+
+    const at = Date.now() + 7_200_000
+    expect(await scoped.rescheduleTicket(res.ticketId, 'scheduled', at)).toBe(true)
+    const updated = store.getTicket(res.ticketId)
+    expect(updated?.scheduleMode).toBe('scheduled')
+    expect(updated?.scheduledAt).toBe(at)
+    expect(updated?.status).toBe('pending')
+
+    await expect(scoped.rescheduleTicket(res.ticketId, 'scheduled', Date.now() - 1_000))
+      .rejects.toThrow(ScheduleInputError)
+
+    // A finished ticket owns no future timing to change.
+    scoped.registerExecutor({ name: 'mock', execute: async () => ({ summary: 'ran' }) })
+    await scoped.runTicketNow(res.ticketId)
+    await flush()
+    expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    expect(await scoped.rescheduleTicket(res.ticketId, 'immediate')).toBe(false)
+    scoped.stop()
   })
 })

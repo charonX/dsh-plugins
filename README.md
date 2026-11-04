@@ -61,7 +61,49 @@ Add to your DeepSeek Harness profile's `cordis.patch.yml`:
       enabled: true
       maxHops: 8
       autoWorktree: false
+      offpeakStart: '22:30'
+      offpeakEnd: '06:30'
+      maxConcurrent: 2
 ```
+
+| Config | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Mount the kernel at all. |
+| `maxHops` | `8` | Recursive agent-to-agent chain ceiling; reaching it stores the ticket as `circuit_broken`. |
+| `autoWorktree` | `false` | Allocate an isolated Git worktree per ticket through `ctx.worktrees`. |
+| `journalPath` | `<DSH_HOME>/autoloop/journal.jsonl` | Append-only event journal. |
+| `defaultWorkspacePath` | `process.cwd()` | Fallback workspace for tickets that name none. |
+| `offpeakStart` / `offpeakEnd` | `23:00` / `07:00` | Host-local `HH:mm` quiet-hours window. Equal bounds keep it open all day. |
+| `maxConcurrent` | `2` | Tickets executing at once; further due tickets wait for a slot. |
+
+## Execution Timing
+
+A ticket carries exactly one timing decision, and every surface reads the same
+values: the kernel decides admission with them, the router narrates with them,
+`GET /api/autoloop/snapshot` publishes them, and the Kanban renders them.
+
+| Mode | Start condition |
+|---|---|
+| `immediate` | The next admission sweep, subject to `maxConcurrent`. |
+| `offpeak` | Inside `offpeakStart–offpeakEnd` **and** a free slot. Outside the window it stays queued; the board shows when the window next opens. |
+| `scheduled` | At or after its committed `scheduledAt` (epoch ms) **and** a free slot. A missing or past instant is rejected with HTTP 400 instead of degrading into an immediate run. |
+
+`nightly` remains accepted as an **input** alias of `offpeak` for external callers;
+journals written before the window became configurable replay as `offpeak`, and the
+alias is never stored. Admission is swept every 20s; the timer never keeps the host
+process alive.
+
+## Human Intervention
+
+- `POST /events` — create a ticket (`payload.scheduleMode`, `payload.scheduledAt`).
+- `GET /snapshot` — board state plus the configured window (`offpeak`) and dispatch ceiling (`limits`).
+- `POST /tickets/run-now` — start a pending, failed, or circuit-broken ticket immediately without rewriting its timing plan.
+- `POST /tickets/retry` — requeue one failed or circuit-broken ticket (HTTP 409 when it is not retryable).
+- `POST /tickets/schedule` — change a queued ticket's mode/instant (`scheduleMode`, `scheduledAt`); HTTP 400 for an unusable timing, 409 for a ticket that is not queued.
+- `POST /attention/resolve` — answer a pending Attention and resume the agent.
+
+A ticket left `running` by a crash is requeued when the executor mounts, so an
+interrupted run cannot occupy a slot forever.
 
 ## Plugin Ports & Integration
 

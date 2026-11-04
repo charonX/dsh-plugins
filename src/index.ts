@@ -14,12 +14,14 @@ import { AutoloopKernel } from './core/kernel.js'
 import { IntentRouter } from './core/router.js'
 import { JournalStore } from './core/store.js'
 import { createRequestHandler, DEFAULT_ROUTE_PREFIX } from './http/routes.js'
+import { resolveOffpeakWindow } from './shared/schedule.js'
 
 export { Config } from './config.js'
 export { AutoloopKernel } from './core/kernel.js'
 export { JournalStore } from './core/store.js'
 export { IntentRouter } from './core/router.js'
 export * from './shared/types.js'
+export * from './shared/schedule.js'
 
 export const name = 'autoloop'
 export const inject = []
@@ -51,9 +53,14 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   // 1. Initialize Event-Sourcing Store
   const store = new JournalStore(journalPath)
 
+  // One window value serves the kernel, the router narrative, and the monitor.
+  const offpeak = resolveOffpeakWindow(config)
+  const maxConcurrent = config.maxConcurrent ?? 2
+
   // 2. Initialize Intent Router
   const router = new IntentRouter({
     defaultWorkspacePath,
+    offpeak,
   })
 
   // 3. Initialize Kernel
@@ -62,6 +69,8 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     router,
     maxHops: config.maxHops ?? 8,
     defaultWorkspacePath,
+    offpeak,
+    maxConcurrent,
     logger: ctx.logger,
   })
 
@@ -93,5 +102,8 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
 
   // Teardown
   ctx.effect(() => () => kernel.stop(), 'autoloop: kernel shutdown')
-  ctx.logger.info(`[Autoloop] Kernel ready. Loaded ${store.getAllTickets().length} historical tickets.`)
+  ctx.logger.info(
+    `[Autoloop] Kernel ready. Loaded ${store.getAllTickets().length} historical tickets. `
+    + `Off-peak window ${offpeak.start}-${offpeak.end}, max ${maxConcurrent} concurrent.`,
+  )
 }

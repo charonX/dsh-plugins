@@ -1,6 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterAll } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createRequestHandler } from '../src/http/routes.js'
 import { AutoloopKernel } from '../src/core/kernel.js'
 import { JournalStore } from '../src/core/store.js'
@@ -32,9 +35,16 @@ function createMockReqRes(method: string, url: string, body?: unknown) {
 
 describe('HTTP routes', () => {
   const defaultWorkspacePath = '/mock/workspace'
-  const store = new JournalStore(':memory:')
+  // A temp journal keeps the suite from writing a stray ':memory:' file into the repo.
+  const tempDir = mkdtempSync(join(tmpdir(), 'autoloop-routes-test-'))
+  const store = new JournalStore(join(tempDir, 'journal.jsonl'))
   const router = new IntentRouter({ defaultWorkspacePath })
   const kernel = new AutoloopKernel({ store, router, defaultWorkspacePath })
+
+  afterAll(() => {
+    kernel.stop()
+    rmSync(tempDir, { recursive: true, force: true })
+  })
 
   it('handles GET /api/autoloop/workspaces with fallback when registry is empty', async () => {
     const mockCtx = {
@@ -173,5 +183,85 @@ describe('HTTP routes', () => {
     expect(json.defaultSelection.model).toBe('custom-model')
     expect(json.groups[0].name).toBe('Custom Provider')
     expect(json.groups[0].models[0].badge).toBe('Pro')
+  })
+  it('rejects an unhonorable schedule with 400 instead of running immediately', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({ prefix: '/api/autoloop', kernel, ctx: mockCtx, defaultWorkspacePath })
+
+    const { req, res, resState } = createMockReqRes('POST', '/api/autoloop/events')
+    const promise = handler(req, res)
+    req.emit('data', Buffer.from(JSON.stringify({
+      summary: '定时任务',
+      payload: { scheduleMode: 'scheduled' },
+    })))
+    req.emit('end')
+    await promise
+
+    expect(resState.statusCode).toBe(400)
+    const json = JSON.parse(resState.body)
+    expect(json.code).toBe('invalid_schedule')
+    expect(json.error).toContain('scheduledAt')
+  })
+
+  it('exposes the configured window through the snapshot', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({ prefix: '/api/autoloop', kernel, ctx: mockCtx, defaultWorkspacePath })
+
+    const { req, res, resState } = createMockReqRes('GET', '/api/autoloop/snapshot')
+    const promise = handler(req, res)
+    req.emit('end')
+    await promise
+
+    const json = JSON.parse(resState.body)
+    expect(json.offpeak.start).toBe('23:00')
+    expect(json.offpeak.end).toBe('07:00')
+    expect(json.limits.maxConcurrent).toBe(2)
+  })
+
+  it('answers 409 when retrying a ticket that is not retryable', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({ prefix: '/api/autoloop', kernel, ctx: mockCtx, defaultWorkspacePath })
+
+    const { req, res, resState } = createMockReqRes('POST', '/api/autoloop/tickets/retry')
+    const promise = handler(req, res)
+    req.emit('data', Buffer.from(JSON.stringify({ ticketId: 'does-not-exist' })))
+    req.emit('end')
+    await promise
+
+    expect(resState.statusCode).toBe(409)
+  })
+  it('rejects an unhonorable reschedule with 400 and an unknown ticket with 409', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({ prefix: '/api/autoloop', kernel, ctx: mockCtx, defaultWorkspacePath })
+
+    // No executor on this kernel, so the created ticket stays queued.
+    const create = createMockReqRes('POST', '/api/autoloop/events')
+    const createPromise = handler(create.req, create.res)
+    create.req.emit('data', Buffer.from(JSON.stringify({
+      threadId: 'th-reschedule-route',
+      summary: '调整执行时机',
+    })))
+    create.req.emit('end')
+    await createPromise
+    expect(create.resState.statusCode).toBe(201)
+    const created = JSON.parse(create.resState.body)
+
+    const bad = createMockReqRes('POST', '/api/autoloop/tickets/schedule')
+    const badPromise = handler(bad.req, bad.res)
+    bad.req.emit('data', Buffer.from(JSON.stringify({
+      ticketId: created.ticketId,
+      scheduleMode: 'scheduled',
+    })))
+    bad.req.emit('end')
+    await badPromise
+    expect(bad.resState.statusCode).toBe(400)
+    expect(JSON.parse(bad.resState.body).code).toBe('invalid_schedule')
+
+    const missing = createMockReqRes('POST', '/api/autoloop/tickets/schedule')
+    const missingPromise = handler(missing.req, missing.res)
+    missing.req.emit('data', Buffer.from(JSON.stringify({ ticketId: 'nope', scheduleMode: 'immediate' })))
+    missing.req.emit('end')
+    await missingPromise
+    expect(missing.resState.statusCode).toBe(409)
   })
 })

@@ -7,7 +7,19 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { JournalEntry, Ticket } from '../shared/types.js'
+import type { JournalEntry, ScheduleMode, Ticket } from '../shared/types.js'
+
+/**
+ * Read one stored schedule mode, folding the retired `nightly` spelling into
+ * `offpeak`. Journals written before the window became configurable keep
+ * replaying; the alias never leaves this decoder.
+ * @param mode - Mode read from the journal.
+ * @returns The current spelling.
+ */
+function migrateScheduleMode(mode: ScheduleMode | 'nightly' | undefined): ScheduleMode {
+  if (mode === 'nightly') return 'offpeak'
+  return mode ?? 'immediate'
+}
 
 export class JournalStore {
   private readonly tickets = new Map<string, Ticket>()
@@ -75,7 +87,7 @@ export class JournalStore {
       case 'ticket.created': {
         const cloned = structuredClone(entry.ticket)
         if (!cloned.priority) cloned.priority = 'p2'
-        if (!cloned.scheduleMode) cloned.scheduleMode = 'immediate'
+        cloned.scheduleMode = migrateScheduleMode(cloned.scheduleMode)
         this.tickets.set(cloned.id, cloned)
         break
       }
@@ -98,7 +110,9 @@ export class JournalStore {
       case 'ticket.schedule_changed': {
         const ticket = this.tickets.get(entry.ticketId)
         if (ticket) {
-          ticket.scheduleMode = entry.scheduleMode
+          ticket.scheduleMode = migrateScheduleMode(entry.scheduleMode)
+          if (entry.scheduledAt === null) delete ticket.scheduledAt
+          else if (typeof entry.scheduledAt === 'number') ticket.scheduledAt = entry.scheduledAt
           if (entry.priority) ticket.priority = entry.priority
           ticket.updatedAt = entry.at
         }

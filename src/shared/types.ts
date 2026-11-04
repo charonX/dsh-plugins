@@ -42,7 +42,25 @@ export type TicketStatus =
 export type PriorityLevel = 'p0' | 'p1' | 'p2' | 'p3'
 
 /** Task Execution Schedule Mode */
-export type ScheduleMode = 'immediate' | 'nightly' | 'scheduled'
+export type ScheduleMode = 'immediate' | 'offpeak' | 'scheduled'
+
+/** Host-local wall-clock window in which `offpeak` tickets may start. */
+export interface OffpeakWindow {
+  /** Inclusive start, canonical `HH:mm`. */
+  readonly start: string
+  /** Exclusive end, canonical `HH:mm`; equal to `start` keeps the window open all day. */
+  readonly end: string
+}
+
+/** Window share published to the monitor. */
+export interface OffpeakView extends OffpeakWindow {
+  /** Whether the window admits tickets right now. */
+  readonly open: boolean
+  /** Whether the window never closes. */
+  readonly allDay: boolean
+  /** Local `HH:mm` when the window next opens; absent while open. */
+  readonly opensAt?: string
+}
 
 /** Task Category / Intent */
 export type TaskCategory =
@@ -225,7 +243,7 @@ export type JournalEntry =
   | { type: 'ticket.created'; ticket: Ticket; at: number }
   | { type: 'ticket.input_added'; ticketId: string; input: TicketInput; at: number }
   | { type: 'ticket.status_changed'; ticketId: string; status: TicketStatus; at: number }
-  | { type: 'ticket.schedule_changed'; ticketId: string; scheduleMode: ScheduleMode; priority?: PriorityLevel; at: number }
+  | { type: 'ticket.schedule_changed'; ticketId: string; scheduleMode: ScheduleMode; scheduledAt?: number | null; priority?: PriorityLevel; at: number }
   | { type: 'ticket.assignment_started'; ticketId: string; assignment: TicketAssignment; at: number }
   | { type: 'ticket.assignment_ended'; ticketId: string; resultSummary?: string; error?: string; sessionId?: string; at: number }
   | { type: 'ticket.attention_raised'; ticketId: string; attention: AttentionRequest; at: number }
@@ -243,6 +261,15 @@ export interface KernelStateSnapshot {
   }
   tickets: Ticket[]
   maxHops: number
+  /** Configured execution window and its state at snapshot time. */
+  offpeak: OffpeakView
+  /** Dispatch ceiling and current occupancy. */
+  limits: {
+    /** Configured maximum tickets executing at once. */
+    maxConcurrent: number
+    /** Tickets currently executing. */
+    runningCount: number
+  }
 }
 
 /** Approval channel port */

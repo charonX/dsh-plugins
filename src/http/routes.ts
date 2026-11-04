@@ -10,6 +10,7 @@ import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AutoloopKernel } from '../core/kernel.js'
 import type { IngressEvent, ModelCatalogView, ModelGroupView, ModelEntryView } from '../shared/types.js'
+import { ScheduleInputError } from '../shared/schedule.js'
 
 export type { ModelCatalogView, ModelGroupView, ModelEntryView } from '../shared/types.js'
 export const DEFAULT_ROUTE_PREFIX = '/api/autoloop'
@@ -309,6 +310,40 @@ export function createRequestHandler(deps: HttpDeps): (req: IncomingMessage, res
         return
       }
 
+      // POST /api/autoloop/tickets/schedule
+      if (req.method === 'POST' && subpath === '/tickets/schedule') {
+        const body = (await readJsonBody(req)) as { ticketId?: string; scheduleMode?: unknown; scheduledAt?: unknown }
+        if (!body.ticketId) {
+          sendJson(res, 400, { error: 'Field "ticketId" is required' })
+          return
+        }
+
+        const ok = await kernel.rescheduleTicket(body.ticketId, body.scheduleMode, body.scheduledAt)
+        if (!ok) {
+          sendJson(res, 409, { error: 'Ticket is missing or is not queued' })
+          return
+        }
+        sendJson(res, 200, { ok: true, ticketId: body.ticketId })
+        return
+      }
+
+      // POST /api/autoloop/tickets/retry
+      if (req.method === 'POST' && subpath === '/tickets/retry') {
+        const body = (await readJsonBody(req)) as { ticketId?: string }
+        if (!body.ticketId) {
+          sendJson(res, 400, { error: 'Field "ticketId" is required' })
+          return
+        }
+
+        const ok = await kernel.retryTicket(body.ticketId)
+        if (!ok) {
+          sendJson(res, 409, { error: 'Ticket is missing or is not in a retryable state' })
+          return
+        }
+        sendJson(res, 200, { ok: true, ticketId: body.ticketId })
+        return
+      }
+
       // POST /api/autoloop/attention/resolve
       if (req.method === 'POST' && subpath === '/attention/resolve') {
         const body = (await readJsonBody(req)) as { ticketId?: string; answer?: string }
@@ -337,6 +372,10 @@ export function createRequestHandler(deps: HttpDeps): (req: IncomingMessage, res
 
       sendJson(res, 404, { error: `Endpoint ${req.method ?? 'GET'} ${subpath} not found` })
     } catch (err: unknown) {
+      if (err instanceof ScheduleInputError) {
+        sendJson(res, 400, { error: err.message, code: err.code })
+        return
+      }
       const msg = err instanceof Error ? err.message : String(err)
       sendJson(res, 500, { error: msg })
     }

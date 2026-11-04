@@ -574,6 +574,18 @@ export function apiPath(path: string): string {
   return new URL(target.replace(/^\/+/u, ''), document.baseURI).pathname
 }
 
+/**
+ * Format one instant for a `datetime-local` input in the operator's own zone.
+ * @param ms - Epoch milliseconds.
+ * @returns `YYYY-MM-DDTHH:mm`, or an empty string when unset.
+ */
+function toDatetimeLocal(ms: number | undefined): string {
+  if (ms === undefined) return ''
+  const date = new Date(ms)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiPath(path), {
     ...init,
@@ -590,6 +602,11 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPageProps): React.ReactElement {
   const [snapshot, setSnapshot] = useState<KernelStateSnapshot | null>(null)
+  /** Execution window published by the host; the only source of these clocks. */
+  const offpeak = snapshot?.offpeak
+  const offpeakHint = offpeak
+    ? (offpeak.allDay ? t('offpeakAllDay') : t('scheduleOffpeakHint', { start: offpeak.start, end: offpeak.end }))
+    : t('scheduleOffpeakPending')
   const [workspaces, setWorkspaces] = useState<WorkspaceItemView[]>(initialWorkspaces ?? [])
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState(
     initialWorkspaces?.[0]?.path ?? ''
@@ -601,6 +618,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   const [selectedSource, setSelectedSource] = useState('')
   const [selectedPriority, setSelectedPriority] = useState('auto')
   const [selectedSchedule, setSelectedSchedule] = useState('immediate')
+  const [scheduledAtInput, setScheduledAtInput] = useState('')
+  const [rescheduleMode, setRescheduleMode] = useState('immediate')
+  const [rescheduleAt, setRescheduleAt] = useState('')
   const [selectedModel, setSelectedModel] = useState('default')
   const [selectedPermission, setSelectedPermission] = useState('workspace-write')
   const [runningNowId, setRunningNowId] = useState<string | null>(null)
@@ -678,6 +698,16 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     e.preventDefault()
     if (!summary.trim() || !effectiveWorkspacePath) return
 
+    let scheduledAt: number | undefined
+    if (selectedSchedule === 'scheduled') {
+      const at = new Date(scheduledAtInput).getTime()
+      if (!Number.isFinite(at) || at <= Date.now()) {
+        alert(t('scheduleAtRequired'))
+        return
+      }
+      scheduledAt = at
+    }
+
     let finalThreadId: string | undefined = undefined
     if (threadSelection === '__custom__') {
       finalThreadId = customThreadId.trim() || undefined
@@ -707,6 +737,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             category: selectedCategory.trim() && selectedCategory !== 'auto' ? selectedCategory.trim() : undefined,
             priority: selectedPriority !== 'auto' ? selectedPriority : undefined,
             scheduleMode: selectedSchedule,
+            scheduledAt,
             model: modelPayload,
             permissionPreset: selectedPermission,
           },
@@ -719,12 +750,56 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       setSelectedSource('')
       setSelectedPriority('auto')
       setSelectedSchedule('immediate')
+      setScheduledAtInput('')
       setSelectedModel('default')
       setSelectedPermission('workspace-write')
       setDialogOpen(false)
       await fetchSnapshot()
     } catch (err) {
       alert(`Error creating task: ${String(err)}`)
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedTicket) return
+    setRescheduleMode(selectedTicket.scheduleMode)
+    setRescheduleAt(toDatetimeLocal(selectedTicket.scheduledAt))
+  }, [selectedTicket?.id, selectedTicket?.scheduleMode, selectedTicket?.scheduledAt])
+
+  const handleReschedule = async (ticketId: string) => {
+    let scheduledAt: number | undefined
+    if (rescheduleMode === 'scheduled') {
+      const at = new Date(rescheduleAt).getTime()
+      if (!Number.isFinite(at) || at <= Date.now()) {
+        alert(t('scheduleAtRequired'))
+        return
+      }
+      scheduledAt = at
+    }
+    try {
+      await request('/tickets/schedule', {
+        method: 'POST',
+        body: JSON.stringify({ ticketId, scheduleMode: rescheduleMode, scheduledAt }),
+      })
+      await fetchSnapshot()
+    } catch (err) {
+      alert(`Error rescheduling task: ${String(err)}`)
+    }
+  }
+
+  const handleRetry = async (ticketId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    try {
+      setRunningNowId(ticketId)
+      await request('/tickets/retry', {
+        method: 'POST',
+        body: JSON.stringify({ ticketId }),
+      })
+      await fetchSnapshot()
+    } catch (err) {
+      alert(`Error retrying task: ${String(err)}`)
+    } finally {
+      setRunningNowId(null)
     }
   }
 
@@ -793,10 +868,18 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   ]
 
   const scheduleOptions: SelectOption[] = [
-    { value: 'immediate', label: t('scheduleImmediate'), subLabel: '研判通过后立即调度执行' },
-    { value: 'nightly', label: t('scheduleNightly'), subLabel: '闲时排队执行 (00:00 - 08:00)' },
-    { value: 'scheduled', label: t('scheduleScheduled'), subLabel: '按设定定时策略启动' },
+    { value: 'immediate', label: t('scheduleImmediate'), subLabel: t('scheduleImmediateHint') },
+    {
+      value: 'offpeak',
+      label: t('scheduleOffpeak'),
+      subLabel: offpeakHint,
+    },
+    { value: 'scheduled', label: t('scheduleScheduled'), subLabel: t('scheduleScheduledHint') },
   ]
+
+  /** Short label for one stored schedule mode. */
+  const scheduleLabel = (mode: string): string =>
+    mode === 'offpeak' ? t('scheduleOffpeak') : mode === 'scheduled' ? t('scheduleScheduled') : t('scheduleImmediate')
 
   const modelGroups: SelectGroup[] = [
     {
@@ -833,7 +916,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     const cat = getCategoryMeta(ticket.mandate.intent)
     const prio = getPriorityMeta(ticket.priority)
     const src = getSourceMeta(ticket.source)
-    const isNightlyPending = ticket.status === 'pending' && ticket.scheduleMode === 'nightly'
+    const offpeakQueued = ticket.status === 'pending' && ticket.scheduleMode === 'offpeak'
+    const scheduledWaiting = ticket.status === 'pending' && ticket.scheduleMode === 'scheduled'
+    const isRetryable = ticket.status === 'failed' || ticket.status === 'circuit_broken'
 
     return (
       <div
@@ -956,21 +1041,21 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             )
           })}
 
-          {ticket.scheduleMode === 'nightly' && (
+          {ticket.scheduleMode === 'offpeak' && (
             <span
               style={{
                 fontSize: '11px',
                 padding: '1px 6px',
                 borderRadius: 'var(--dsw-radius-xs, 4px)',
-                background: isNightlyPending ? 'rgba(245, 158, 11, 0.12)' : 'rgba(107, 114, 128, 0.08)',
-                color: isNightlyPending ? '#b45309' : COLORS.secondary,
-                border: isNightlyPending ? '1px solid rgba(245, 158, 11, 0.25)' : `1px solid ${COLORS.borderSubtle}`,
+                background: offpeakQueued ? COLORS.surfaceAlt : COLORS.surface,
+                color: offpeakQueued ? COLORS.warn : COLORS.secondary,
+                border: offpeakQueued ? `1px solid ${COLORS.warn}` : `1px solid ${COLORS.borderSubtle}`,
                 fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
               }}
             >
-              {isNightlyPending ? '夜间排队' : '夜间执行'}
+              {offpeakQueued ? t('offpeakQueued') : t('offpeakRan')}
             </span>
           )}
 
@@ -986,7 +1071,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 fontWeight: 600,
               }}
             >
-              定时
+              {ticket.scheduledAt ? t('scheduleAtBadge', { time: new Date(ticket.scheduledAt).toLocaleString() }) : t('scheduleScheduled')}
             </span>
           )}
 
@@ -1082,7 +1167,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {isNightlyPending && (
+            {(offpeakQueued || scheduledWaiting) && (
               <button
                 type="button"
                 disabled={runningNowId === ticket.id}
@@ -1099,6 +1184,25 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 }}
               >
                 {runningNowId === ticket.id ? t('runningNow') : t('runNow')}
+              </button>
+            )}
+            {isRetryable && (
+              <button
+                type="button"
+                disabled={runningNowId === ticket.id}
+                onClick={e => void handleRetry(ticket.id, e)}
+                style={{
+                  fontSize: '11px',
+                  padding: '3px 8px',
+                  borderRadius: 'var(--dsw-radius-xs, 4px)',
+                  border: `1px solid ${COLORS.borderSubtle}`,
+                  background: COLORS.surfaceAlt,
+                  color: COLORS.text,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {runningNowId === ticket.id ? t('retrying') : t('retry')}
               </button>
             )}
             <span
@@ -1531,6 +1635,24 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 </div>
               </div>
 
+              {/* Committed instant for the custom-time mode */}
+              {selectedSchedule === 'scheduled' && (
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
+                    {t('scheduleAtLabel')}
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={scheduledAtInput}
+                    onChange={event => setScheduledAtInput(event.target.value)}
+                    style={inputStyle}
+                  />
+                  <div style={{ marginTop: '5px', fontSize: '11px', color: COLORS.tertiary }}>
+                    {t('scheduleAtHint')}
+                  </div>
+                </div>
+              )}
+
               {/* Dynamic Model (from DSH) and Permission Settings Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
                 <div>
@@ -1679,19 +1801,19 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   >
                     {getSourceMeta(activeTicket.source).label}
                   </span>
-                  {activeTicket.scheduleMode === 'nightly' && (
+                  {activeTicket.scheduleMode === 'offpeak' && (
                     <span
                       style={{
                         fontSize: '11px',
                         padding: '2px 8px',
                         borderRadius: 'var(--dsw-radius-xs, 4px)',
-                        background: 'rgba(245, 158, 11, 0.12)',
-                        color: '#b45309',
-                        border: '1px solid rgba(245, 158, 11, 0.25)',
+                        background: COLORS.surfaceAlt,
+                        color: COLORS.warn,
+                        border: `1px solid ${COLORS.warn}`,
                         fontWeight: 600,
                       }}
                     >
-                      夜间低峰
+                      {t('offpeakBadge', { start: offpeak?.start ?? '', end: offpeak?.end ?? '' })}
                     </span>
                   )}
                 </div>
@@ -1718,12 +1840,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
             {/* Scrollable Body */}
             <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
-              {/* Nightly pending banner with run now trigger */}
-              {activeTicket.status === 'pending' && activeTicket.scheduleMode === 'nightly' && (
+              {/* Off-peak wait banner with a manual run trigger */}
+              {activeTicket.status === 'pending' && activeTicket.scheduleMode === 'offpeak' && (
                 <div
                   style={{
-                    background: 'rgba(245, 158, 11, 0.08)',
-                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    background: COLORS.surfaceAlt,
+                    border: `1px solid ${COLORS.warn}`,
                     borderRadius: 'var(--dsw-radius-md, 8px)',
                     padding: '12px 16px',
                     marginBottom: '16px',
@@ -1733,8 +1855,14 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     gap: '12px',
                   }}
                 >
-                  <div style={{ fontSize: '12px', color: '#b45309', lineHeight: '1.5' }}>
-                    {t('nightlyNotice')}
+                  <div style={{ fontSize: '12px', color: COLORS.warn, lineHeight: '1.5' }}>
+                    {!offpeak
+                      ? t('scheduleOffpeakPending')
+                      : offpeak.allDay
+                        ? t('offpeakAllDay')
+                        : offpeak.open
+                          ? t('offpeakOpenNow', { start: offpeak.start, end: offpeak.end })
+                          : t('offpeakWaiting', { start: offpeak.start, end: offpeak.end, opensAt: offpeak.opensAt ?? '' })}
                   </div>
                   <button
                     type="button"
@@ -1744,6 +1872,76 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   >
                     {runningNowId === activeTicket.id ? t('runningNow') : t('runNow')}
                   </button>
+                </div>
+              )}
+
+              {/* Scheduled wait banner with a manual run trigger */}
+              {activeTicket.status === 'pending' && activeTicket.scheduleMode === 'scheduled' && (
+                <div
+                  style={{
+                    background: COLORS.surfaceAlt,
+                    border: `1px solid ${COLORS.borderSubtle}`,
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
+                    padding: '12px 16px',
+                    marginBottom: '16px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', color: COLORS.secondary, lineHeight: '1.5' }}>
+                    {t('scheduledWaiting', { time: activeTicket.scheduledAt ? new Date(activeTicket.scheduledAt).toLocaleString() : '' })}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={runningNowId === activeTicket.id}
+                    onClick={() => void handleRunNow(activeTicket.id)}
+                    style={primaryButtonStyle}
+                  >
+                    {runningNowId === activeTicket.id ? t('runningNow') : t('runNow')}
+                  </button>
+                </div>
+              )}
+
+              {/* Timing editor for a queued ticket */}
+              {activeTicket.status === 'pending' && (
+                <div
+                  style={{
+                    background: COLORS.surface,
+                    border: `1px solid ${COLORS.borderSubtle}`,
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
+                    padding: '12px 16px',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '8px' }}>
+                    {t('rescheduleTitle')}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: '180px', flex: '0 1 200px' }}>
+                      <DshSelect
+                        value={rescheduleMode}
+                        onChange={val => setRescheduleMode(val)}
+                        options={scheduleOptions}
+                      />
+                    </div>
+                    {rescheduleMode === 'scheduled' && (
+                      <input
+                        type="datetime-local"
+                        value={rescheduleAt}
+                        onChange={event => setRescheduleAt(event.target.value)}
+                        style={{ ...inputStyle, width: '220px' }}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleReschedule(activeTicket.id)}
+                      style={primaryButtonStyle}
+                    >
+                      {t('rescheduleSave')}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1942,7 +2140,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   <div>
                     <span style={{ color: COLORS.secondary, display: 'block', fontSize: '11px' }}>{t('triageSchedule')}</span>
                     <span style={{ fontWeight: 600, color: COLORS.text }}>
-                      {activeTicket.scheduleMode === 'nightly' ? '夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '定时执行' : '立即执行'}
+                      {scheduleLabel(activeTicket.scheduleMode)}
                     </span>
                   </div>
                   <div>
@@ -2067,7 +2265,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 <div>
                   <span style={{ color: COLORS.secondary }}>{t('scheduleLabel')}: </span>
                   <span style={{ fontWeight: 500, color: COLORS.text }}>
-                    {activeTicket.scheduleMode === 'nightly' ? '夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '定时执行' : '立即执行'}
+                    {scheduleLabel(activeTicket.scheduleMode)}
                   </span>
                 </div>
                 <div>

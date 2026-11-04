@@ -3,6 +3,11 @@
  * Deterministic finite state machine: event ingestion, hop limit, thread deduplication,
  * zero-cost suspension, and closed-loop execution.
  *
+ * Admission timing has exactly two knobs, both owned by configuration:
+ * the off-peak window (`offpeak` tickets wait for it) and the concurrency
+ * ceiling (due tickets beyond it wait for a free slot). See
+ * {@link module:@charonx/dsh-autoloop/shared/schedule}.
+ *
  * @module @charonx/dsh-autoloop/core/kernel
  */
 
@@ -13,8 +18,15 @@ import type {
   AttentionRequest,
   IngressEvent,
   KernelStateSnapshot,
+  OffpeakWindow,
   Ticket,
 } from '../shared/types.js'
+import {
+  DEFAULT_OFFPEAK_WINDOW,
+  describeOffpeakView,
+  isWithinOffpeak,
+  resolveSchedule,
+} from '../shared/schedule.js'
 import { IntentRouter } from './router.js'
 import { JournalStore } from './store.js'
 
@@ -23,11 +35,22 @@ export interface KernelOptions {
   router: IntentRouter
   maxHops?: number
   defaultWorkspacePath: string
+  /** Configured off-peak window; defaults to {@link DEFAULT_OFFPEAK_WINDOW}. */
+  offpeak?: OffpeakWindow
+  /** Maximum tickets executing at once; defaults to 2. */
+  maxConcurrent?: number
   logger?: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void }
 }
 
+/** Interval between admission sweeps, in milliseconds. */
+const DRAIN_INTERVAL_MS = 20_000
+
 export class AutoloopKernel {
   public readonly maxHops: number
+  /** Window `offpeak` tickets wait for; read by every timing surface. */
+  public readonly offpeak: OffpeakWindow
+  /** Ceiling on tickets executing at once. */
+  public readonly maxConcurrent: number
   private readonly store: JournalStore
   private readonly router: IntentRouter
   private readonly channels = new Set<ApprovalChannel>()
@@ -40,11 +63,15 @@ export class AutoloopKernel {
     this.store = options.store
     this.router = options.router
     this.maxHops = options.maxHops ?? 8
+    this.offpeak = options.offpeak ?? DEFAULT_OFFPEAK_WINDOW
+    this.maxConcurrent = Math.max(1, Math.trunc(options.maxConcurrent ?? 2))
 
-    // Periodically check for scheduled tickets or nightly window entry
+    // Periodically admit due tickets: window entry, elapsed schedules, free slots.
     this.scheduleCheckTimer = setInterval(() => {
       void this.drainPendingTickets()
-    }, 20_000)
+    }, DRAIN_INTERVAL_MS)
+    // Never keep a host process alive on behalf of the admission sweep.
+    this.scheduleCheckTimer.unref?.()
   }
 
   /** Register an approval channel (e.g. Feishu card, Desktop notifications) */
@@ -56,6 +83,8 @@ export class AutoloopKernel {
   /** Register the agent executor adapter (e.g. dsh agent executor) */
   registerExecutor(executor: AgentExecutor): () => void {
     this.executor = executor
+    // A previous process may have died mid-dispatch: requeue before admitting.
+    this.recoverInterrupted()
     // Kick off dispatch for any pending tickets loaded from store
     void this.drainPendingTickets()
     return () => {
@@ -93,6 +122,8 @@ export class AutoloopKernel {
       },
       tickets: all.sort((a, b) => b.createdAt - a.createdAt),
       maxHops: this.maxHops,
+      offpeak: describeOffpeakView(new Date(), this.offpeak),
+      limits: { maxConcurrent: this.maxConcurrent, runningCount },
     }
   }
 
@@ -101,11 +132,15 @@ export class AutoloopKernel {
     const now = Date.now()
     const hopCount = event.hopCount ?? 0
 
+    // 0. The router resolves the mandate; timing is validated here so no ingress
+    //    path can persist an unhonorable schedule. Throws ScheduleInputError.
+    const mandate = this.router.route(event)
+    const schedule = resolveSchedule(mandate.scheduleMode, mandate.scheduledAt, now)
+
     // 1. Hop limit circuit breaker
     if (hopCount >= this.maxHops) {
       this.options.logger?.warn(`[Autoloop] Hop limit reached (${hopCount} >= ${this.maxHops}) for thread ${event.threadId}`)
       const ticketId = `ticket-${randomUUID().slice(0, 8)}`
-      const mandate = this.router.route(event)
       const brokenTicket: Ticket = {
         id: ticketId,
         threadId: event.threadId,
@@ -113,8 +148,8 @@ export class AutoloopKernel {
         source: mandate.triage?.detectedSource ?? event.source,
         status: 'circuit_broken',
         priority: mandate.priority ?? 'p2',
-        scheduleMode: mandate.scheduleMode ?? 'immediate',
-        scheduledAt: mandate.scheduledAt,
+        scheduleMode: schedule.mode,
+        ...(schedule.scheduledAt === undefined ? {} : { scheduledAt: schedule.scheduledAt }),
         tags: mandate.tags ?? [],
         mandate,
         triage: mandate.triage,
@@ -150,7 +185,6 @@ export class AutoloopKernel {
 
     // 3. Create fresh Ticket
     const ticketId = `ticket-${randomUUID().slice(0, 8)}`
-    const mandate = this.router.route(event)
     const newTicket: Ticket = {
       id: ticketId,
       threadId: event.threadId,
@@ -158,8 +192,8 @@ export class AutoloopKernel {
       source: mandate.triage?.detectedSource ?? event.source,
       status: 'pending',
       priority: mandate.priority ?? 'p2',
-      scheduleMode: mandate.scheduleMode ?? 'immediate',
-      scheduledAt: mandate.scheduledAt,
+      scheduleMode: schedule.mode,
+      ...(schedule.scheduledAt === undefined ? {} : { scheduledAt: schedule.scheduledAt }),
       tags: mandate.tags ?? [],
       mandate,
       triage: mandate.triage,
@@ -230,17 +264,89 @@ export class AutoloopKernel {
     void this.dispatchTicket(ticketId)
   }
 
-  /** Check if current hour falls within off-peak nightly window (23:00 to 07:00) */
-  private isNightlyWindow(): boolean {
-    const hour = new Date().getHours()
-    return hour >= 23 || hour < 7
+  /**
+   * Requeue tickets left `running` by a previous process.
+   *
+   * The journal commits `assignment_started` before the executor runs, so a
+   * crash leaves the ticket running with no live controller and no future
+   * admission. Called once, when the executor becomes available and before the
+   * first sweep.
+   *
+   * @returns How many tickets were requeued.
+   */
+  recoverInterrupted(): number {
+    if (!this.running) return 0
+    const orphaned = this.store.getAllTickets()
+      .filter(ticket => ticket.status === 'running' && !this.activeControllers.has(ticket.id))
+    for (const ticket of orphaned) {
+      this.store.append({ type: 'ticket.status_changed', ticketId: ticket.id, status: 'pending', at: Date.now() })
+    }
+    if (orphaned.length > 0) {
+      this.options.logger?.warn(`[Autoloop] Requeued ${orphaned.length} ticket(s) interrupted by a previous run`)
+    }
+    return orphaned.length
   }
 
-  /** Drain all pending tickets honoring priority ranking and schedule timing */
+  /**
+   * Change a queued ticket's timing.
+   *
+   * Only a `pending` ticket may be rescheduled: a running or suspended ticket
+   * already owns its execution, and a finished one has nothing left to time.
+   *
+   * @param ticketId - Ticket to reschedule.
+   * @param mode - Requested mode, validated like an ingress payload.
+   * @param scheduledAt - Requested instant for `scheduled`.
+   * @returns False when the ticket is missing or not pending.
+   * @throws ScheduleInputError when the timing cannot be honored.
+   */
+  async rescheduleTicket(ticketId: string, mode: unknown, scheduledAt?: unknown): Promise<boolean> {
+    const ticket = this.store.getTicket(ticketId)
+    if (!ticket || ticket.status !== 'pending') return false
+    const decision = resolveSchedule(mode, scheduledAt, Date.now())
+    this.store.append({
+      type: 'ticket.schedule_changed',
+      ticketId,
+      scheduleMode: decision.mode,
+      scheduledAt: decision.scheduledAt ?? null,
+      at: Date.now(),
+    })
+    this.options.logger?.info(`[Autoloop] Ticket ${ticketId} rescheduled to ${decision.mode}`)
+    await this.drainPendingTickets()
+    return true
+  }
+
+  /**
+   * Requeue one failed or circuit-broken ticket, keeping its timing plan.
+   * @param ticketId - Ticket to retry.
+   * @returns False when the ticket is missing or its status is not retryable.
+   */
+  async retryTicket(ticketId: string): Promise<boolean> {
+    const ticket = this.store.getTicket(ticketId)
+    if (!ticket) return false
+    if (ticket.status !== 'failed' && ticket.status !== 'circuit_broken') return false
+    this.store.append({ type: 'ticket.status_changed', ticketId, status: 'pending', at: Date.now() })
+    this.options.logger?.info(`[Autoloop] Ticket ${ticketId} requeued for retry`)
+    await this.drainPendingTickets()
+    return true
+  }
+
+  /** Whether the ticket's timing allows it to start right now. */
+  private isDue(ticket: Ticket, now: Date): boolean {
+    if (ticket.scheduleMode === 'offpeak') return isWithinOffpeak(now, this.offpeak)
+    if (ticket.scheduleMode === 'scheduled' && ticket.scheduledAt !== undefined) {
+      return now.getTime() >= ticket.scheduledAt
+    }
+    return true
+  }
+
+  /** Drain pending tickets honoring priority, timing, and the concurrency ceiling */
   private async drainPendingTickets(): Promise<void> {
     if (!this.running || !this.executor) return
     const all = this.store.getAllTickets()
     const priorityRank: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
+
+    const capacity = this.maxConcurrent - all.filter(t => t.status === 'running').length
+    if (capacity <= 0) return
 
     const pending = all
       .filter(t => t.status === 'pending')
@@ -251,35 +357,35 @@ export class AutoloopKernel {
         return a.createdAt - b.createdAt
       })
 
-    const inNightly = this.isNightlyWindow()
-    const now = Date.now()
-
+    const now = new Date()
+    let started = 0
     for (const ticket of pending) {
-      // 1. If nightly execution is specified and current time is not yet off-peak, defer
-      if (ticket.scheduleMode === 'nightly' && !inNightly) {
-        continue
-      }
-      // 2. If scheduled time is in the future, defer
-      if (ticket.scheduleMode === 'scheduled' && ticket.scheduledAt && now < ticket.scheduledAt) {
-        continue
-      }
+      if (started >= capacity) break
+      if (!this.isDue(ticket, now)) continue
+      started += 1
       void this.dispatchTicket(ticket.id)
     }
   }
 
-  /** Manually trigger immediate execution of a pending/scheduled/nightly ticket */
+  /**
+   * Run one ticket now.
+   *
+   * Bypasses the window and schedule wait without rewriting the ticket's plan,
+   * so a manual run never loses the configured timing. Failed and
+   * circuit-broken tickets are requeued first.
+   *
+   * @param ticketId - Ticket to start.
+   * @returns False when the ticket is missing or is not startable.
+   */
   async runTicketNow(ticketId: string): Promise<boolean> {
     const ticket = this.store.getTicket(ticketId)
     if (!ticket) return false
-    if (ticket.status !== 'pending') return false
+    const retryable = ticket.status === 'failed' || ticket.status === 'circuit_broken'
+    if (ticket.status !== 'pending' && !retryable) return false
+    if (retryable) {
+      this.store.append({ type: 'ticket.status_changed', ticketId, status: 'pending', at: Date.now() })
+    }
 
-    const now = Date.now()
-    this.store.append({
-      type: 'ticket.schedule_changed',
-      ticketId,
-      scheduleMode: 'immediate',
-      at: now,
-    })
     this.options.logger?.info(`[Autoloop] Ticket ${ticketId} manually triggered for immediate execution`)
     void this.dispatchTicket(ticketId)
     return true
@@ -290,6 +396,8 @@ export class AutoloopKernel {
     const ticket = this.store.getTicket(ticketId)
     if (!ticket || !this.executor) return
     if (ticket.status !== 'pending' && ticket.status !== 'running') return
+    // One live execution per ticket: never overwrite an in-flight assignment.
+    if (this.activeControllers.has(ticketId)) return
 
     const now = Date.now()
     const assignmentId = `assign-${randomUUID().slice(0, 8)}`

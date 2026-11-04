@@ -102,4 +102,84 @@ describe('JournalStore (Event Sourcing)', () => {
     expect(t2?.assignment?.resultSummary).toBe('Done successfully')
     expect(t2?.assignment?.sessionId).toBe('sess-xyz-123')
   })
+  it('folds the retired nightly mode into offpeak on replay', () => {
+    const store1 = new JournalStore(journalPath)
+    const legacy = {
+      id: 'tk-legacy',
+      threadId: 'th-legacy',
+      title: 'Legacy nightly ticket',
+      source: 'manual-ui',
+      status: 'pending',
+      priority: 'p2',
+      scheduleMode: 'nightly',
+      mandate: {
+        intent: 'general',
+        workspacePath: '/mock/workspace',
+        model: { model: 'deepseek-chat' },
+        skills: [],
+        instruction: 'Old journal row',
+      },
+      workspace: { sourceRoot: '/mock/workspace' },
+      inputs: [],
+      hopCount: 0,
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+    store1.append({ type: 'ticket.created', ticket: legacy as unknown as Ticket, at: 1000 })
+
+    // The alias never reaches storage or memory: readers only see the current spelling.
+    const store2 = new JournalStore(journalPath)
+    expect(store2.getTicket('tk-legacy')?.scheduleMode).toBe('offpeak')
+  })
+
+  it('persists and clears a committed instant through schedule_changed', () => {
+    const store1 = new JournalStore(journalPath)
+    store1.append({
+      type: 'ticket.created',
+      ticket: {
+        id: 'tk-sched',
+        threadId: 'th-sched',
+        title: 'Scheduled ticket',
+        source: 'manual-ui',
+        status: 'pending',
+        priority: 'p2',
+        scheduleMode: 'scheduled',
+        scheduledAt: 5000,
+        mandate: {
+          intent: 'general',
+          workspacePath: '/mock/workspace',
+          model: { model: 'deepseek-chat' },
+          skills: [],
+          instruction: 'Wait for the committed instant',
+        },
+        workspace: { sourceRoot: '/mock/workspace' },
+        inputs: [],
+        hopCount: 0,
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+      at: 1000,
+    })
+
+    store1.append({
+      type: 'ticket.schedule_changed',
+      ticketId: 'tk-sched',
+      scheduleMode: 'scheduled',
+      scheduledAt: 9000,
+      at: 2000,
+    })
+    expect(store1.getTicket('tk-sched')?.scheduledAt).toBe(9000)
+
+    // null clears the instant so a later mode switch cannot inherit a stale clock.
+    store1.append({
+      type: 'ticket.schedule_changed',
+      ticketId: 'tk-sched',
+      scheduleMode: 'offpeak',
+      scheduledAt: null,
+      at: 3000,
+    })
+    const replayed = new JournalStore(journalPath).getTicket('tk-sched')
+    expect(replayed?.scheduleMode).toBe('offpeak')
+    expect(replayed?.scheduledAt).toBeUndefined()
+  })
 })
