@@ -79,24 +79,6 @@ export class DshAgentExecutor implements AgentExecutor {
       ticket.assignment.sessionId = sessionId
     }
 
-    // Attach session to workspace registry so it appears in Harness sidebar
-    try {
-      const registry = (this.ctx.get('workspaceRegistry') ?? (this.ctx as any).root?.get?.('workspaceRegistry') ?? (this.ctx as any).workspaceRegistry) as {
-        list?: () => Array<{ path: string; attachSession?: (id: string) => Promise<void> }>
-        create?: (path: string) => Promise<{ path: string; attachSession?: (id: string) => Promise<void> }>
-      } | undefined
-
-      let workspace = registry?.list?.()?.find(w => w.path === workingDirectory)
-      if (!workspace && registry?.create) {
-        workspace = await registry.create(workingDirectory).catch(() => undefined)
-      }
-      if (workspace && typeof workspace.attachSession === 'function') {
-        await workspace.attachSession(sessionId).catch(() => {})
-      }
-    } catch (err) {
-      this.ctx.logger.warn(`[Autoloop] attachSession failed: ${String(err)}`)
-    }
-
     const handle = await agentsService.create({
       sessionId,
       signal,
@@ -106,6 +88,32 @@ export class DshAgentExecutor implements AgentExecutor {
         model: ticket.mandate.model.model,
       },
     })
+
+    // Attach session to workspace registry so it appears in the sidebar under its project
+    try {
+      const registry = (this.ctx.get('workspaceRegistry') ?? (this.ctx as any).root?.get?.('workspaceRegistry') ?? (this.ctx as any).workspaceRegistry) as {
+        resolveByPath?: (path: string) => Promise<{ attachSession?: (id: string) => Promise<void> } | undefined>
+        list?: () => Array<{ path: string; attachSession?: (id: string) => Promise<void> }>
+        create?: (path: string) => Promise<{ path: string; attachSession?: (id: string) => Promise<void> }>
+      } | undefined
+
+      let workspace: { attachSession?: (id: string) => Promise<void> } | undefined
+      if (registry?.resolveByPath) {
+        workspace = await registry.resolveByPath(workingDirectory).catch(() => undefined)
+      }
+      if (!workspace && registry?.list) {
+        workspace = registry.list().find((w: any) => w.path === workingDirectory)
+      }
+      if (!workspace && registry?.create) {
+        workspace = await registry.create(workingDirectory).catch(() => undefined)
+      }
+      if (workspace && typeof workspace.attachSession === 'function') {
+        await workspace.attachSession(sessionId)
+        this.ctx.logger.info(`[Autoloop] Session ${sessionId} joined workspace at ${workingDirectory}`)
+      }
+    } catch (err) {
+      this.ctx.logger.warn(`[Autoloop] attachSession failed: ${String(err)}`)
+    }
 
     // Rename session title for friendly UI display
     try {
