@@ -9,6 +9,7 @@ dsh/
 ├── AGENTS.md            # 工作区唯一权威说明（本文件），CLAUDE.md 为软链接
 ├── .gitignore           # 只追踪工作区级文件；顶层子目录全部为独立仓库
 ├── deepseek-harness/    # 上游 harness 源码 checkout（含自身 .git，分支 master，remote origin）
+├── dsh-autoloop/        # 自建插件项目：确定性自动化中台与调度大屏（见其 README.md）
 ├── dsh-media-station/   # 自建插件项目（含自身 .git），作为 dsh bundle 开发
 └── dsh-skills-manager/  # 自建插件项目：技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
 ```
@@ -87,6 +88,26 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
 - 插件模块导出 `name` / `inject` / `apply(ctx)`（也支持对象/class 形式）；所有注册走 `ctx.effect()` / `ctx.on()`，注册即 effect，disposer 自动回收。
 - 面向用户/模型可见的行为要有测试；UI 文案走 locale 字典；配置项不能硬编码在插件里，部署差异走 `Config`。
 
+### 插件开发核心硬规则（UI 规范与宿主能力复用）
+
+1. **严格遵循 DSH 原生样式（严禁自建孤立视觉体系）**：
+   - 所有 UI 组件必须消费 DSH 官方 Design Tokens（`var(--dsw-alias-*)`），严禁自写孤立色板或硬编码十六进制颜色（如 `#ffffff`、`#111827`、`#2563eb` 等）：
+     - 容器与图层：`--dsw-alias-bg-layer-1`（大屏/底层容器）、`--dsw-alias-bg-layer-2`（卡片/弹窗/表单底色）、`--dsw-alias-bg-layer-3`（悬浮层/嵌套卡片）。
+     - 文本与排版：`--dsw-alias-label-primary`（主标题与正文）、`--dsw-alias-label-secondary`（说明/辅助文本）、`--dsw-alias-label-tertiary`（占位/弱化文本）。
+     - 边框与圆角：`--dsw-alias-border-l1` ~ `l4` 分级边框；`--dsw-radius-sm` (6px)、`--dsw-radius-md` (8px)、`--dsw-radius-lg` (12px)。
+     - 品牌与状态：`--dsw-alias-brand-primary`（品牌蓝）、`--dsw-alias-label-primary-foreground`（品牌前景色）、`--dsw-alias-state-error-primary`、`--dsw-alias-state-warn-primary`、`--dsw-alias-state-success-primary`。
+     - 投影与动效：`--dsw-elevation-panel`、`--dsw-elevation-overlay`。
+   - 保证插件在 DSH 的深色与浅色模式之间无缝自适应切换，交互与视觉体验与宿主完全一致。
+2. **保持专业极简排版（严禁在 UI 与文案中滥用 Emoji）**：
+   - UI 界面、按钮、标签、状态提示、下拉菜单及日志中**严禁使用 Emoji 表情**（如 🚀、🐛、🌙、⚡、💬、🧠 等）。
+   - 状态与层级区分统一使用文字标签、DSH 原生徽标、边框及语义状态颜色（`--dsw-alias-state-*`），保持与宿主一致的克制、严谨工业级风格。
+3. **最大化复用 DSH 原生功能与接口（严禁脱离宿主重复实现）**：
+   - 优先通过 Context 消费宿主已具备的各类核心服务与数据，严禁在插件内自编模拟数据或硬编码伪选项：
+     - 模型目录与选择：消费 `ctx.sessionController.modelCatalog()`、`ctx.agentDefaultModel.currentSelection()`、`ctx.llm.listProviders()` / `listModels()`，动态读取宿主可用模型及默认配置，禁止手写固定下拉。
+     - 工作区与会话：消费 `ctx.workspaceRegistry`、`ctx.sessions`、`ctx.sessionTitle` 等，动态读取工作区目录与会话历史，保持与左侧会话树联动。
+     - Agent 执行与隔离：消费 `ctx.agents.create()`、`ctx.worktrees.create()`、`ctx.permissionPresets` 等，直接接入宿主真实调度与沙箱能力。
+   - 依赖声明走动态感知与渐进降级（`ctx.get(...)` 或 `ctx.inject(['service'], ...)`），避免因强依赖声明阻塞插件初始化。
+
 ### 三种本地联调方式
 
 1. **最快（源码插件 + overlay）**：在 harness 内启动，patch 用**绝对路径**指向插件源码：
@@ -138,3 +159,6 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
 - 把 `desktop` profile 当普通 profile：Electron 独占 `~/.dsh/profiles/desktop`，CLI 不能启动也不能改它的插件，只能用 Desktop 安装的命令在应用退出时管理。
 - 用 `latest` 标签的 dsh 运行时安装 alpha 插件（或反之）导致版本不匹配：统一用同一运行时版本做安装与启动。
 - 在插件里 `import '@deepseek-ai/dsh-xxx/src/...'` 之类深路径：只能依赖公开 `exports`。
+- 在插件前端自建独立色板或硬编码十六进制颜色（如 `#ffffff`、`#111827`）：导致深浅色模式切换时视觉割裂/文字不可读，必须统一使用 `--dsw-alias-*` token。
+- 在插件内写死模型、工作区、会话等下拉选项：必须通过 DSH 宿主服务（`ctx.llm` / `ctx.agentDefaultModel` / `ctx.workspaceRegistry` 等）动态读取。
+- 在 UI 文案、标签或状态中滥用 Emoji 表情：破坏原生整洁度与严谨专业风格，应统一使用纯文本标签或原生徽标。
