@@ -8,6 +8,7 @@
 dsh/
 ├── AGENTS.md            # 工作区唯一权威说明（本文件），CLAUDE.md 为软链接
 ├── .gitignore           # 只追踪工作区级文件；顶层子目录全部为独立仓库
+├── check-plugins-against-harness.sh  # harness 更新后校验全部插件（见「更新后的插件检查」）
 ├── deepseek-harness/    # 上游 harness 源码 checkout（含自身 .git，分支 master，remote origin）
 ├── dsh-autoloop/        # 自建插件项目：确定性自动化中台与调度大屏（见其 README.md）
 ├── dsh-media-station/   # 自建插件项目（含自身 .git），作为 dsh bundle 开发
@@ -130,6 +131,30 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
 - 插件可见的一切"模型能看到的东西必须能从 session log 重建"：新增模型可见输入要加 session event。
 - 工具注册用 `defineTool`（类型化，`parameters` 推断 args，`output.schema` + `output.render` 决定模型可见内容）；拦截用 `tools/pre-execute` 等 waterfall，**必须调用 `next()`** 才不会短路。
 
+### harness 更新后的插件检查（必做）
+
+`deepseek-harness/` 拉到新代码后，顺序固定：
+
+1. `cd deepseek-harness && pnpm run build`。完成判据：构建门禁全 PASS；构建不过就不存在可信基线（源码启动与插件联调都读构建产物）。
+2. `./check-plugins-against-harness.sh`。完成判据：summary 每行 `PASS`（尚未实现 client 半的仓库显示 `WIP`），失败行会带出报错尾部。
+3. 按失败项改插件，回到第 2 步，直到全 `PASS`。
+4. 起一次真实 UI（`pnpm dsh web` 或 Desktop），按下面清单点一遍——类型检查覆盖不到运行时服务形状。
+
+**为什么必须用脚本而不是各仓库的 `pnpm typecheck`**：发布的 `@deepseek-ai/dsh-client-*` 不声明同级类型包依赖（`dsh-client-store`、`dsh-client-shortcuts`、`dsh-api-workspace-controller` 等），插件 tsconfig 开 `skipLibCheck` 时这些 import 解析失败被降级成 `any`，整条 slot 组合类型链失效 → 插件自己的类型门禁**假绿**。脚本把每个 `@deepseek-ai/*` 依赖 `link:` 到 checkout 的已构建产物，插件与宿主处于同一实例（与运行时一致），类型检查才有意义。这条假绿曾经掩盖过真实不兼容：组件把 `t` 标成 `(key: string) => string`，与宿主注入的 `TranslateNS<'ns'>` 冲突。
+
+人工确认的运行时面（类型层面看不出来）：
+
+- 左侧栏：插件面板图标仍出现、可点进内页、More 菜单能列出并 pin/unpin、窄屏 drawer 模式无遮挡。`sidebar.panellist` 现由 `sidebar.panel.icon` factory 声明，注册代码不变但断点位置换了。
+- 主面板：进入插件页、切回会话都正常（`main` keyed 注册未变）。
+- 宿主服务名与形状：`webServer.register`、`skills.registerProvider`、`workspaceRegistry.list`、`agents`/`worktrees`/`agentDefaultModel`/`sessionTitle`。插件里 `ctx.get(...) ?? (ctx as any).x` 的兜底会把缺失静默降级，必须真实调用一次。
+- 依赖宿主数据的选择器（模型/权限/工作区）仍有值，不是空列表。
+
+版本纪律：
+
+- harness 升版只改插件的 `devDependencies`（类型基线）和 `dependencies`；`peerDependencies` 与 `engines.dsh` 下限保持「仍要支持的最旧运行时」，不要随手跟着抬——抬了旧 Desktop 会拒绝加载插件。
+- `cordis` / `schemastery` 的 dev 版本跟 harness `vendor/` 走（当前 `~4.0.6-alpha.2`、`~3.18.6-alpha.2`）；peer 写成覆盖宿主实际版本的区间。
+- 升级只动 `@deepseek-ai/*` 版本号，不顺手升 react / typescript / vitest。
+
 ## 工作流要求（对 agent）
 
 1. 动手前先确认改哪个仓库：读该仓库相关 README / AGENTS / docs，`git status` 确认工作树干净后再改。
@@ -161,4 +186,7 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
 - 在插件里 `import '@deepseek-ai/dsh-xxx/src/...'` 之类深路径：只能依赖公开 `exports`。
 - 在插件前端自建独立色板或硬编码十六进制颜色（如 `#ffffff`、`#111827`）：导致深浅色模式切换时视觉割裂/文字不可读，必须统一使用 `--dsw-alias-*` token。
 - 在插件内写死模型、工作区、会话等下拉选项：必须通过 DSH 宿主服务（`ctx.llm` / `ctx.agentDefaultModel` / `ctx.workspaceRegistry` 等）动态读取。
+- 插件仓库 `pnpm typecheck` 全绿不等于兼容宿主：`skipLibCheck` + 客户端类型包缺依赖会把组合类型降级成 `any`，用 `./check-plugins-against-harness.sh` 复核。
+- 把 `engines.dsh` 下限跟着 `devDependencies` 一起抬高：插件在仍要支持的旧运行时（如 Desktop 自带版本）上会被拒绝加载。
+- harness 构建产物过期（`src` 比 `lib/index.js` 新）时做联调：跑的是旧行为，排查方向全错；脚本会检测并拒绝在过期产物上给结论。
 - 在 UI 文案、标签或状态中滥用 Emoji 表情：破坏原生整洁度与严谨专业风格，应统一使用纯文本标签或原生徽标。
