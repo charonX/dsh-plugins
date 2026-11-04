@@ -9,8 +9,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AutoloopKernel } from '../core/kernel.js'
-import type { IngressEvent } from '../shared/types.js'
+import type { IngressEvent, ModelCatalogView, ModelGroupView, ModelEntryView } from '../shared/types.js'
 
+export type { ModelCatalogView, ModelGroupView, ModelEntryView } from '../shared/types.js'
 export const DEFAULT_ROUTE_PREFIX = '/api/autoloop'
 
 export interface WorkspaceSessionView {
@@ -156,6 +157,99 @@ function getWorkspacesWithSessions(ctx: Context, fallbackPath: string): Workspac
   return items
 }
 
+export async function getModelCatalog(ctx: Context): Promise<ModelCatalogView> {
+  // 1. Attempt query from sessionController.modelCatalog()
+  try {
+    const sessionController = (ctx.get('sessionController') ?? (ctx as any).root?.get?.('sessionController')) as {
+      modelCatalog?: () => Promise<{
+        default?: { provider?: string; model?: string; reasoningEffort?: string }
+        groups?: Array<{
+          id: string
+          name: string
+          models?: Array<{ id: string; name: string; badge?: string; description?: string }>
+        }>
+      }>
+    } | undefined
+
+    if (sessionController && typeof sessionController.modelCatalog === 'function') {
+      const catalog = await sessionController.modelCatalog()
+      if (catalog && Array.isArray(catalog.groups)) {
+        return {
+          defaultSelection: catalog.default ?? {},
+          groups: catalog.groups.map(g => ({
+            id: g.id,
+            name: g.name || g.id,
+            models: Array.isArray(g.models)
+              ? g.models.map(m => ({
+                  id: m.id,
+                  name: m.name || m.id,
+                  badge: m.badge,
+                  description: m.description,
+                }))
+              : [],
+          })),
+        }
+      }
+    }
+  } catch (err) {
+    ctx.logger?.warn?.(`[Autoloop] Error reading sessionController.modelCatalog: ${String(err)}`)
+  }
+
+  // 2. Direct inspection from ctx.agentDefaultModel and ctx.llm
+  const agentDefault = (ctx.get('agentDefaultModel') ?? (ctx as any).root?.get?.('agentDefaultModel')) as {
+    currentSelection?: () => { provider?: string; model?: string; reasoningEffort?: string }
+  } | undefined
+  const defaultSelection = agentDefault?.currentSelection?.() ?? {}
+
+  const llm = (ctx.get('llm') ?? (ctx as any).root?.get?.('llm')) as {
+    listProviders?: () => Array<{ id: string; name: string }>
+    listModels?: (providerId: string) => Promise<Array<{ id: string; name: string; description?: string; badge?: string }>>
+  } | undefined
+
+  const groups: ModelGroupView[] = []
+  if (llm && typeof llm.listProviders === 'function') {
+    try {
+      const providers = llm.listProviders()
+      for (const p of providers) {
+        let models: Array<{ id: string; name: string; description?: string; badge?: string }> = []
+        if (typeof llm.listModels === 'function') {
+          try {
+            models = (await llm.listModels(p.id)) || []
+          } catch {
+            models = []
+          }
+        }
+        groups.push({
+          id: p.id,
+          name: p.name || p.id,
+          models: models.map(m => ({
+            id: m.id,
+            name: m.name || m.id,
+            description: m.description,
+            badge: m.badge,
+          })),
+        })
+      }
+    } catch (err) {
+      ctx.logger?.warn?.(`[Autoloop] Error reading llm.listProviders: ${String(err)}`)
+    }
+  }
+
+  // 3. Sensible fallback if no models are discovered in current runtime
+  if (groups.length === 0) {
+    groups.push({
+      id: 'deepseek-official',
+      name: 'DeepSeek Official',
+      models: [
+        { id: 'deepseek-chat', name: 'DeepSeek-V3', badge: 'Fast' },
+        { id: 'deepseek-reasoner', name: 'DeepSeek-R1', badge: 'Thinking' },
+      ],
+    })
+  }
+
+  return { defaultSelection, groups }
+}
+
 export function createRequestHandler(deps: HttpDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { prefix, kernel, ctx, defaultWorkspacePath } = deps
 
@@ -182,6 +276,13 @@ export function createRequestHandler(deps: HttpDeps): (req: IncomingMessage, res
       if (req.method === 'GET' && subpath === '/workspaces') {
         const workspaces = getWorkspacesWithSessions(ctx, defaultWorkspacePath)
         sendJson(res, 200, { workspaces })
+        return
+      }
+
+      // GET /api/autoloop/models
+      if (req.method === 'GET' && subpath === '/models') {
+        const catalog = await getModelCatalog(ctx)
+        sendJson(res, 200, catalog)
         return
       }
 

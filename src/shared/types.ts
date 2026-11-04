@@ -55,6 +55,31 @@ export type TaskCategory =
   | 'general'
   | string
 
+/** Model entry in DSH catalog */
+export interface ModelEntryView {
+  id: string
+  name: string
+  badge?: string
+  description?: string
+}
+
+/** Provider group containing models */
+export interface ModelGroupView {
+  id: string
+  name: string
+  models: ModelEntryView[]
+}
+
+/** Complete catalog view exposed to client UI */
+export interface ModelCatalogView {
+  defaultSelection: {
+    provider?: string
+    model?: string
+    reasoningEffort?: string
+  }
+  groups: ModelGroupView[]
+}
+
 /** Source of task */
 export type TaskSource =
   | 'manual-ui'

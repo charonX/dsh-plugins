@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import type { KernelStateSnapshot, Ticket } from '../shared/types.ts'
+import type { KernelStateSnapshot, Ticket, ModelCatalogView } from '../shared/types.ts'
 import type { MessageKey } from './locales.ts'
 
 export type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
@@ -22,7 +22,64 @@ export interface KanbanPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
-/** Deterministic pastel color generator based on any arbitrary string */
+/** Unified DSH design system tokens */
+const COLORS = {
+  text: 'var(--dsw-alias-label-primary, #111827)',
+  secondary: 'var(--dsw-alias-label-secondary, #4b5563)',
+  tertiary: 'var(--dsw-alias-label-tertiary, #9ca3af)',
+  border: 'var(--dsw-alias-border-l2, rgba(0,0,0,0.08))',
+  borderSubtle: 'var(--dsw-alias-border-l1, rgba(0,0,0,0.04))',
+  borderStrong: 'var(--dsw-alias-border-l4, rgba(0,0,0,0.18))',
+  borderInput: 'var(--dsw-alias-border-l3, rgba(0,0,0,0.12))',
+  surface: 'var(--dsw-alias-bg-layer-2, #ffffff)',
+  surfaceAlt: 'var(--dsw-alias-bg-layer-1, #f8fafc)',
+  surfaceElevated: 'var(--dsw-alias-bg-layer-3, #f1f5f9)',
+  brand: 'var(--dsw-alias-brand-primary, #2563eb)',
+  onBrand: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
+  error: 'var(--dsw-alias-state-error-primary, #ef4444)',
+  warn: 'var(--dsw-alias-state-warn-primary, #f59e0b)',
+  success: 'var(--dsw-alias-state-success-primary, #10b981)',
+  interactiveHover: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04))',
+} as const
+
+const buttonBaseStyle: React.CSSProperties = {
+  border: `1px solid ${COLORS.borderStrong}`,
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: COLORS.surface,
+  color: COLORS.text,
+  padding: '6px 12px',
+  fontSize: '12px',
+  fontWeight: 500,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  transition: 'all 0.15s ease',
+}
+
+const primaryButtonStyle: React.CSSProperties = {
+  ...buttonBaseStyle,
+  background: COLORS.brand,
+  borderColor: COLORS.brand,
+  color: COLORS.onBrand,
+  fontWeight: 600,
+}
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  border: `1px solid ${COLORS.borderInput}`,
+  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  background: COLORS.surface,
+  color: COLORS.text,
+  padding: '7px 10px',
+  fontSize: '13px',
+  fontFamily: 'inherit',
+  outline: 'none',
+  transition: 'border-color 0.15s ease',
+}
+
+/** Deterministic pastel color generator with soft opacity for modern tags */
 export function stringToColor(str: string): { bg: string; color: string; border: string } {
   let hash = 0
   const clean = (str || 'default').trim()
@@ -31,9 +88,9 @@ export function stringToColor(str: string): { bg: string; color: string; border:
   }
   const hue = Math.abs(hash % 360)
   return {
-    bg: `hsl(${hue}, 85%, 95%)`,
-    color: `hsl(${hue}, 80%, 26%)`,
-    border: `hsl(${hue}, 50%, 82%)`,
+    bg: `hsla(${hue}, 70%, 50%, 0.08)`,
+    color: `hsl(${hue}, 75%, 32%)`,
+    border: `hsla(${hue}, 70%, 50%, 0.22)`,
   }
 }
 
@@ -93,15 +150,15 @@ export function getCategoryMeta(cat: string) {
 export function getPriorityMeta(prio?: string) {
   switch (prio) {
     case 'p0':
-      return { label: 'P0 紧急', bg: '#fee2e2', color: '#dc2626', dot: '🔴' }
+      return { label: 'P0 紧急', bg: 'rgba(239, 68, 68, 0.1)', color: 'var(--dsw-alias-state-error-primary, #dc2626)', border: 'rgba(239, 68, 68, 0.25)', dot: '🔴' }
     case 'p1':
-      return { label: 'P1 高优', bg: '#ffedd5', color: '#c2410c', dot: '🟠' }
+      return { label: 'P1 高优', bg: 'rgba(245, 158, 11, 0.12)', color: '#c2410c', border: 'rgba(245, 158, 11, 0.3)', dot: '🟠' }
     case 'p2':
-      return { label: 'P2 普通', bg: '#eff6ff', color: '#2563eb', dot: '🔵' }
+      return { label: 'P2 普通', bg: 'rgba(37, 99, 235, 0.1)', color: 'var(--dsw-alias-brand-primary, #2563eb)', border: 'rgba(37, 99, 235, 0.25)', dot: '🔵' }
     case 'p3':
-      return { label: 'P3 低优', bg: '#f3f4f6', color: '#4b5563', dot: '⚪' }
+      return { label: 'P3 低优', bg: 'rgba(107, 114, 128, 0.1)', color: 'var(--dsw-alias-label-secondary, #4b5563)', border: 'rgba(107, 114, 128, 0.2)', dot: '⚪' }
     default:
-      return { label: 'P2 普通', bg: '#eff6ff', color: '#2563eb', dot: '🔵' }
+      return { label: 'P2 普通', bg: 'rgba(37, 99, 235, 0.1)', color: 'var(--dsw-alias-brand-primary, #2563eb)', border: 'rgba(37, 99, 235, 0.25)', dot: '🔵' }
   }
 }
 
@@ -186,6 +243,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState(
     initialWorkspaces?.[0]?.path ?? ''
   )
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalogView | null>(null)
   const [threadSelection, setThreadSelection] = useState('')
   const [customThreadId, setCustomThreadId] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('')
@@ -224,14 +282,24 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     }
   }, [])
 
+  const fetchModels = useCallback(async () => {
+    try {
+      const data = await request<ModelCatalogView>('/models')
+      setModelCatalog(data)
+    } catch (err) {
+      console.warn('[Autoloop] fetchModels failed:', err)
+    }
+  }, [])
+
   useEffect(() => {
     void fetchSnapshot()
     void fetchWorkspaces()
+    void fetchModels()
     const timer = setInterval(() => {
       void fetchSnapshot()
     }, 4000)
     return () => clearInterval(timer)
-  }, [fetchSnapshot, fetchWorkspaces])
+  }, [fetchSnapshot, fetchWorkspaces, fetchModels])
 
   useEffect(() => {
     if (initialWorkspaces && initialWorkspaces.length > 0 && workspaces.length === 0) {
@@ -266,6 +334,16 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       finalThreadId = threadSelection
     }
 
+    let modelPayload: { provider?: string; model?: string } | undefined = undefined
+    if (selectedModel && selectedModel !== 'default') {
+      if (selectedModel.includes('/')) {
+        const [provider, model] = selectedModel.split('/', 2)
+        modelPayload = { provider, model }
+      } else {
+        modelPayload = { model: selectedModel }
+      }
+    }
+
     try {
       await request('/events', {
         method: 'POST',
@@ -278,7 +356,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             category: selectedCategory.trim() && selectedCategory !== 'auto' ? selectedCategory.trim() : undefined,
             priority: selectedPriority !== 'auto' ? selectedPriority : undefined,
             scheduleMode: selectedSchedule,
-            model: selectedModel !== 'default' ? { model: selectedModel } : undefined,
+            model: modelPayload,
             permissionPreset: selectedPermission,
           },
         }),
@@ -339,39 +417,45 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         key={ticket.id}
         onClick={() => setSelectedTicket(ticket)}
         style={{
-          background: 'var(--dsh-bg-card, #ffffff)',
-          border: '1px solid var(--dsh-border-color, #e5e7eb)',
-          borderRadius: '8px',
-          padding: '12px',
+          background: COLORS.surface,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 'var(--dsw-radius-md, 8px)',
+          padding: '12px 14px',
           marginBottom: '10px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
           cursor: 'pointer',
-          transition: 'box-shadow 0.15s ease, border-color 0.15s ease',
+          transition: 'all 0.18s ease',
+          boxSizing: 'border-box',
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.borderColor = '#93c5fd'
-          e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0,0,0,0.1)'
+          e.currentTarget.style.borderColor = COLORS.brand
+          e.currentTarget.style.boxShadow = 'var(--dsw-elevation-panel, 0 4px 12px rgba(0,0,0,0.08))'
+          e.currentTarget.style.transform = 'translateY(-1px)'
         }}
         onMouseLeave={e => {
-          e.currentTarget.style.borderColor = 'var(--dsh-border-color, #e5e7eb)'
-          e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'
+          e.currentTarget.style.borderColor = COLORS.border
+          e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.03)'
+          e.currentTarget.style.transform = 'translateY(0)'
         }}
       >
-        {/* Header: ID + Source + Priority */}
+        {/* Header: Key ID + Source + Priority */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '11px', color: '#6b7280', fontFamily: 'monospace', fontWeight: 600 }}>{ticket.id}</span>
+            <span style={{ fontSize: '11px', color: COLORS.tertiary, fontFamily: 'var(--dsw-font-mono, monospace)', fontWeight: 600 }}>
+              #{ticket.id}
+            </span>
             <span
               style={{
                 fontSize: '10px',
                 padding: '1px 6px',
-                borderRadius: '4px',
+                borderRadius: 'var(--dsw-radius-xs, 4px)',
                 background: src.bg,
                 color: src.color,
+                border: `1px solid ${src.border}`,
                 fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '2px',
+                gap: '3px',
               }}
             >
               {src.icon} {src.label}
@@ -379,12 +463,16 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           </div>
           <span
             style={{
-              fontSize: '11px',
+              fontSize: '10px',
               padding: '1px 6px',
-              borderRadius: '4px',
+              borderRadius: 'var(--dsw-radius-xs, 4px)',
               background: prio.bg,
               color: prio.color,
+              border: `1px solid ${prio.border}`,
               fontWeight: 700,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '2px',
             }}
           >
             {prio.dot} {prio.label}
@@ -392,17 +480,29 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         </div>
 
         {/* Title */}
-        <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px', color: '#111827', lineHeight: '1.4' }}>
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: '13px',
+            marginBottom: '8px',
+            color: COLORS.text,
+            lineHeight: '1.45',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+        >
           {ticket.title}
         </div>
 
-        {/* Badges row: Category + Tags + Schedule */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+        {/* Badges row: Category + Domain Tags + Schedule */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '8px' }}>
           <span
             style={{
               fontSize: '11px',
-              padding: '2px 8px',
-              borderRadius: '4px',
+              padding: '1px 6px',
+              borderRadius: 'var(--dsw-radius-xs, 4px)',
               background: cat.bg,
               color: cat.color,
               border: `1px solid ${cat.border}`,
@@ -423,8 +523,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 key={tag}
                 style={{
                   fontSize: '11px',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
+                  padding: '1px 6px',
+                  borderRadius: 'var(--dsw-radius-xs, 4px)',
                   background: tc.bg,
                   color: tc.color,
                   border: `1px solid ${tc.border}`,
@@ -440,10 +540,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             <span
               style={{
                 fontSize: '11px',
-                padding: '2px 8px',
-                borderRadius: '4px',
-                background: isNightlyPending ? '#fef3c7' : '#f3f4f6',
-                color: isNightlyPending ? '#92400e' : '#4b5563',
+                padding: '1px 6px',
+                borderRadius: 'var(--dsw-radius-xs, 4px)',
+                background: isNightlyPending ? 'rgba(245, 158, 11, 0.12)' : 'rgba(107, 114, 128, 0.08)',
+                color: isNightlyPending ? '#b45309' : COLORS.secondary,
+                border: isNightlyPending ? '1px solid rgba(245, 158, 11, 0.25)' : `1px solid ${COLORS.borderSubtle}`,
                 fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -458,10 +559,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             <span
               style={{
                 fontSize: '11px',
-                padding: '2px 8px',
-                borderRadius: '4px',
-                background: '#f1f5f9',
-                color: '#475569',
+                padding: '1px 6px',
+                borderRadius: 'var(--dsw-radius-xs, 4px)',
+                background: COLORS.surfaceAlt,
+                color: COLORS.secondary,
+                border: `1px solid ${COLORS.borderSubtle}`,
                 fontWeight: 600,
               }}
             >
@@ -470,13 +572,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           )}
 
           {ticket.workspace.worktree?.branch && (
-            <span style={{ fontSize: '11px', color: '#047857', fontWeight: 500 }}>
+            <span style={{ fontSize: '11px', color: COLORS.success, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
               🌿 {ticket.workspace.worktree.branch}
             </span>
           )}
 
           {ticket.inputs.length > 0 && (
-            <span style={{ fontSize: '11px', color: '#6366f1', fontWeight: 500 }}>
+            <span style={{ fontSize: '11px', color: COLORS.brand, fontWeight: 500 }}>
               💬 {ticket.inputs.length} {t('inputsCount')}
             </span>
           )}
@@ -486,12 +588,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         {hasResult && (
           <div
             style={{
-              background: '#f0fdf4',
-              border: '1px solid #bbf7d0',
-              borderRadius: '6px',
+              background: 'rgba(16, 185, 129, 0.08)',
+              border: '1px solid rgba(16, 185, 129, 0.25)',
+              borderRadius: 'var(--dsw-radius-sm, 6px)',
               padding: '6px 8px',
               fontSize: '11px',
-              color: '#166534',
+              color: '#065f46',
               marginBottom: '8px',
               lineHeight: '1.4',
               maxHeight: '44px',
@@ -508,12 +610,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         {hasError && (
           <div
             style={{
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: '6px',
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              borderRadius: 'var(--dsw-radius-sm, 6px)',
               padding: '6px 8px',
               fontSize: '11px',
-              color: '#991b1b',
+              color: COLORS.error,
               marginBottom: '8px',
             }}
           >
@@ -522,7 +624,16 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         )}
 
         {/* Card footer actions */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', paddingTop: '6px', borderTop: '1px solid #f3f4f6' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: '8px',
+            paddingTop: '8px',
+            borderTop: `1px solid ${COLORS.borderSubtle}`,
+          }}
+        >
           <div>
             {sessionId && onOpenSession ? (
               <button
@@ -534,12 +645,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 style={{
                   fontSize: '11px',
                   padding: '3px 8px',
-                  borderRadius: '4px',
-                  border: '1px solid #bfdbfe',
-                  background: '#eff6ff',
-                  color: '#1d4ed8',
+                  borderRadius: 'var(--dsw-radius-xs, 4px)',
+                  border: `1px solid ${COLORS.brand}`,
+                  background: 'rgba(37, 99, 235, 0.08)',
+                  color: COLORS.brand,
                   cursor: 'pointer',
-                  fontWeight: 500,
+                  fontWeight: 600,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '4px',
@@ -548,7 +659,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 {t('openSession')}
               </button>
             ) : (
-              <span style={{ fontSize: '11px', color: '#9ca3af' }}>Hop: {ticket.hopCount}</span>
+              <span style={{ fontSize: '11px', color: COLORS.tertiary }}>Hop: {ticket.hopCount}</span>
             )}
           </div>
 
@@ -561,10 +672,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 style={{
                   fontSize: '11px',
                   padding: '3px 8px',
-                  borderRadius: '4px',
+                  borderRadius: 'var(--dsw-radius-xs, 4px)',
                   border: 'none',
-                  background: '#2563eb',
-                  color: '#ffffff',
+                  background: COLORS.brand,
+                  color: COLORS.onBrand,
                   cursor: 'pointer',
                   fontWeight: 600,
                 }}
@@ -575,8 +686,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             <span
               style={{
                 fontSize: '11px',
-                color: '#2563eb',
-                fontWeight: 500,
+                color: COLORS.brand,
+                fontWeight: 600,
               }}
             >
               {t('viewDetails')} →
@@ -587,9 +698,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         {ticket.status === 'waiting_attention' && ticket.attention && (
           <div
             style={{
-              background: '#fffbeb',
-              border: '1px solid #fef3c7',
-              borderRadius: '6px',
+              background: 'rgba(245, 158, 11, 0.08)',
+              border: '1px solid rgba(245, 158, 11, 0.25)',
+              borderRadius: 'var(--dsw-radius-sm, 6px)',
               padding: '8px',
               marginTop: '8px',
             }}
@@ -614,12 +725,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   style={{
                     padding: '4px 8px',
                     fontSize: '11px',
-                    borderRadius: '4px',
+                    borderRadius: 'var(--dsw-radius-xs, 4px)',
                     border: 'none',
-                    background: opt.style === 'danger' ? '#ef4444' : '#10b981',
-                    color: '#ffffff',
+                    background: opt.style === 'danger' ? COLORS.error : COLORS.success,
+                    color: COLORS.onBrand,
                     cursor: 'pointer',
-                    fontWeight: 500,
+                    fontWeight: 600,
                   }}
                 >
                   {opt.label}
@@ -632,16 +743,18 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     )
   }
 
-  const renderColumn = (title: string, count: number, items: Ticket[], headerBg: string) => (
+  const renderColumn = (title: string, count: number, items: Ticket[], headerIcon: string, headerColor: string) => (
     <div
       style={{
         flex: 1,
-        minWidth: '220px',
-        background: 'var(--dsh-bg-column, #f9fafb)',
-        borderRadius: '8px',
+        minWidth: '240px',
+        background: COLORS.surfaceAlt,
+        borderRadius: 'var(--dsw-radius-lg, 10px)',
+        border: `1px solid ${COLORS.borderSubtle}`,
         padding: '12px',
         display: 'flex',
         flexDirection: 'column',
+        boxSizing: 'border-box',
       }}
     >
       <div
@@ -651,17 +764,20 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           alignItems: 'center',
           marginBottom: '12px',
           paddingBottom: '8px',
-          borderBottom: '2px solid',
-          borderColor: headerBg,
+          borderBottom: `2px solid ${headerColor}`,
         }}
       >
-        <span style={{ fontWeight: 600, fontSize: '13px' }}>{title}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ fontSize: '13px' }}>{headerIcon}</span>
+          <span style={{ fontWeight: 600, fontSize: '13px', color: COLORS.text }}>{title}</span>
+        </div>
         <span
           style={{
-            background: headerBg,
-            color: '#ffffff',
+            background: COLORS.surface,
+            border: `1px solid ${COLORS.borderSubtle}`,
+            color: COLORS.secondary,
             padding: '2px 8px',
-            borderRadius: '12px',
+            borderRadius: '999px',
             fontSize: '11px',
             fontWeight: 700,
           }}
@@ -671,7 +787,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       </div>
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {items.length === 0 ? (
-          <div style={{ color: '#9ca3af', fontSize: '12px', textAlign: 'center', marginTop: '20px' }}>
+          <div style={{ color: COLORS.tertiary, fontSize: '12px', textAlign: 'center', marginTop: '24px' }}>
             {t('noTickets')}
           </div>
         ) : (
@@ -682,55 +798,55 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   )
 
   return (
-    <div style={{ padding: '24px', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+    <div
+      style={{
+        padding: '24px',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        background: COLORS.surface,
+        color: COLORS.text,
+        fontFamily: 'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
+      }}
+    >
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>{t('title')}</h2>
-          <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#6b7280' }}>{t('subtitle')}</p>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: COLORS.text }}>{t('title')}</h2>
+          <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: COLORS.secondary }}>{t('subtitle')}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
-            onClick={() => void fetchSnapshot()}
-            disabled={loading}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '6px',
-              border: '1px solid #d1d5db',
-              background: '#ffffff',
-              fontSize: '12px',
-              cursor: 'pointer',
+            onClick={() => {
+              void fetchSnapshot()
+              void fetchWorkspaces()
+              void fetchModels()
             }}
+            disabled={loading}
+            style={buttonBaseStyle}
           >
-            {t('refresh')}
+            🔄 {t('refresh')}
           </button>
           <button
             onClick={() => {
               void fetchWorkspaces()
+              void fetchModels()
               setDialogOpen(true)
             }}
-            style={{
-              padding: '6px 14px',
-              borderRadius: '6px',
-              border: 'none',
-              background: '#2563eb',
-              color: '#ffffff',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
+            style={primaryButtonStyle}
           >
             {t('createTask')}
           </button>
         </div>
       </div>
 
-      {/* Kanban Board */}
-      <div style={{ flex: 1, display: 'flex', gap: '16px', overflowX: 'auto' }}>
-        {renderColumn(t('colPending'), pending.length, pending, '#6b7280')}
-        {renderColumn(t('colRunning'), running.length, running, '#2563eb')}
-        {renderColumn(t('colAttention'), attention.length, attention, '#d97706')}
-        {renderColumn(t('colDone'), done.length, done, '#059669')}
+      {/* Kanban Board Container */}
+      <div style={{ flex: 1, display: 'flex', gap: '14px', overflowX: 'auto', minHeight: 0 }}>
+        {renderColumn(t('colPending'), pending.length, pending, '⏳', COLORS.tertiary)}
+        {renderColumn(t('colRunning'), running.length, running, '🔄', COLORS.brand)}
+        {renderColumn(t('colAttention'), attention.length, attention, '⚠️', COLORS.warn)}
+        {renderColumn(t('colDone'), done.length, done, '✅', COLORS.success)}
       </div>
 
       {/* Create Task Modal */}
@@ -739,27 +855,45 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.4)',
+            background: 'rgba(0,0,0,0.45)',
+            backdropFilter: 'blur(2px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 1000,
           }}
+          onClick={() => setDialogOpen(false)}
         >
           <div
             style={{
-              background: '#ffffff',
-              borderRadius: '10px',
+              background: COLORS.surface,
+              borderRadius: 'var(--dsw-radius-lg, 12px)',
+              border: `1px solid ${COLORS.border}`,
               padding: '24px',
-              width: '480px',
-              maxWidth: '90%',
-              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)',
+              width: '520px',
+              maxWidth: '92%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              boxShadow: 'var(--dsw-elevation-overlay, 0 20px 40px rgba(0,0,0,0.25))',
+              color: COLORS.text,
             }}
+            onClick={e => e.stopPropagation()}
           >
-            <h3 style={{ margin: '0 0 16px 0', fontSize: '16px' }}>{t('newTaskTitle')}</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: COLORS.text }}>{t('newTaskTitle')}</h3>
+              <button
+                type="button"
+                onClick={() => setDialogOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: COLORS.tertiary, fontSize: '18px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
             <form onSubmit={handleCreateTask}>
+              {/* Task Summary */}
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('summaryLabel')}
                 </label>
                 <textarea
@@ -769,19 +903,15 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   required
                   rows={3}
                   style={{
-                    width: '100%',
-                    padding: '8px',
-                    borderRadius: '6px',
-                    border: '1px solid #d1d5db',
-                    fontSize: '13px',
-                    boxSizing: 'border-box',
+                    ...inputStyle,
+                    resize: 'vertical',
                   }}
                 />
               </div>
 
               {/* Workspace Selector (Required Dropdown) */}
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('workspaceLabel')}
                 </label>
                 <select
@@ -791,15 +921,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     setThreadSelection('')
                   }}
                   required
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    borderRadius: '6px',
-                    border: '1px solid #d1d5db',
-                    fontSize: '13px',
-                    boxSizing: 'border-box',
-                    backgroundColor: '#ffffff',
-                  }}
+                  style={inputStyle}
                 >
                   {workspaces.map(w => (
                     <option key={w.id} value={w.path}>
@@ -810,22 +932,14 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               </div>
 
               {/* Linked Thread / Conversation Selector */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('threadIdLabel')}
                 </label>
                 <select
                   value={threadSelection}
                   onChange={e => setThreadSelection(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    borderRadius: '6px',
-                    border: '1px solid #d1d5db',
-                    fontSize: '13px',
-                    boxSizing: 'border-box',
-                    backgroundColor: '#ffffff',
-                  }}
+                  style={inputStyle}
                 >
                   <option value="">{t('newThreadOption')}</option>
                   {availableSessions.length > 0 && (
@@ -846,27 +960,19 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     value={customThreadId}
                     onChange={e => setCustomThreadId(e.target.value)}
                     placeholder={t('customThreadPlaceholder')}
-                    style={{
-                      width: '100%',
-                      marginTop: '8px',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                    }}
+                    style={{ ...inputStyle, marginTop: '8px' }}
                   />
                 )}
               </div>
 
-              {/* Category and Source Grid (Open & Semantic, with datalist & quick pills) */}
+              {/* Category and Source Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: COLORS.text }}>
                       {t('categoryLabel')}
                     </label>
-                    <span style={{ fontSize: '11px', color: '#6366f1' }}>🤖 Router 智能研判</span>
+                    <span style={{ fontSize: '11px', color: COLORS.brand }}>🤖 Router 智能研判</span>
                   </div>
                   <input
                     type="text"
@@ -874,15 +980,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     onChange={e => setSelectedCategory(e.target.value)}
                     placeholder="留空自动研判，或输入自定义分类..."
                     list="autoloop-categories"
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   />
                   <datalist id="autoloop-categories">
                     <option value="缺陷修复" />
@@ -904,11 +1002,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                         onClick={() => setSelectedCategory(c)}
                         style={{
                           fontSize: '10px',
-                          padding: '1px 6px',
-                          borderRadius: '10px',
-                          border: '1px solid #e2e8f0',
-                          background: selectedCategory === c ? '#e0e7ff' : '#f8fafc',
-                          color: selectedCategory === c ? '#3730a3' : '#64748b',
+                          padding: '2px 6px',
+                          borderRadius: '999px',
+                          border: `1px solid ${selectedCategory === c ? COLORS.brand : COLORS.borderSubtle}`,
+                          background: selectedCategory === c ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
+                          color: selectedCategory === c ? COLORS.brand : COLORS.secondary,
                           cursor: 'pointer',
                         }}
                       >
@@ -919,7 +1017,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       <button
                         type="button"
                         onClick={() => setSelectedCategory('')}
-                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: COLORS.error, cursor: 'pointer' }}
                       >
                         ✕ 重置
                       </button>
@@ -929,10 +1027,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600, color: COLORS.text }}>
                       {t('sourceFormLabel')}
                     </label>
-                    <span style={{ fontSize: '11px', color: '#6366f1' }}>🤖 Router 自动提取</span>
+                    <span style={{ fontSize: '11px', color: COLORS.brand }}>🤖 Router 自动提取</span>
                   </div>
                   <input
                     type="text"
@@ -940,15 +1038,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     onChange={e => setSelectedSource(e.target.value)}
                     placeholder="留空自动识别渠道，或输入自定义来源..."
                     list="autoloop-sources"
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   />
                   <datalist id="autoloop-sources">
                     <option value="飞书" />
@@ -969,11 +1059,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                         onClick={() => setSelectedSource(s)}
                         style={{
                           fontSize: '10px',
-                          padding: '1px 6px',
-                          borderRadius: '10px',
-                          border: '1px solid #e2e8f0',
-                          background: selectedSource === s ? '#e0e7ff' : '#f8fafc',
-                          color: selectedSource === s ? '#3730a3' : '#64748b',
+                          padding: '2px 6px',
+                          borderRadius: '999px',
+                          border: `1px solid ${selectedSource === s ? COLORS.brand : COLORS.borderSubtle}`,
+                          background: selectedSource === s ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
+                          color: selectedSource === s ? COLORS.brand : COLORS.secondary,
                           cursor: 'pointer',
                         }}
                       >
@@ -984,7 +1074,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       <button
                         type="button"
                         onClick={() => setSelectedSource('')}
-                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: COLORS.error, cursor: 'pointer' }}
                       >
                         ✕ 重置
                       </button>
@@ -996,21 +1086,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {/* Priority and Schedule Mode Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('priorityLabel')}
                   </label>
                   <select
                     value={selectedPriority}
                     onChange={e => setSelectedPriority(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   >
                     <option value="auto">{t('priorityAuto')}</option>
                     <option value="p0">{t('prioP0')}</option>
@@ -1021,21 +1103,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('scheduleLabel')}
                   </label>
                   <select
                     value={selectedSchedule}
                     onChange={e => setSelectedSchedule(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   >
                     <option value="immediate">{t('scheduleImmediate')}</option>
                     <option value="nightly">{t('scheduleNightly')}</option>
@@ -1044,47 +1118,40 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 </div>
               </div>
 
-              {/* Model and Permission Settings Grid */}
+              {/* Dynamic Model (from DSH) and Permission Settings Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('modelLabel')}
                   </label>
                   <select
                     value={selectedModel}
                     onChange={e => setSelectedModel(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   >
-                    <option value="default">{t('modelDefault')}</option>
-                    <option value="deepseek-reasoner">{t('modelReasoner')}</option>
-                    <option value="deepseek-chat">{t('modelChat')}</option>
+                    <option value="default">
+                      {t('modelDefault')} {modelCatalog?.defaultSelection?.model ? `(${modelCatalog.defaultSelection.model})` : ''}
+                    </option>
+                    {modelCatalog?.groups.map(group => (
+                      <optgroup key={group.id} label={group.name || group.id}>
+                        {group.models.map(m => (
+                          <option key={`${group.id}/${m.id}`} value={`${group.id}/${m.id}`}>
+                            {m.name || m.id} {m.badge ? `[${m.badge}]` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('permissionLabel')}
                   </label>
                   <select
                     value={selectedPermission}
                     onChange={e => setSelectedPermission(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px',
-                      borderRadius: '6px',
-                      border: '1px solid #d1d5db',
-                      fontSize: '13px',
-                      boxSizing: 'border-box',
-                      backgroundColor: '#ffffff',
-                    }}
+                    style={inputStyle}
                   >
                     <option value="workspace-write">{t('permWorkspace')}</option>
                     <option value="danger-full-access">{t('permFullAccess')}</option>
@@ -1097,29 +1164,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 <button
                   type="button"
                   onClick={() => setDialogOpen(false)}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: '6px',
-                    border: '1px solid #d1d5db',
-                    background: '#ffffff',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                  }}
+                  style={buttonBaseStyle}
                 >
                   {t('cancel')}
                 </button>
                 <button
                   type="submit"
-                  style={{
-                    padding: '6px 16px',
-                    borderRadius: '6px',
-                    border: 'none',
-                    background: '#2563eb',
-                    color: '#ffffff',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
+                  style={primaryButtonStyle}
                 >
                   {t('submit')}
                 </button>
@@ -1135,7 +1186,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.5)',
+            background: 'rgba(0,0,0,0.45)',
+            backdropFilter: 'blur(2px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1145,15 +1197,17 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         >
           <div
             style={{
-              background: '#ffffff',
-              borderRadius: '12px',
+              background: COLORS.surface,
+              borderRadius: 'var(--dsw-radius-lg, 12px)',
+              border: `1px solid ${COLORS.border}`,
               padding: '24px',
               width: '680px',
               maxWidth: '92%',
               maxHeight: '85vh',
               display: 'flex',
               flexDirection: 'column',
-              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+              boxShadow: 'var(--dsw-elevation-overlay, 0 20px 40px rgba(0,0,0,0.25))',
+              color: COLORS.text,
               boxSizing: 'border-box',
             }}
             onClick={e => e.stopPropagation()}
@@ -1162,14 +1216,29 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
               <div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '12px', color: '#6b7280', fontFamily: 'monospace', fontWeight: 600 }}>{activeTicket.id}</span>
+                  <span style={{ fontSize: '12px', color: COLORS.tertiary, fontFamily: 'var(--dsw-font-mono, monospace)', fontWeight: 600 }}>
+                    #{activeTicket.id}
+                  </span>
                   <span
                     style={{
                       fontSize: '11px',
                       padding: '2px 8px',
-                      borderRadius: '12px',
-                      background: activeTicket.status === 'completed' ? '#dcfce7' : activeTicket.status === 'running' ? '#dbeafe' : activeTicket.status === 'waiting_attention' ? '#fef3c7' : '#f3f4f6',
-                      color: activeTicket.status === 'completed' ? '#166534' : activeTicket.status === 'running' ? '#1e40af' : activeTicket.status === 'waiting_attention' ? '#92400e' : '#374151',
+                      borderRadius: '999px',
+                      background: activeTicket.status === 'completed'
+                        ? 'rgba(16, 185, 129, 0.12)'
+                        : activeTicket.status === 'running'
+                        ? 'rgba(37, 99, 235, 0.12)'
+                        : activeTicket.status === 'waiting_attention'
+                        ? 'rgba(245, 158, 11, 0.12)'
+                        : COLORS.surfaceAlt,
+                      color: activeTicket.status === 'completed'
+                        ? COLORS.success
+                        : activeTicket.status === 'running'
+                        ? COLORS.brand
+                        : activeTicket.status === 'waiting_attention'
+                        ? COLORS.warn
+                        : COLORS.secondary,
+                      border: `1px solid ${COLORS.borderSubtle}`,
                       fontWeight: 600,
                     }}
                   >
@@ -1179,9 +1248,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     style={{
                       fontSize: '11px',
                       padding: '2px 8px',
-                      borderRadius: '4px',
+                      borderRadius: 'var(--dsw-radius-xs, 4px)',
                       background: getCategoryMeta(activeTicket.mandate.intent).bg,
                       color: getCategoryMeta(activeTicket.mandate.intent).color,
+                      border: `1px solid ${getCategoryMeta(activeTicket.mandate.intent).border}`,
                       fontWeight: 600,
                     }}
                   >
@@ -1191,9 +1261,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     style={{
                       fontSize: '11px',
                       padding: '2px 8px',
-                      borderRadius: '4px',
+                      borderRadius: 'var(--dsw-radius-xs, 4px)',
                       background: getPriorityMeta(activeTicket.priority).bg,
                       color: getPriorityMeta(activeTicket.priority).color,
+                      border: `1px solid ${getPriorityMeta(activeTicket.priority).border}`,
                       fontWeight: 700,
                     }}
                   >
@@ -1203,9 +1274,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     style={{
                       fontSize: '11px',
                       padding: '2px 8px',
-                      borderRadius: '4px',
+                      borderRadius: 'var(--dsw-radius-xs, 4px)',
                       background: getSourceMeta(activeTicket.source).bg,
                       color: getSourceMeta(activeTicket.source).color,
+                      border: `1px solid ${getSourceMeta(activeTicket.source).border}`,
                       fontWeight: 600,
                     }}
                   >
@@ -1216,9 +1288,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       style={{
                         fontSize: '11px',
                         padding: '2px 8px',
-                        borderRadius: '4px',
-                        background: '#fef3c7',
-                        color: '#92400e',
+                        borderRadius: 'var(--dsw-radius-xs, 4px)',
+                        background: 'rgba(245, 158, 11, 0.12)',
+                        color: '#b45309',
+                        border: '1px solid rgba(245, 158, 11, 0.25)',
                         fontWeight: 600,
                       }}
                     >
@@ -1226,7 +1299,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     </span>
                   )}
                 </div>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: COLORS.text }}>
                   {activeTicket.title}
                 </h3>
               </div>
@@ -1237,7 +1310,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   background: 'transparent',
                   border: 'none',
                   fontSize: '20px',
-                  color: '#9ca3af',
+                  color: COLORS.tertiary,
                   cursor: 'pointer',
                   padding: '4px 8px',
                   lineHeight: 1,
@@ -1253,9 +1326,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {activeTicket.status === 'pending' && activeTicket.scheduleMode === 'nightly' && (
                 <div
                   style={{
-                    background: '#fffbeb',
-                    border: '1px solid #fde68a',
-                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
                     padding: '12px 16px',
                     marginBottom: '16px',
                     display: 'flex',
@@ -1264,37 +1337,27 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     gap: '12px',
                   }}
                 >
-                  <div style={{ fontSize: '12px', color: '#92400e', lineHeight: '1.5' }}>
+                  <div style={{ fontSize: '12px', color: '#b45309', lineHeight: '1.5' }}>
                     {t('nightlyNotice')}
                   </div>
                   <button
                     type="button"
                     disabled={runningNowId === activeTicket.id}
                     onClick={() => void handleRunNow(activeTicket.id)}
-                    style={{
-                      padding: '6px 14px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      background: '#2563eb',
-                      color: '#ffffff',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                      marginLeft: '8px',
-                    }}
+                    style={primaryButtonStyle}
                   >
                     {runningNowId === activeTicket.id ? t('runningNow') : t('runNow')}
                   </button>
                 </div>
               )}
+
               {/* Session Jump Banner (if sessionId exists) */}
               {activeTicket.assignment?.sessionId && (
                 <div
                   style={{
-                    background: '#eff6ff',
-                    border: '1px solid #bfdbfe',
-                    borderRadius: '8px',
+                    background: 'rgba(37, 99, 235, 0.08)',
+                    border: `1px solid ${COLORS.brand}`,
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
                     padding: '12px 16px',
                     marginBottom: '16px',
                     display: 'flex',
@@ -1304,10 +1367,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#1e40af' }}>
-                      {t('associatedSession')}: <code style={{ fontSize: '12px', background: '#dbeafe', padding: '2px 4px', borderRadius: '4px' }}>{activeTicket.assignment.sessionId}</code>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: COLORS.brand }}>
+                      {t('associatedSession')}: <code style={{ fontSize: '12px', background: COLORS.surface, border: `1px solid ${COLORS.borderSubtle}`, padding: '2px 6px', borderRadius: '4px' }}>{activeTicket.assignment.sessionId}</code>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#3b82f6', marginTop: '3px' }}>
+                    <div style={{ fontSize: '11px', color: COLORS.secondary, marginTop: '3px' }}>
                       {t('sessionNotice')}
                     </div>
                   </div>
@@ -1318,17 +1381,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                         onOpenSession(activeTicket.assignment!.sessionId!)
                         setSelectedTicket(null)
                       }}
-                      style={{
-                        padding: '6px 14px',
-                        borderRadius: '6px',
-                        border: 'none',
-                        background: '#2563eb',
-                        color: '#ffffff',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
+                      style={primaryButtonStyle}
                     >
                       {t('openSessionInSidebar')}
                     </button>
@@ -1339,13 +1392,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {/* Execution Result Box */}
               <div style={{ marginBottom: '16px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>
+                  <label style={{ fontSize: '13px', fontWeight: 600, color: COLORS.text }}>
                     {t('resultTitle')}
                   </label>
                   {activeTicket.assignment?.resultSummary && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       {copyNotice && (
-                        <span style={{ fontSize: '11px', color: '#059669', fontWeight: 500 }}>
+                        <span style={{ fontSize: '11px', color: COLORS.success, fontWeight: 500 }}>
                           ✓ {t('copied')}
                         </span>
                       )}
@@ -1358,14 +1411,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                             setTimeout(() => setCopyNotice(false), 2000)
                           }
                         }}
-                        style={{
-                          fontSize: '11px',
-                          padding: '3px 8px',
-                          borderRadius: '4px',
-                          border: '1px solid #d1d5db',
-                          background: '#ffffff',
-                          cursor: 'pointer',
-                        }}
+                        style={buttonBaseStyle}
                       >
                         {t('copyResult')}
                       </button>
@@ -1375,9 +1421,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
                 <div
                   style={{
-                    background: '#f9fafb',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
+                    background: COLORS.surfaceAlt,
+                    border: `1px solid ${COLORS.borderSubtle}`,
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
                     padding: '12px',
                     minHeight: '80px',
                     maxHeight: '260px',
@@ -1386,21 +1432,22 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     lineHeight: '1.6',
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
+                    color: COLORS.text,
                   }}
                 >
                   {activeTicket.status === 'running' ? (
-                    <div style={{ color: '#2563eb', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ color: COLORS.brand, display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span>⏳</span>
                       {t('runningHint')}
                     </div>
                   ) : activeTicket.assignment?.error ? (
-                    <div style={{ color: '#b91c1c' }}>
+                    <div style={{ color: COLORS.error }}>
                       <strong>Error:</strong> {activeTicket.assignment.error}
                     </div>
                   ) : activeTicket.assignment?.resultSummary ? (
                     activeTicket.assignment.resultSummary
                   ) : (
-                    <span style={{ color: '#9ca3af' }}>{t('noResult')}</span>
+                    <span style={{ color: COLORS.tertiary }}>{t('noResult')}</span>
                   )}
                 </div>
               </div>
@@ -1409,9 +1456,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {activeTicket.status === 'waiting_attention' && activeTicket.attention && (
                 <div
                   style={{
-                    background: '#fffbeb',
-                    border: '1px solid #fef3c7',
-                    borderRadius: '8px',
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.25)',
+                    borderRadius: 'var(--dsw-radius-md, 8px)',
                     padding: '14px',
                     marginBottom: '16px',
                   }}
@@ -1435,10 +1482,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                         style={{
                           padding: '6px 12px',
                           fontSize: '12px',
-                          borderRadius: '6px',
+                          borderRadius: 'var(--dsw-radius-sm, 6px)',
                           border: 'none',
-                          background: opt.style === 'danger' ? '#ef4444' : '#10b981',
-                          color: '#ffffff',
+                          background: opt.style === 'danger' ? COLORS.error : COLORS.success,
+                          color: COLORS.onBrand,
                           cursor: 'pointer',
                           fontWeight: 600,
                         }}
@@ -1453,20 +1500,20 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {/* Router Triage Audit Log Block */}
               <div
                 style={{
-                  background: '#f8fafc',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: '10px',
+                  background: COLORS.surfaceAlt,
+                  border: `1px solid ${COLORS.border}`,
+                  borderRadius: 'var(--dsw-radius-md, 8px)',
                   padding: '14px',
                   marginBottom: '16px',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: COLORS.text, display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>🧠</span>
                     <span>{t('triageTitle')}</span>
                   </div>
                   {activeTicket.triage?.evaluatedAt && (
-                    <span style={{ fontSize: '11px', color: '#64748b' }}>
+                    <span style={{ fontSize: '11px', color: COLORS.tertiary }}>
                       {new Date(activeTicket.triage.evaluatedAt).toLocaleTimeString()}
                     </span>
                   )}
@@ -1479,34 +1526,34 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     gridTemplateColumns: 'repeat(4, 1fr)',
                     gap: '8px',
                     marginBottom: '10px',
-                    background: '#ffffff',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '8px',
+                    background: COLORS.surface,
+                    border: `1px solid ${COLORS.borderSubtle}`,
+                    borderRadius: 'var(--dsw-radius-sm, 6px)',
                     padding: '10px',
                     fontSize: '12px',
                   }}
                 >
                   <div>
-                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageCategory')}</span>
-                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                    <span style={{ color: COLORS.secondary, display: 'block', fontSize: '11px' }}>{t('triageCategory')}</span>
+                    <span style={{ fontWeight: 600, color: COLORS.text }}>
                       {getCategoryMeta(activeTicket.mandate.intent).icon} {activeTicket.triage?.categoryLabel || getCategoryMeta(activeTicket.mandate.intent).label}
                     </span>
                   </div>
                   <div>
-                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triagePriority')}</span>
-                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                    <span style={{ color: COLORS.secondary, display: 'block', fontSize: '11px' }}>{t('triagePriority')}</span>
+                    <span style={{ fontWeight: 600, color: COLORS.text }}>
                       {getPriorityMeta(activeTicket.priority).dot} {getPriorityMeta(activeTicket.priority).label}
                     </span>
                   </div>
                   <div>
-                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageSchedule')}</span>
-                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                    <span style={{ color: COLORS.secondary, display: 'block', fontSize: '11px' }}>{t('triageSchedule')}</span>
+                    <span style={{ fontWeight: 600, color: COLORS.text }}>
                       {activeTicket.scheduleMode === 'nightly' ? '🌙 夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '🕒 定时' : '⚡ 立即执行'}
                     </span>
                   </div>
                   <div>
-                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageModel')}</span>
-                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                    <span style={{ color: COLORS.secondary, display: 'block', fontSize: '11px' }}>{t('triageModel')}</span>
+                    <span style={{ fontWeight: 600, color: COLORS.text }}>
                       {activeTicket.mandate.model?.model || '系统默认'}
                     </span>
                   </div>
@@ -1515,7 +1562,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 {/* Domain tags if present */}
                 {((activeTicket.triage?.tags && activeTicket.triage.tags.length > 0) || (activeTicket.tags && activeTicket.tags.length > 0)) && (
                   <div style={{ marginBottom: '10px' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: COLORS.secondary, marginBottom: '4px' }}>
                       识别业务标签 (Domain Tags)
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -1527,7 +1574,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                             style={{
                               fontSize: '11px',
                               padding: '2px 8px',
-                              borderRadius: '6px',
+                              borderRadius: 'var(--dsw-radius-xs, 4px)',
                               background: tc.bg,
                               color: tc.color,
                               border: `1px solid ${tc.border}`,
@@ -1545,7 +1592,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 {/* Matched rules tags */}
                 {activeTicket.triage?.matchedRules && activeTicket.triage.matchedRules.length > 0 && (
                   <div style={{ marginBottom: '10px' }}>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: COLORS.secondary, marginBottom: '4px' }}>
                       {t('triageMatchedRules')}
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -1555,9 +1602,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                           style={{
                             fontSize: '11px',
                             padding: '2px 8px',
-                            borderRadius: '12px',
-                            background: '#e0e7ff',
-                            color: '#3730a3',
+                            borderRadius: '999px',
+                            background: 'rgba(37, 99, 235, 0.08)',
+                            color: COLORS.brand,
+                            border: `1px solid ${COLORS.borderSubtle}`,
                             fontWeight: 500,
                           }}
                         >
@@ -1571,16 +1619,17 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 {/* Reasoning narrative */}
                 {activeTicket.triage?.reasoning && (
                   <div>
-                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: COLORS.secondary, marginBottom: '4px' }}>
                       {t('triageReasoning')}
                     </div>
                     <div
                       style={{
                         fontSize: '12px',
                         lineHeight: '1.6',
-                        color: '#334155',
-                        background: '#f1f5f9',
-                        borderRadius: '6px',
+                        color: COLORS.text,
+                        background: COLORS.surface,
+                        border: `1px solid ${COLORS.borderSubtle}`,
+                        borderRadius: 'var(--dsw-radius-sm, 6px)',
                         padding: '8px 12px',
                         whiteSpace: 'pre-line',
                       }}
@@ -1594,9 +1643,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {/* Mandate & Metadata Grid */}
               <div
                 style={{
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '8px',
+                  background: COLORS.surfaceAlt,
+                  border: `1px solid ${COLORS.borderSubtle}`,
+                  borderRadius: 'var(--dsw-radius-md, 8px)',
                   padding: '12px',
                   fontSize: '12px',
                   display: 'grid',
@@ -1606,43 +1655,43 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 }}
               >
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('targetWorkspace')}: </span>
-                  <span style={{ fontWeight: 500, fontFamily: 'monospace' }}>{activeTicket.workspace.sourceRoot}</span>
+                  <span style={{ color: COLORS.secondary }}>{t('targetWorkspace')}: </span>
+                  <span style={{ fontWeight: 500, fontFamily: 'var(--dsw-font-mono, monospace)', color: COLORS.text }}>{activeTicket.workspace.sourceRoot}</span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('source')}: </span>
-                  <span style={{ fontWeight: 500 }}>
+                  <span style={{ color: COLORS.secondary }}>{t('source')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>
                     {getSourceMeta(activeTicket.source).icon} {getSourceMeta(activeTicket.source).label} ({activeTicket.source})
                   </span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('priorityLabel')}: </span>
-                  <span style={{ fontWeight: 500 }}>
+                  <span style={{ color: COLORS.secondary }}>{t('priorityLabel')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>
                     {getPriorityMeta(activeTicket.priority).dot} {getPriorityMeta(activeTicket.priority).label}
                   </span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('scheduleLabel')}: </span>
-                  <span style={{ fontWeight: 500 }}>
+                  <span style={{ color: COLORS.secondary }}>{t('scheduleLabel')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>
                     {activeTicket.scheduleMode === 'nightly' ? '🌙 夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '🕒 定时' : '⚡ 立即执行'}
                   </span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('modelLabel')}: </span>
-                  <span style={{ fontWeight: 500 }}>{activeTicket.mandate.model?.model || 'default'}</span>
+                  <span style={{ color: COLORS.secondary }}>{t('modelLabel')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>{activeTicket.mandate.model?.model || 'default'}</span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('permissionLabel')}: </span>
-                  <span style={{ fontWeight: 500 }}>{activeTicket.mandate.permissionPreset || 'workspace-write'}</span>
+                  <span style={{ color: COLORS.secondary }}>{t('permissionLabel')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>{activeTicket.mandate.permissionPreset || 'workspace-write'}</span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('hopCount')}: </span>
-                  <span style={{ fontWeight: 500 }}>{activeTicket.hopCount}</span>
+                  <span style={{ color: COLORS.secondary }}>{t('hopCount')}: </span>
+                  <span style={{ fontWeight: 500, color: COLORS.text }}>{activeTicket.hopCount}</span>
                 </div>
                 {activeTicket.assignment?.startedAt && (
                   <div>
-                    <span style={{ color: '#64748b' }}>{t('elapsed')}: </span>
-                    <span style={{ fontWeight: 500 }}>
+                    <span style={{ color: COLORS.secondary }}>{t('elapsed')}: </span>
+                    <span style={{ fontWeight: 500, color: COLORS.text }}>
                       {activeTicket.assignment.endedAt
                         ? `${((activeTicket.assignment.endedAt - activeTicket.assignment.startedAt) / 1000).toFixed(1)}s`
                         : `${((Date.now() - activeTicket.assignment.startedAt) / 1000).toFixed(0)}s (running)`}
@@ -1651,10 +1700,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 )}
                 {activeTicket.workspace.worktree?.branch && (
                   <div style={{ gridColumn: 'span 2' }}>
-                    <span style={{ color: '#64748b' }}>{t('worktree')}: </span>
-                    <span style={{ color: '#047857', fontWeight: 600 }}>🌿 {activeTicket.workspace.worktree.branch}</span>
+                    <span style={{ color: COLORS.secondary }}>{t('worktree')}: </span>
+                    <span style={{ color: COLORS.success, fontWeight: 600 }}>🌿 {activeTicket.workspace.worktree.branch}</span>
                     {activeTicket.workspace.worktree.path && (
-                      <span style={{ color: '#6b7280', fontFamily: 'monospace', marginLeft: '6px' }}>({activeTicket.workspace.worktree.path})</span>
+                      <span style={{ color: COLORS.tertiary, fontFamily: 'var(--dsw-font-mono, monospace)', marginLeft: '6px' }}>({activeTicket.workspace.worktree.path})</span>
                     )}
                   </div>
                 )}
@@ -1662,17 +1711,17 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
               {/* Original Instruction / Prompt */}
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '4px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '4px' }}>
                   {t('originalInstruction')}
                 </label>
                 <div
                   style={{
-                    background: '#ffffff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    padding: '8px 12px',
+                    background: COLORS.surface,
+                    border: `1px solid ${COLORS.borderSubtle}`,
+                    borderRadius: 'var(--dsw-radius-sm, 6px)',
+                    padding: '10px 12px',
                     fontSize: '12px',
-                    color: '#1f2937',
+                    color: COLORS.text,
                     whiteSpace: 'pre-wrap',
                   }}
                 >
@@ -1683,7 +1732,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               {/* Follow-up Inputs Timeline */}
               {activeTicket.inputs.length > 0 && (
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '6px' }}>
                     {t('followupsTitle')} ({activeTicket.inputs.length})
                   </label>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1691,17 +1740,17 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       <div
                         key={input.id}
                         style={{
-                          background: '#ffffff',
-                          border: '1px solid #e5e7eb',
-                          borderRadius: '6px',
+                          background: COLORS.surface,
+                          border: `1px solid ${COLORS.borderSubtle}`,
+                          borderRadius: 'var(--dsw-radius-sm, 6px)',
                           padding: '6px 10px',
                           fontSize: '12px',
                         }}
                       >
-                        <div style={{ color: '#6b7280', fontSize: '10px', marginBottom: '2px' }}>
+                        <div style={{ color: COLORS.tertiary, fontSize: '10px', marginBottom: '2px' }}>
                           {new Date(input.receivedAt).toLocaleTimeString()} · Event {input.eventId}
                         </div>
-                        <div style={{ color: '#111827' }}>{input.text}</div>
+                        <div style={{ color: COLORS.text }}>{input.text}</div>
                       </div>
                     ))}
                   </div>
@@ -1710,19 +1759,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             </div>
 
             {/* Modal Footer */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px', paddingTop: '12px', borderTop: `1px solid ${COLORS.borderSubtle}` }}>
               <button
                 type="button"
                 onClick={() => setSelectedTicket(null)}
-                style={{
-                  padding: '6px 16px',
-                  borderRadius: '6px',
-                  border: '1px solid #d1d5db',
-                  background: '#ffffff',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  fontWeight: 500,
-                }}
+                style={buttonBaseStyle}
               >
                 {t('close')}
               </button>

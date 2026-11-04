@@ -114,4 +114,64 @@ describe('HTTP routes', () => {
     expect(json).toHaveProperty('tickets')
     expect(json).toHaveProperty('stats')
   })
+
+  it('handles GET /api/autoloop/models with fallback when services are empty', async () => {
+    const mockCtx = { get: vi.fn().mockReturnValue(undefined) } as any
+    const handler = createRequestHandler({
+      prefix: '/api/autoloop',
+      kernel,
+      ctx: mockCtx,
+      defaultWorkspacePath,
+    })
+
+    const { req, res, resState } = createMockReqRes('GET', '/api/autoloop/models')
+    const promise = handler(req, res)
+    req.emit('end')
+    await promise
+
+    expect(resState.statusCode).toBe(200)
+    const json = JSON.parse(resState.body)
+    expect(json.groups).toBeDefined()
+    expect(json.groups.length).toBeGreaterThan(0)
+    expect(json.groups[0].models[0].id).toBe('deepseek-chat')
+  })
+
+  it('handles GET /api/autoloop/models querying live sessionController.modelCatalog', async () => {
+    const mockCatalog = {
+      default: { provider: 'custom-prov', model: 'custom-model' },
+      groups: [
+        {
+          id: 'custom-prov',
+          name: 'Custom Provider',
+          models: [{ id: 'custom-model', name: 'Custom Model', badge: 'Pro' }],
+        },
+      ],
+    }
+    const mockCtx = {
+      get: vi.fn((key: string) => {
+        if (key === 'sessionController') {
+          return { modelCatalog: vi.fn().mockResolvedValue(mockCatalog) }
+        }
+        return undefined
+      }),
+    } as any
+
+    const handler = createRequestHandler({
+      prefix: '/api/autoloop',
+      kernel,
+      ctx: mockCtx,
+      defaultWorkspacePath,
+    })
+
+    const { req, res, resState } = createMockReqRes('GET', '/api/autoloop/models')
+    const promise = handler(req, res)
+    req.emit('end')
+    await promise
+
+    expect(resState.statusCode).toBe(200)
+    const json = JSON.parse(resState.body)
+    expect(json.defaultSelection.model).toBe('custom-model')
+    expect(json.groups[0].name).toBe('Custom Provider')
+    expect(json.groups[0].models[0].badge).toBe('Pro')
+  })
 })
