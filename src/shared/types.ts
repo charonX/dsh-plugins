@@ -38,6 +38,59 @@ export type TicketStatus =
   | 'failed'
   | 'circuit_broken'
 
+/** Task Priority Level */
+export type PriorityLevel = 'p0' | 'p1' | 'p2' | 'p3'
+
+/** Task Execution Schedule Mode */
+export type ScheduleMode = 'immediate' | 'nightly' | 'scheduled'
+
+/** Task Category / Intent */
+export type TaskCategory =
+  | 'bugfix'
+  | 'feature'
+  | 'refactor'
+  | 'testing'
+  | 'documentation'
+  | 'review'
+  | 'general'
+  | string
+
+/** Source of task */
+export type TaskSource =
+  | 'manual-ui'
+  | 'feishu'
+  | 'github'
+  | 'sentry'
+  | 'cron'
+  | 'webhook'
+  | string
+
+/** Detailed audit record of how the task was triaged by IntentRouter */
+export interface RouterTriage {
+  /** Inferred or selected task intent/category */
+  intent: TaskCategory
+  /** Human-readable category label (e.g. "缺陷修复", "架构治理") */
+  categoryLabel: string
+  /** Assigned priority level */
+  priority: PriorityLevel
+  /** Execution schedule mode */
+  scheduleMode: ScheduleMode
+  /** Target scheduled timestamp (if scheduleMode === 'scheduled') */
+  scheduledAt?: number
+  /** Comprehensive reasoning explanation in natural language */
+  reasoning: string
+  /** Keywords or rules matched during triage */
+  matchedRules: string[]
+  /** Recommended or selected model */
+  recommendedModel: string
+  /** Recommended operational skills */
+  recommendedSkills: string[]
+  /** Permission preset assigned */
+  permissionPreset: string
+  /** Timestamp when triage evaluation occurred */
+  evaluatedAt: number
+}
+
 /** Mandate issued to an agent */
 export interface TicketMandate {
   /** Inferred or declared task intent: "coding" | "bugfix" | "review" | "cleanup" | "general" */
@@ -57,6 +110,14 @@ export interface TicketMandate {
   permissionPreset?: string
   /** Agent preset identity */
   agentPreset?: string
+  /** Priority level */
+  priority?: PriorityLevel
+  /** Schedule mode */
+  scheduleMode?: ScheduleMode
+  /** Scheduled execution time */
+  scheduledAt?: number
+  /** Audit log of router triage */
+  triage?: RouterTriage
 }
 
 /** Supplemental input fanned out to an active Ticket */
@@ -110,7 +171,11 @@ export interface Ticket {
   title: string
   source: string
   status: TicketStatus
+  priority: PriorityLevel
+  scheduleMode: ScheduleMode
+  scheduledAt?: number
   mandate: TicketMandate
+  triage?: RouterTriage
   workspace: {
     sourceRoot: string
     worktree?: WorktreeInfo
@@ -128,6 +193,7 @@ export type JournalEntry =
   | { type: 'ticket.created'; ticket: Ticket; at: number }
   | { type: 'ticket.input_added'; ticketId: string; input: TicketInput; at: number }
   | { type: 'ticket.status_changed'; ticketId: string; status: TicketStatus; at: number }
+  | { type: 'ticket.schedule_changed'; ticketId: string; scheduleMode: ScheduleMode; priority?: PriorityLevel; at: number }
   | { type: 'ticket.assignment_started'; ticketId: string; assignment: TicketAssignment; at: number }
   | { type: 'ticket.assignment_ended'; ticketId: string; resultSummary?: string; error?: string; sessionId?: string; at: number }
   | { type: 'ticket.attention_raised'; ticketId: string; attention: AttentionRequest; at: number }

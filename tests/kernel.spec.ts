@@ -172,4 +172,62 @@ describe('AutoloopKernel', () => {
     expect(ticketCompleted?.status).toBe('completed')
     expect(ticketCompleted?.assignment?.resultSummary).toContain('approved')
   })
+
+  it('attaches comprehensive router triage log to created ticket', async () => {
+    const res = await kernel.ingestEvent({
+      id: 'ev-triage',
+      source: 'feishu',
+      threadId: 'th-triage-1',
+      type: 'task.create',
+      summary: '紧急修复生产环境 Sentry 报错',
+      receivedAt: Date.now(),
+    })
+
+    const ticket = store.getTicket(res.ticketId)
+    expect(ticket).toBeDefined()
+    expect(ticket?.priority).toBe('p0')
+    expect(ticket?.mandate.intent).toBe('bugfix')
+    expect(ticket?.triage).toBeDefined()
+    expect(ticket?.triage?.categoryLabel).toBe('缺陷修复')
+    expect(ticket?.triage?.reasoning).toContain('任务意图研判')
+    expect(ticket?.triage?.matchedRules.length).toBeGreaterThan(0)
+  })
+
+  it('defers nightly tickets and allows manual runTicketNow trigger', async () => {
+    let executed = false
+    const mockExecutor: AgentExecutor = {
+      name: 'mock',
+      execute: async () => {
+        executed = true
+        return { summary: 'Nightly done' }
+      },
+    }
+    kernel.registerExecutor(mockExecutor)
+
+    const res = await kernel.ingestEvent({
+      id: 'ev-nightly',
+      source: 'manual-ui',
+      threadId: 'th-nightly-1',
+      type: 'task.create',
+      summary: '重构老旧缓存模块，夜间低峰执行节省Token',
+      payload: { scheduleMode: 'nightly' },
+      receivedAt: Date.now(),
+    })
+
+    const ticket = store.getTicket(res.ticketId)
+    expect(ticket?.scheduleMode).toBe('nightly')
+
+    // If current test time is not between 23:00 and 07:00, it stays pending:
+    const hour = new Date().getHours()
+    if (hour >= 7 && hour < 23) {
+      expect(ticket?.status).toBe('pending')
+      expect(executed).toBe(false)
+
+      // Manually trigger execution via runTicketNow
+      const ok = await kernel.runTicketNow(res.ticketId)
+      expect(ok).toBe(true)
+      expect(executed).toBe(true)
+      expect(store.getTicket(res.ticketId)?.status).toBe('completed')
+    }
+  })
 })

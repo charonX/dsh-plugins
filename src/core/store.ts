@@ -73,7 +73,10 @@ export class JournalStore {
   private apply(entry: JournalEntry): void {
     switch (entry.type) {
       case 'ticket.created': {
-        this.tickets.set(entry.ticket.id, structuredClone(entry.ticket))
+        const cloned = structuredClone(entry.ticket)
+        if (!cloned.priority) cloned.priority = 'p2'
+        if (!cloned.scheduleMode) cloned.scheduleMode = 'immediate'
+        this.tickets.set(cloned.id, cloned)
         break
       }
       case 'ticket.input_added': {
@@ -88,6 +91,15 @@ export class JournalStore {
         const ticket = this.tickets.get(entry.ticketId)
         if (ticket) {
           ticket.status = entry.status
+          ticket.updatedAt = entry.at
+        }
+        break
+      }
+      case 'ticket.schedule_changed': {
+        const ticket = this.tickets.get(entry.ticketId)
+        if (ticket) {
+          ticket.scheduleMode = entry.scheduleMode
+          if (entry.priority) ticket.priority = entry.priority
           ticket.updatedAt = entry.at
         }
         break

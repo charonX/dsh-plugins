@@ -22,6 +22,55 @@ export interface KanbanPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
+export function getCategoryMeta(cat: string) {
+  switch (cat) {
+    case 'bugfix':
+      return { label: '缺陷修复', icon: '🐛', bg: '#fee2e2', color: '#991b1b' }
+    case 'feature':
+      return { label: '功能开发', icon: '🚀', bg: '#e0e7ff', color: '#3730a3' }
+    case 'refactor':
+      return { label: '架构治理', icon: '🛠️', bg: '#fef3c7', color: '#92400e' }
+    case 'testing':
+      return { label: '测试验证', icon: '🧪', bg: '#f3e8ff', color: '#6b21a8' }
+    case 'documentation':
+      return { label: '文档运维', icon: '📝', bg: '#ecfdf5', color: '#065f46' }
+    case 'review':
+      return { label: '审查调研', icon: '🔍', bg: '#e0f2fe', color: '#075985' }
+    default:
+      return { label: '通用任务', icon: '⚡', bg: '#f1f5f9', color: '#334155' }
+  }
+}
+
+export function getPriorityMeta(prio?: string) {
+  switch (prio) {
+    case 'p0':
+      return { label: 'P0 紧急', bg: '#fee2e2', color: '#dc2626', dot: '🔴' }
+    case 'p1':
+      return { label: 'P1 高优', bg: '#ffedd5', color: '#c2410c', dot: '🟠' }
+    case 'p2':
+      return { label: 'P2 普通', bg: '#eff6ff', color: '#2563eb', dot: '🔵' }
+    case 'p3':
+      return { label: 'P3 低优', bg: '#f3f4f6', color: '#4b5563', dot: '⚪' }
+    default:
+      return { label: 'P2 普通', bg: '#eff6ff', color: '#2563eb', dot: '🔵' }
+  }
+}
+
+export function getSourceMeta(src: string) {
+  switch (src) {
+    case 'feishu':
+      return { label: '飞书', icon: '📘', bg: '#eff6ff', color: '#1d4ed8' }
+    case 'github':
+      return { label: 'GitHub', icon: '🐙', bg: '#f3f4f6', color: '#111827' }
+    case 'sentry':
+      return { label: 'Sentry', icon: '🚨', bg: '#fee2e2', color: '#b91c1c' }
+    case 'cron':
+      return { label: '巡检', icon: '⏰', bg: '#ecfdf5', color: '#047857' }
+    default:
+      return { label: '手动', icon: '🖥️', bg: '#f8fafc', color: '#475569' }
+  }
+}
+
 export function apiPath(path: string): string {
   const prefix = '/api/autoloop'
   const clean = path.startsWith('/') ? path : `/${path}`
@@ -52,8 +101,13 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   )
   const [threadSelection, setThreadSelection] = useState('')
   const [customThreadId, setCustomThreadId] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('auto')
+  const [selectedSource, setSelectedSource] = useState('manual-ui')
+  const [selectedPriority, setSelectedPriority] = useState('auto')
+  const [selectedSchedule, setSelectedSchedule] = useState('immediate')
   const [selectedModel, setSelectedModel] = useState('default')
   const [selectedPermission, setSelectedPermission] = useState('workspace-write')
+  const [runningNowId, setRunningNowId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [summary, setSummary] = useState('')
@@ -129,10 +183,14 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       await request('/events', {
         method: 'POST',
         body: JSON.stringify({
+          source: selectedSource,
           summary: summary.trim(),
           threadId: finalThreadId,
           payload: {
             workspacePath: effectiveWorkspacePath,
+            category: selectedCategory !== 'auto' ? selectedCategory : undefined,
+            priority: selectedPriority !== 'auto' ? selectedPriority : undefined,
+            scheduleMode: selectedSchedule,
             model: selectedModel !== 'default' ? { model: selectedModel } : undefined,
             permissionPreset: selectedPermission,
           },
@@ -141,12 +199,32 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       setSummary('')
       setThreadSelection('')
       setCustomThreadId('')
+      setSelectedCategory('auto')
+      setSelectedSource('manual-ui')
+      setSelectedPriority('auto')
+      setSelectedSchedule('immediate')
       setSelectedModel('default')
       setSelectedPermission('workspace-write')
       setDialogOpen(false)
       await fetchSnapshot()
     } catch (err) {
       alert(`Error creating task: ${String(err)}`)
+    }
+  }
+
+  const handleRunNow = async (ticketId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    try {
+      setRunningNowId(ticketId)
+      await request('/tickets/run-now', {
+        method: 'POST',
+        body: JSON.stringify({ ticketId }),
+      })
+      await fetchSnapshot()
+    } catch (err) {
+      alert(`Run now error: ${String(err)}`)
+    } finally {
+      setRunningNowId(null)
     }
   }
 
@@ -164,6 +242,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
     const hasResult = Boolean(ticket.assignment?.resultSummary)
     const hasError = Boolean(ticket.assignment?.error)
     const sessionId = ticket.assignment?.sessionId
+    const cat = getCategoryMeta(ticket.mandate.intent)
+    const prio = getPriorityMeta(ticket.priority)
+    const src = getSourceMeta(ticket.source)
+    const isNightlyPending = ticket.status === 'pending' && ticket.scheduleMode === 'nightly'
 
     return (
       <div
@@ -188,37 +270,106 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.05)'
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-          <span style={{ fontSize: '11px', color: '#6b7280', fontFamily: 'monospace' }}>{ticket.id}</span>
+        {/* Header: ID + Source + Priority */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#6b7280', fontFamily: 'monospace', fontWeight: 600 }}>{ticket.id}</span>
+            <span
+              style={{
+                fontSize: '10px',
+                padding: '1px 6px',
+                borderRadius: '4px',
+                background: src.bg,
+                color: src.color,
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '2px',
+              }}
+            >
+              {src.icon} {src.label}
+            </span>
+          </div>
           <span
             style={{
               fontSize: '11px',
-              padding: '2px 6px',
+              padding: '1px 6px',
               borderRadius: '4px',
-              background: ticket.mandate.intent === 'bugfix' ? '#fee2e2' : '#e0e7ff',
-              color: ticket.mandate.intent === 'bugfix' ? '#991b1b' : '#3730a3',
-              fontWeight: 500,
+              background: prio.bg,
+              color: prio.color,
+              fontWeight: 700,
             }}
           >
-            {ticket.mandate.intent}
+            {prio.dot} {prio.label}
           </span>
         </div>
 
-        <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px', color: '#111827' }}>
+        {/* Title */}
+        <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '8px', color: '#111827', lineHeight: '1.4' }}>
           {ticket.title}
         </div>
 
-        <div style={{ fontSize: '11px', color: '#4b5563', marginBottom: '6px' }}>
-          <div>Source: <b>{ticket.source}</b> · Hop: <b>{ticket.hopCount}</b></div>
-          {ticket.workspace.worktree?.branch && (
-            <div style={{ color: '#047857', marginTop: '2px' }}>
-              🌿 {ticket.workspace.worktree.branch}
-            </div>
+        {/* Badges row: Category + Schedule */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+          <span
+            style={{
+              fontSize: '11px',
+              padding: '2px 8px',
+              borderRadius: '4px',
+              background: cat.bg,
+              color: cat.color,
+              fontWeight: 600,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '3px',
+            }}
+          >
+            {cat.icon} {cat.label}
+          </span>
+
+          {ticket.scheduleMode === 'nightly' && (
+            <span
+              style={{
+                fontSize: '11px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: isNightlyPending ? '#fef3c7' : '#f3f4f6',
+                color: isNightlyPending ? '#92400e' : '#4b5563',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px',
+              }}
+            >
+              🌙 {isNightlyPending ? '夜间排队' : '夜间执行'}
+            </span>
           )}
+
+          {ticket.scheduleMode === 'scheduled' && (
+            <span
+              style={{
+                fontSize: '11px',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                background: '#f1f5f9',
+                color: '#475569',
+                fontWeight: 600,
+              }}
+            >
+              🕒 定时
+            </span>
+          )}
+
+          {ticket.workspace.worktree?.branch && (
+            <span style={{ fontSize: '11px', color: '#047857', fontWeight: 500 }}>
+              🌿 {ticket.workspace.worktree.branch}
+            </span>
+          )}
+
           {ticket.inputs.length > 0 && (
-            <div style={{ color: '#6366f1', marginTop: '2px' }}>
+            <span style={{ fontSize: '11px', color: '#6366f1', fontWeight: 500 }}>
               💬 {ticket.inputs.length} {t('inputsCount')}
-            </div>
+            </span>
           )}
         </div>
 
@@ -263,41 +414,65 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
         {/* Card footer actions */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px', paddingTop: '6px', borderTop: '1px solid #f3f4f6' }}>
-          {sessionId && onOpenSession ? (
-            <button
-              type="button"
-              onClick={e => {
-                e.stopPropagation()
-                onOpenSession(sessionId)
-              }}
+          <div>
+            {sessionId && onOpenSession ? (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation()
+                  onOpenSession(sessionId)
+                }}
+                style={{
+                  fontSize: '11px',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  border: '1px solid #bfdbfe',
+                  background: '#eff6ff',
+                  color: '#1d4ed8',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                {t('openSession')}
+              </button>
+            ) : (
+              <span style={{ fontSize: '11px', color: '#9ca3af' }}>Hop: {ticket.hopCount}</span>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {isNightlyPending && (
+              <button
+                type="button"
+                disabled={runningNowId === ticket.id}
+                onClick={e => void handleRunNow(ticket.id, e)}
+                style={{
+                  fontSize: '11px',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  border: 'none',
+                  background: '#2563eb',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                {runningNowId === ticket.id ? t('runningNow') : t('runNow')}
+              </button>
+            )}
+            <span
               style={{
                 fontSize: '11px',
-                padding: '3px 8px',
-                borderRadius: '4px',
-                border: '1px solid #bfdbfe',
-                background: '#eff6ff',
-                color: '#1d4ed8',
-                cursor: 'pointer',
+                color: '#2563eb',
                 fontWeight: 500,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
               }}
             >
-              {t('openSession')}
-            </button>
-          ) : (
-            <span />
-          )}
-          <span
-            style={{
-              fontSize: '11px',
-              color: '#2563eb',
-              fontWeight: 500,
-            }}
-          >
-            {t('viewDetails')} →
-          </span>
+              {t('viewDetails')} →
+            </span>
+          </div>
         </div>
 
         {ticket.status === 'waiting_attention' && ticket.attention && (
@@ -575,6 +750,113 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 )}
               </div>
 
+              {/* Category and Source Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('categoryLabel')}
+                  </label>
+                  <select
+                    value={selectedCategory}
+                    onChange={e => setSelectedCategory(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="auto">{t('categoryAuto')}</option>
+                    <option value="bugfix">{t('catBugfix')}</option>
+                    <option value="feature">{t('catFeature')}</option>
+                    <option value="refactor">{t('catRefactor')}</option>
+                    <option value="testing">{t('catTesting')}</option>
+                    <option value="documentation">{t('catDocOps')}</option>
+                    <option value="review">{t('catReview')}</option>
+                    <option value="general">{t('catGeneral')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('sourceFormLabel')}
+                  </label>
+                  <select
+                    value={selectedSource}
+                    onChange={e => setSelectedSource(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="manual-ui">{t('srcManual')}</option>
+                    <option value="feishu">{t('srcFeishu')}</option>
+                    <option value="github">{t('srcGithub')}</option>
+                    <option value="sentry">{t('srcSentry')}</option>
+                    <option value="cron">{t('srcCron')}</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Priority and Schedule Mode Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('priorityLabel')}
+                  </label>
+                  <select
+                    value={selectedPriority}
+                    onChange={e => setSelectedPriority(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="auto">{t('priorityAuto')}</option>
+                    <option value="p0">{t('prioP0')}</option>
+                    <option value="p1">{t('prioP1')}</option>
+                    <option value="p2">{t('prioP2')}</option>
+                    <option value="p3">{t('prioP3')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('scheduleLabel')}
+                  </label>
+                  <select
+                    value={selectedSchedule}
+                    onChange={e => setSelectedSchedule(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="immediate">{t('scheduleImmediate')}</option>
+                    <option value="nightly">{t('scheduleNightly')}</option>
+                    <option value="scheduled">{t('scheduleScheduled')}</option>
+                  </select>
+                </div>
+              </div>
+
               {/* Model and Permission Settings Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 <div>
@@ -692,8 +974,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             {/* Modal Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '12px', color: '#6b7280', fontFamily: 'monospace' }}>{activeTicket.id}</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '12px', color: '#6b7280', fontFamily: 'monospace', fontWeight: 600 }}>{activeTicket.id}</span>
                   <span
                     style={{
                       fontSize: '11px',
@@ -709,15 +991,53 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   <span
                     style={{
                       fontSize: '11px',
-                      padding: '2px 6px',
+                      padding: '2px 8px',
                       borderRadius: '4px',
-                      background: '#f3f4f6',
-                      color: '#4b5563',
-                      fontWeight: 500,
+                      background: getCategoryMeta(activeTicket.mandate.intent).bg,
+                      color: getCategoryMeta(activeTicket.mandate.intent).color,
+                      fontWeight: 600,
                     }}
                   >
-                    {activeTicket.mandate.intent}
+                    {getCategoryMeta(activeTicket.mandate.intent).icon} {activeTicket.triage?.categoryLabel || getCategoryMeta(activeTicket.mandate.intent).label}
                   </span>
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      background: getPriorityMeta(activeTicket.priority).bg,
+                      color: getPriorityMeta(activeTicket.priority).color,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {getPriorityMeta(activeTicket.priority).dot} {getPriorityMeta(activeTicket.priority).label}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      background: getSourceMeta(activeTicket.source).bg,
+                      color: getSourceMeta(activeTicket.source).color,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {getSourceMeta(activeTicket.source).icon} {getSourceMeta(activeTicket.source).label}
+                  </span>
+                  {activeTicket.scheduleMode === 'nightly' && (
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        background: '#fef3c7',
+                        color: '#92400e',
+                        fontWeight: 600,
+                      }}
+                    >
+                      🌙 夜间低峰
+                    </span>
+                  )}
                 </div>
                 <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#111827' }}>
                   {activeTicket.title}
@@ -742,6 +1062,45 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
 
             {/* Scrollable Body */}
             <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
+              {/* Nightly pending banner with run now trigger */}
+              {activeTicket.status === 'pending' && activeTicket.scheduleMode === 'nightly' && (
+                <div
+                  style={{
+                    background: '#fffbeb',
+                    border: '1px solid #fde68a',
+                    borderRadius: '8px',
+                    padding: '12px 16px',
+                    marginBottom: '16px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', color: '#92400e', lineHeight: '1.5' }}>
+                    {t('nightlyNotice')}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={runningNowId === activeTicket.id}
+                    onClick={() => void handleRunNow(activeTicket.id)}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      background: '#2563eb',
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      marginLeft: '8px',
+                    }}
+                  >
+                    {runningNowId === activeTicket.id ? t('runningNow') : t('runNow')}
+                  </button>
+                </div>
+              )}
               {/* Session Jump Banner (if sessionId exists) */}
               {activeTicket.assignment?.sessionId && (
                 <div
@@ -904,6 +1263,117 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 </div>
               )}
 
+              {/* Router Triage Audit Log Block */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '10px',
+                  padding: '14px',
+                  marginBottom: '16px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>🧠</span>
+                    <span>{t('triageTitle')}</span>
+                  </div>
+                  {activeTicket.triage?.evaluatedAt && (
+                    <span style={{ fontSize: '11px', color: '#64748b' }}>
+                      {new Date(activeTicket.triage.evaluatedAt).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+
+                {/* Grid summary of triage decisions */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: '8px',
+                    marginBottom: '10px',
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '10px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageCategory')}</span>
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                      {getCategoryMeta(activeTicket.mandate.intent).icon} {activeTicket.triage?.categoryLabel || getCategoryMeta(activeTicket.mandate.intent).label}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triagePriority')}</span>
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                      {getPriorityMeta(activeTicket.priority).dot} {getPriorityMeta(activeTicket.priority).label}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageSchedule')}</span>
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                      {activeTicket.scheduleMode === 'nightly' ? '🌙 夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '🕒 定时' : '⚡ 立即执行'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#64748b', display: 'block', fontSize: '11px' }}>{t('triageModel')}</span>
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>
+                      {activeTicket.mandate.model?.model || '系统默认'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Matched rules tags */}
+                {activeTicket.triage?.matchedRules && activeTicket.triage.matchedRules.length > 0 && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                      {t('triageMatchedRules')}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {activeTicket.triage.matchedRules.map((rule, idx) => (
+                        <span
+                          key={idx}
+                          style={{
+                            fontSize: '11px',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: '#e0e7ff',
+                            color: '#3730a3',
+                            fontWeight: 500,
+                          }}
+                        >
+                          ✓ {rule}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Reasoning narrative */}
+                {activeTicket.triage?.reasoning && (
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                      {t('triageReasoning')}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        lineHeight: '1.6',
+                        color: '#334155',
+                        background: '#f1f5f9',
+                        borderRadius: '6px',
+                        padding: '8px 12px',
+                        whiteSpace: 'pre-line',
+                      }}
+                    >
+                      {activeTicket.triage.reasoning}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Mandate & Metadata Grid */}
               <div
                 style={{
@@ -924,11 +1394,21 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 </div>
                 <div>
                   <span style={{ color: '#64748b' }}>{t('source')}: </span>
-                  <span style={{ fontWeight: 500 }}>{activeTicket.source}</span>
+                  <span style={{ fontWeight: 500 }}>
+                    {getSourceMeta(activeTicket.source).icon} {getSourceMeta(activeTicket.source).label} ({activeTicket.source})
+                  </span>
                 </div>
                 <div>
-                  <span style={{ color: '#64748b' }}>{t('hopCount')}: </span>
-                  <span style={{ fontWeight: 500 }}>{activeTicket.hopCount}</span>
+                  <span style={{ color: '#64748b' }}>{t('priorityLabel')}: </span>
+                  <span style={{ fontWeight: 500 }}>
+                    {getPriorityMeta(activeTicket.priority).dot} {getPriorityMeta(activeTicket.priority).label}
+                  </span>
+                </div>
+                <div>
+                  <span style={{ color: '#64748b' }}>{t('scheduleLabel')}: </span>
+                  <span style={{ fontWeight: 500 }}>
+                    {activeTicket.scheduleMode === 'nightly' ? '🌙 夜间低峰' : activeTicket.scheduleMode === 'scheduled' ? '🕒 定时' : '⚡ 立即执行'}
+                  </span>
                 </div>
                 <div>
                   <span style={{ color: '#64748b' }}>{t('modelLabel')}: </span>
@@ -937,6 +1417,10 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 <div>
                   <span style={{ color: '#64748b' }}>{t('permissionLabel')}: </span>
                   <span style={{ fontWeight: 500 }}>{activeTicket.mandate.permissionPreset || 'workspace-write'}</span>
+                </div>
+                <div>
+                  <span style={{ color: '#64748b' }}>{t('hopCount')}: </span>
+                  <span style={{ fontWeight: 500 }}>{activeTicket.hopCount}</span>
                 </div>
                 {activeTicket.assignment?.startedAt && (
                   <div>

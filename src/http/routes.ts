@@ -221,6 +221,19 @@ export function createRequestHandler(deps: HttpDeps): (req: IncomingMessage, res
         return
       }
 
+      // POST /api/autoloop/tickets/run-now
+      if (req.method === 'POST' && subpath === '/tickets/run-now') {
+        const body = (await readJsonBody(req)) as { ticketId?: string }
+        if (!body.ticketId) {
+          sendJson(res, 400, { error: 'Field "ticketId" is required' })
+          return
+        }
+
+        const success = await kernel.runTicketNow(body.ticketId)
+        sendJson(res, 200, { ok: success, ticketId: body.ticketId })
+        return
+      }
+
       sendJson(res, 404, { error: `Endpoint ${req.method ?? 'GET'} ${subpath} not found` })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)

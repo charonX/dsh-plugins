@@ -34,11 +34,17 @@ export class AutoloopKernel {
   private executor?: AgentExecutor
   private activeControllers = new Map<string, AbortController>()
   private running = true
+  private scheduleCheckTimer?: ReturnType<typeof setInterval>
 
   constructor(private readonly options: KernelOptions) {
     this.store = options.store
     this.router = options.router
     this.maxHops = options.maxHops ?? 8
+
+    // Periodically check for scheduled tickets or nightly window entry
+    this.scheduleCheckTimer = setInterval(() => {
+      void this.drainPendingTickets()
+    }, 20_000)
   }
 
   /** Register an approval channel (e.g. Feishu card, Desktop notifications) */
@@ -106,7 +112,11 @@ export class AutoloopKernel {
         title: event.summary,
         source: event.source,
         status: 'circuit_broken',
+        priority: mandate.priority ?? 'p2',
+        scheduleMode: mandate.scheduleMode ?? 'immediate',
+        scheduledAt: mandate.scheduledAt,
         mandate,
+        triage: mandate.triage,
         workspace: { sourceRoot: mandate.workspacePath },
         inputs: [],
         hopCount,
@@ -146,7 +156,11 @@ export class AutoloopKernel {
       title: event.summary,
       source: event.source,
       status: 'pending',
+      priority: mandate.priority ?? 'p2',
+      scheduleMode: mandate.scheduleMode ?? 'immediate',
+      scheduledAt: mandate.scheduledAt,
       mandate,
+      triage: mandate.triage,
       workspace: { sourceRoot: mandate.workspacePath },
       inputs: [],
       hopCount,
@@ -214,15 +228,59 @@ export class AutoloopKernel {
     void this.dispatchTicket(ticketId)
   }
 
-  /** Drain all pending tickets */
+  /** Check if current hour falls within off-peak nightly window (23:00 to 07:00) */
+  private isNightlyWindow(): boolean {
+    const hour = new Date().getHours()
+    return hour >= 23 || hour < 7
+  }
+
+  /** Drain all pending tickets honoring priority ranking and schedule timing */
   private async drainPendingTickets(): Promise<void> {
     if (!this.running || !this.executor) return
     const all = this.store.getAllTickets()
-    for (const ticket of all) {
-      if (ticket.status === 'pending') {
-        void this.dispatchTicket(ticket.id)
+    const priorityRank: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
+
+    const pending = all
+      .filter(t => t.status === 'pending')
+      .sort((a, b) => {
+        const rankA = priorityRank[a.priority ?? 'p2'] ?? 2
+        const rankB = priorityRank[b.priority ?? 'p2'] ?? 2
+        if (rankA !== rankB) return rankA - rankB
+        return a.createdAt - b.createdAt
+      })
+
+    const inNightly = this.isNightlyWindow()
+    const now = Date.now()
+
+    for (const ticket of pending) {
+      // 1. If nightly execution is specified and current time is not yet off-peak, defer
+      if (ticket.scheduleMode === 'nightly' && !inNightly) {
+        continue
       }
+      // 2. If scheduled time is in the future, defer
+      if (ticket.scheduleMode === 'scheduled' && ticket.scheduledAt && now < ticket.scheduledAt) {
+        continue
+      }
+      void this.dispatchTicket(ticket.id)
     }
+  }
+
+  /** Manually trigger immediate execution of a pending/scheduled/nightly ticket */
+  async runTicketNow(ticketId: string): Promise<boolean> {
+    const ticket = this.store.getTicket(ticketId)
+    if (!ticket) return false
+    if (ticket.status !== 'pending') return false
+
+    const now = Date.now()
+    this.store.append({
+      type: 'ticket.schedule_changed',
+      ticketId,
+      scheduleMode: 'immediate',
+      at: now,
+    })
+    this.options.logger?.info(`[Autoloop] Ticket ${ticketId} manually triggered for immediate execution`)
+    void this.dispatchTicket(ticketId)
+    return true
   }
 
   /** Dispatch an individual ticket */
@@ -280,6 +338,10 @@ export class AutoloopKernel {
   /** Shutdown kernel */
   stop(): void {
     this.running = false
+    if (this.scheduleCheckTimer) {
+      clearInterval(this.scheduleCheckTimer)
+      this.scheduleCheckTimer = undefined
+    }
     for (const controller of this.activeControllers.values()) {
       controller.abort()
     }

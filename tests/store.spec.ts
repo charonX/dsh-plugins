@@ -27,6 +27,8 @@ describe('JournalStore (Event Sourcing)', () => {
       title: 'Fix auth bug',
       source: 'github',
       status: 'pending',
+      priority: 'p1',
+      scheduleMode: 'immediate',
       mandate: {
         intent: 'bugfix',
         workspacePath: '/mock/workspace',
