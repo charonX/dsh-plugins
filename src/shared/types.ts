@@ -125,7 +125,7 @@ export type JournalEntry =
   | { type: 'ticket.input_added'; ticketId: string; input: TicketInput; at: number }
   | { type: 'ticket.status_changed'; ticketId: string; status: TicketStatus; at: number }
   | { type: 'ticket.assignment_started'; ticketId: string; assignment: TicketAssignment; at: number }
-  | { type: 'ticket.assignment_ended'; ticketId: string; resultSummary?: string; error?: string; at: number }
+  | { type: 'ticket.assignment_ended'; ticketId: string; resultSummary?: string; error?: string; sessionId?: string; at: number }
   | { type: 'ticket.attention_raised'; ticketId: string; attention: AttentionRequest; at: number }
   | { type: 'ticket.attention_resolved'; ticketId: string; answer: string; at: number }
 
@@ -152,5 +152,5 @@ export interface ApprovalChannel {
 /** Agent executor port */
 export interface AgentExecutor {
   name: string
-  execute(ticket: Ticket, signal: AbortSignal): Promise<{ summary?: string; error?: string }>
+  execute(ticket: Ticket, signal: AbortSignal): Promise<{ summary?: string; error?: string; sessionId?: string }>
 }

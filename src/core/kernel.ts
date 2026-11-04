@@ -258,6 +258,7 @@ export class AutoloopKernel {
         ticketId,
         resultSummary: result.summary,
         error: result.error,
+        sessionId: result.sessionId,
         at: Date.now(),
       })
     } catch (err: unknown) {

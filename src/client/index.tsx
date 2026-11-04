@@ -62,7 +62,18 @@ export function apply(ctx: Context): void {
         } catch {
           // ignore
         }
-        return <KanbanPage t={t} initialWorkspaces={clientWorkspaces} />
+        const handleOpenSession = (sessionId: string) => {
+          try {
+            const uiWorkspace = (ctx as any).uiWorkspace ?? (ctx as any).root?.get?.('uiWorkspace')
+            if (uiWorkspace && typeof uiWorkspace.openSession === 'function') {
+              uiWorkspace.openSession(sessionId)
+              return
+            }
+          } catch (err) {
+            console.warn('[Autoloop] openSession failed:', err)
+          }
+        }
+        return <KanbanPage t={t} initialWorkspaces={clientWorkspaces} onOpenSession={handleOpenSession} />
       },
     ),
   )

@@ -107,6 +107,9 @@ export class JournalStore {
           ticket.assignment.endedAt = entry.at
           ticket.assignment.resultSummary = entry.resultSummary
           ticket.assignment.error = entry.error
+          if (entry.sessionId) {
+            ticket.assignment.sessionId = entry.sessionId
+          }
           ticket.status = entry.error ? 'failed' : 'completed'
           ticket.updatedAt = entry.at
         }

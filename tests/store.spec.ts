@@ -78,6 +78,7 @@ describe('JournalStore (Event Sourcing)', () => {
       type: 'ticket.assignment_ended',
       ticketId: 'tk-1',
       resultSummary: 'Done successfully',
+      sessionId: 'sess-xyz-123',
       at: 1400,
     })
 
@@ -87,6 +88,7 @@ describe('JournalStore (Event Sourcing)', () => {
     expect(t1?.inputs).toHaveLength(1)
     expect(t1?.attention?.status).toBe('resolved')
     expect(t1?.assignment?.resultSummary).toBe('Done successfully')
+    expect(t1?.assignment?.sessionId).toBe('sess-xyz-123')
 
     // Create store2 pointing to same journal file to verify event-sourcing replay
     const store2 = new JournalStore(journalPath)
@@ -96,5 +98,6 @@ describe('JournalStore (Event Sourcing)', () => {
     expect(t2?.inputs[0]?.text).toBe('Also check token refresh')
     expect(t2?.attention?.resolvedAnswer).toBe('yes')
     expect(t2?.assignment?.resultSummary).toBe('Done successfully')
+    expect(t2?.assignment?.sessionId).toBe('sess-xyz-123')
   })
 })

@@ -17,7 +17,7 @@ export class DshAgentExecutor implements AgentExecutor {
     private readonly options: { autoWorktree?: boolean } = {},
   ) {}
 
-  async execute(ticket: Ticket, signal: AbortSignal): Promise<{ summary?: string; error?: string }> {
+  async execute(ticket: Ticket, signal: AbortSignal): Promise<{ summary?: string; error?: string; sessionId?: string }> {
     signal.throwIfAborted()
 
     // 1. Resolve workspace root
@@ -45,12 +45,14 @@ export class DshAgentExecutor implements AgentExecutor {
     }
 
     // 3. Create agent session via ctx.agents if present
-    const agentsService = this.ctx.get('agents') as {
+    const agentsService = (this.ctx.get('agents') ?? (this.ctx as any).root?.get?.('agents') ?? (this.ctx as any).agents) as {
       create?: (opts: unknown) => Promise<{
         agent: {
           session: unknown
           followup: (msg: unknown) => void
+          whenIdle?: () => Promise<void>
           settled?: () => Promise<void>
+          cancel?: (cause: unknown) => void
         }
         dispose: () => Promise<void>
       }>
@@ -61,12 +63,38 @@ export class DshAgentExecutor implements AgentExecutor {
       this.ctx.logger.info(`[Autoloop] Simulated execution for ticket ${ticket.id} in ${workingDirectory}`)
       return {
         summary: `Task "${ticket.title}" processed in ${workingDirectory} with intent ${ticket.mandate.intent}`,
+        sessionId: ticket.assignment?.sessionId ?? `mock-${ticket.id}`,
       }
     }
 
-    const sessionId = `autoloop-${ticket.id}-${randomUUID().slice(0, 8)}`
+    // Determine session ID (reuse linked conversation if specified)
+    let sessionId: string
+    if (ticket.threadId.startsWith('dsh:session:')) {
+      sessionId = ticket.threadId.slice('dsh:session:'.length)
+    } else {
+      sessionId = `autoloop-${ticket.id}-${randomUUID().slice(0, 8)}`
+    }
+
     if (ticket.assignment) {
       ticket.assignment.sessionId = sessionId
+    }
+
+    // Attach session to workspace registry so it appears in Harness sidebar
+    try {
+      const registry = (this.ctx.get('workspaceRegistry') ?? (this.ctx as any).root?.get?.('workspaceRegistry') ?? (this.ctx as any).workspaceRegistry) as {
+        list?: () => Array<{ path: string; attachSession?: (id: string) => Promise<void> }>
+        create?: (path: string) => Promise<{ path: string; attachSession?: (id: string) => Promise<void> }>
+      } | undefined
+
+      let workspace = registry?.list?.()?.find(w => w.path === workingDirectory)
+      if (!workspace && registry?.create) {
+        workspace = await registry.create(workingDirectory).catch(() => undefined)
+      }
+      if (workspace && typeof workspace.attachSession === 'function') {
+        await workspace.attachSession(sessionId).catch(() => {})
+      }
+    } catch (err) {
+      this.ctx.logger.warn(`[Autoloop] attachSession failed: ${String(err)}`)
     }
 
     const handle = await agentsService.create({
@@ -79,24 +107,65 @@ export class DshAgentExecutor implements AgentExecutor {
       },
     })
 
+    // Rename session title for friendly UI display
+    try {
+      const sessionTitle = (this.ctx.get('sessionTitle') ?? (this.ctx as any).root?.get?.('sessionTitle')) as {
+        rename?: (session: any, title: string) => void
+      } | undefined
+      if (sessionTitle?.rename && handle.agent.session) {
+        sessionTitle.rename(handle.agent.session, ticket.title)
+      }
+    } catch {}
+
+    const abortHandler = () => {
+      try {
+        handle.agent.cancel?.('user-request')
+      } catch {}
+    }
+    signal.addEventListener('abort', abortHandler, { once: true })
+
     try {
       signal.throwIfAborted()
 
       // Provide initial prompt instruction
       handle.agent.followup({
+        id: randomUUID(),
         role: 'user',
         content: [{ type: 'text', text: ticket.mandate.instruction }],
+        source: { kind: 'user' },
       })
 
-      if (typeof handle.agent.settled === 'function') {
+      // Wait for the agent to finish its turns and reach quiescence
+      if (typeof handle.agent.whenIdle === 'function') {
+        await handle.agent.whenIdle()
+      } else if (typeof handle.agent.settled === 'function') {
         await handle.agent.settled()
       }
 
-      return {
-        summary: `Successfully completed ticket ${ticket.id}`,
+      // Extract model's output messages as execution summary
+      let summary = ''
+      try {
+        const messages = (handle.agent.session as any)?.deriveMessages?.() ?? []
+        const lastAssistant = [...messages].reverse().find((m: any) => m.role === 'assistant')
+        if (lastAssistant && Array.isArray(lastAssistant.content)) {
+          summary = lastAssistant.content
+            .filter((c: any) => c.type === 'text')
+            .map((c: any) => c.text)
+            .join('\n')
+        }
+      } catch (err) {
+        this.ctx.logger.warn(`[Autoloop] deriveMessages error: ${String(err)}`)
       }
+
+      if (!summary) {
+        summary = `任务 "${ticket.title}" 已执行完毕。会话 ID: ${sessionId}。可在左侧侧边栏查看对应对话详情。`
+      }
+
+      return { summary, sessionId }
     } finally {
-      await handle.dispose().catch(() => {})
+      signal.removeEventListener('abort', abortHandler)
+      // Note: We deliberately do NOT call handle.dispose() here so the session
+      // remains interactive and viewable in DeepSeek Harness sidebar!
     }
   }
 }
