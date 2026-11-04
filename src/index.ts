@@ -22,7 +22,7 @@ export { IntentRouter } from './core/router.js'
 export * from './shared/types.js'
 
 export const name = 'autoloop'
-export const inject = ['webServer?', 'workspaceRegistry?', 'sessions?', 'sessionTitle?']
+export const inject = ['workspaceRegistry?', 'sessions?', 'sessionTitle?']
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -75,7 +75,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   })
   ctx.effect(() => kernel.registerExecutor(executor), 'autoloop: executor')
 
-  // 5. Mount HTTP routes if WebServer is present
+  // 5. Mount HTTP routes when WebServer is present
   const handler = createRequestHandler({
     prefix: DEFAULT_ROUTE_PREFIX,
     kernel,
@@ -83,16 +83,13 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     defaultWorkspacePath,
   })
 
-  const webServer = ctx.get('webServer') as {
-    register: (opts: { kind: 'prefix'; path: string; handler: (req: any, res: any) => Promise<void> }) => () => void
-  } | undefined
-
-  if (webServer && typeof webServer.register === 'function') {
-    ctx.effect(
-      () => webServer.register({ kind: 'prefix', path: DEFAULT_ROUTE_PREFIX, handler }),
+  ctx.inject(['webServer'], (hostCtx) => {
+    hostCtx.effect(
+      () => hostCtx.webServer.register({ kind: 'prefix', path: DEFAULT_ROUTE_PREFIX, handler }),
       'autoloop: http routes',
     )
-  }
+    ctx.logger.info(`[Autoloop] Mounted REST API routes under ${DEFAULT_ROUTE_PREFIX}`)
+  })
 
   // Teardown
   ctx.effect(() => () => kernel.stop(), 'autoloop: kernel shutdown')

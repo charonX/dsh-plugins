@@ -65,28 +65,54 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
 }
 
 function getWorkspacesWithSessions(ctx: Context, fallbackPath: string): WorkspaceItemView[] {
-  const registry = ctx.get('workspaceRegistry') as {
-    list?: () => Array<{ id?: unknown; path?: string; title?: string; sessionIds?: readonly string[] }>
-    archivedSessionIds?: readonly string[]
-  } | undefined
+  let list: unknown[] = []
+  let archivedSet = new Set<string>()
 
-  const sessionsService = ctx.get('sessions') as { get?: (id: any) => any } | undefined
-  const sessionTitleService = ctx.get('sessionTitle') as { get?: (session: any) => { title?: string } | undefined } | undefined
+  try {
+    const registry = (ctx.get('workspaceRegistry') ?? (ctx as any).root?.get?.('workspaceRegistry') ?? (ctx as any).workspaceRegistry) as {
+      list?: () => unknown[]
+      archivedSessionIds?: readonly string[]
+    } | undefined
 
-  const list = typeof registry?.list === 'function' ? registry.list() : []
-  const archivedSet = new Set(registry?.archivedSessionIds?.map(String) ?? [])
+    if (registry && typeof registry.list === 'function') {
+      const rows = registry.list()
+      if (Array.isArray(rows)) {
+        list = rows
+      }
+    }
+
+    if (registry?.archivedSessionIds && Array.isArray(registry.archivedSessionIds)) {
+      archivedSet = new Set(registry.archivedSessionIds.map(String))
+    }
+  } catch (err) {
+    ctx.logger?.warn?.(`[Autoloop] Error reading workspaceRegistry: ${String(err)}`)
+  }
+
+  const sessionsService = (ctx.get('sessions') ?? (ctx as any).root?.get?.('sessions')) as { get?: (id: any) => any } | undefined
+  const sessionTitleService = (ctx.get('sessionTitle') ?? (ctx as any).root?.get?.('sessionTitle')) as { get?: (session: any) => { title?: string } | undefined } | undefined
 
   const items: WorkspaceItemView[] = []
   const seenPaths = new Set<string>()
 
-  for (const ws of list) {
-    if (!ws || typeof ws.path !== 'string' || ws.path.trim() === '') continue
+  for (const rawWs of list) {
+    if (!rawWs || typeof rawWs !== 'object') continue
+    const ws = rawWs as { id?: unknown; path?: unknown; title?: unknown; sessionIds?: readonly unknown[] }
+    if (typeof ws.path !== 'string' || ws.path.trim() === '') continue
     const wsPath = ws.path.trim()
     if (seenPaths.has(wsPath)) continue
     seenPaths.add(wsPath)
 
-    const title = ws.title && ws.title.trim() ? ws.title.trim() : (basename(wsPath) || wsPath)
-    const rawSessionIds = (ws.sessionIds ?? []).map(String)
+    const rawTitle = typeof ws.title === 'string' && ws.title.trim() ? ws.title.trim() : ''
+    const title = rawTitle || (basename(wsPath) || wsPath)
+
+    let rawSessionIds: string[] = []
+    try {
+      if (Array.isArray(ws.sessionIds)) {
+        rawSessionIds = ws.sessionIds.map(String)
+      }
+    } catch {
+      rawSessionIds = []
+    }
 
     const sessionList: WorkspaceSessionView[] = []
     for (const sid of rawSessionIds) {
@@ -106,7 +132,7 @@ function getWorkspacesWithSessions(ctx: Context, fallbackPath: string): Workspac
         }
       }
       sessionList.push({ id: sid, title: sessionTitle })
-      if (sessionList.length >= 15) break // keep up to 15 recent sessions
+      if (sessionList.length >= 20) break
     }
 
     items.push({
