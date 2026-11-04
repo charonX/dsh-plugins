@@ -67,10 +67,14 @@ export type TaskSource =
 
 /** Detailed audit record of how the task was triaged by IntentRouter */
 export interface RouterTriage {
-  /** Inferred or selected task intent/category */
+  /** Inferred or selected task intent/category (open-ended string) */
   intent: TaskCategory
-  /** Human-readable category label (e.g. "缺陷修复", "架构治理") */
+  /** Human-readable category label (e.g. "缺陷修复", "PPT设计", "运维部署", "运营策略") */
   categoryLabel: string
+  /** Detected or declared source (e.g. "飞书", "GitHub", "Sentry", "中台创建", "TAPD") */
+  detectedSource: string
+  /** Inferred domain tags (e.g. ["PPT 标准化", "设计"]) */
+  tags: string[]
   /** Assigned priority level */
   priority: PriorityLevel
   /** Execution schedule mode */
@@ -93,7 +97,7 @@ export interface RouterTriage {
 
 /** Mandate issued to an agent */
 export interface TicketMandate {
-  /** Inferred or declared task intent: "coding" | "bugfix" | "review" | "cleanup" | "general" */
+  /** Inferred or declared task intent */
   intent: string
   /** Target workspace filesystem directory */
   workspacePath: string
@@ -116,6 +120,8 @@ export interface TicketMandate {
   scheduleMode?: ScheduleMode
   /** Scheduled execution time */
   scheduledAt?: number
+  /** Inferred domain tags */
+  tags?: string[]
   /** Audit log of router triage */
   triage?: RouterTriage
 }
@@ -174,6 +180,7 @@ export interface Ticket {
   priority: PriorityLevel
   scheduleMode: ScheduleMode
   scheduledAt?: number
+  tags?: string[]
   mandate: TicketMandate
   triage?: RouterTriage
   workspace: {

@@ -189,8 +189,24 @@ describe('AutoloopKernel', () => {
     expect(ticket?.mandate.intent).toBe('bugfix')
     expect(ticket?.triage).toBeDefined()
     expect(ticket?.triage?.categoryLabel).toBe('缺陷修复')
-    expect(ticket?.triage?.reasoning).toContain('任务意图研判')
+    expect(ticket?.triage?.reasoning).toContain('Router 智能研判日志')
     expect(ticket?.triage?.matchedRules.length).toBeGreaterThan(0)
+  })
+
+  it('dynamically infers non-dev categories, domain tags, and sources', async () => {
+    const res = await kernel.ingestEvent({
+      id: 'ev-ppt',
+      source: 'auto',
+      threadId: 'th-ppt-1',
+      type: 'task.create',
+      summary: '[PPT 标准化] 替换双十一宣传活动主题页面与桌面壁纸',
+      receivedAt: Date.now(),
+    })
+
+    const ticket = store.getTicket(res.ticketId)
+    expect(ticket).toBeDefined()
+    expect(ticket?.tags).toContain('PPT 标准化')
+    expect(ticket?.triage?.categoryLabel).toBe('PPT设计')
   })
 
   it('defers nightly tickets and allows manual runTicketNow trigger', async () => {

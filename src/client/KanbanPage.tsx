@@ -22,22 +22,71 @@ export interface KanbanPageProps {
   onOpenSession?: (sessionId: string) => void
 }
 
+/** Deterministic pastel color generator based on any arbitrary string */
+export function stringToColor(str: string): { bg: string; color: string; border: string } {
+  let hash = 0
+  const clean = (str || 'default').trim()
+  for (let i = 0; i < clean.length; i++) {
+    hash = clean.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  const hue = Math.abs(hash % 360)
+  return {
+    bg: `hsl(${hue}, 85%, 95%)`,
+    color: `hsl(${hue}, 80%, 26%)`,
+    border: `hsl(${hue}, 50%, 82%)`,
+  }
+}
+
 export function getCategoryMeta(cat: string) {
-  switch (cat) {
-    case 'bugfix':
-      return { label: '缺陷修复', icon: '🐛', bg: '#fee2e2', color: '#991b1b' }
-    case 'feature':
-      return { label: '功能开发', icon: '🚀', bg: '#e0e7ff', color: '#3730a3' }
-    case 'refactor':
-      return { label: '架构治理', icon: '🛠️', bg: '#fef3c7', color: '#92400e' }
-    case 'testing':
-      return { label: '测试验证', icon: '🧪', bg: '#f3e8ff', color: '#6b21a8' }
-    case 'documentation':
-      return { label: '文档运维', icon: '📝', bg: '#ecfdf5', color: '#065f46' }
-    case 'review':
-      return { label: '审查调研', icon: '🔍', bg: '#e0f2fe', color: '#075985' }
-    default:
-      return { label: '通用任务', icon: '⚡', bg: '#f1f5f9', color: '#334155' }
+  const text = (cat || '').toLowerCase()
+  let icon = '🏷️'
+  let label = cat || '常规任务'
+
+  if (/ppt|slide|演示/i.test(text)) {
+    icon = '📊'
+    if (cat === 'ppt') label = 'PPT设计'
+  } else if (/ui|壁纸|图标|设计|样式|视觉|主题/i.test(text)) {
+    icon = '🎨'
+    if (cat === 'ui_design') label = '视觉设计'
+  } else if (/运营|活动|营销|策略/i.test(text)) {
+    icon = '📈'
+    if (cat === 'operation') label = '运营策略'
+  } else if (/运维|部署|环境|服务器|nginx/i.test(text)) {
+    icon = '🖥️'
+    if (cat === 'ops') label = '运维部署'
+  } else if (/数据|统计|报表/i.test(text)) {
+    icon = '📉'
+    if (cat === 'data') label = '数据分析'
+  } else if (/bug|error|故障|缺陷|报错|异常|修复/i.test(text)) {
+    icon = '🐛'
+    if (cat === 'bugfix') label = '缺陷修复'
+  } else if (/feat|开发|需求|功能/i.test(text)) {
+    icon = '🚀'
+    if (cat === 'feature') label = '功能开发'
+  } else if (/重构|治理|解耦|坏味/i.test(text)) {
+    icon = '🛠️'
+    if (cat === 'refactor') label = '架构治理'
+  } else if (/测试|用例|test|spec/i.test(text)) {
+    icon = '🧪'
+    if (cat === 'testing') label = '测试验证'
+  } else if (/文档|doc|手册|方案/i.test(text)) {
+    icon = '📝'
+    if (cat === 'documentation') label = '文档方案'
+  } else if (/审查|review|调研/i.test(text)) {
+    icon = '🔍'
+    if (cat === 'review') label = '审查调研'
+  } else if (cat === 'general') {
+    label = '常规任务'
+    icon = '⚡'
+  }
+
+  const color = stringToColor(label)
+  return {
+    label,
+    icon,
+    bg: color.bg,
+    color: color.color,
+    border: color.border,
   }
 }
 
@@ -57,17 +106,55 @@ export function getPriorityMeta(prio?: string) {
 }
 
 export function getSourceMeta(src: string) {
-  switch (src) {
-    case 'feishu':
-      return { label: '飞书', icon: '📘', bg: '#eff6ff', color: '#1d4ed8' }
-    case 'github':
-      return { label: 'GitHub', icon: '🐙', bg: '#f3f4f6', color: '#111827' }
-    case 'sentry':
-      return { label: 'Sentry', icon: '🚨', bg: '#fee2e2', color: '#b91c1c' }
-    case 'cron':
-      return { label: '巡检', icon: '⏰', bg: '#ecfdf5', color: '#047857' }
-    default:
-      return { label: '手动', icon: '🖥️', bg: '#f8fafc', color: '#475569' }
+  const text = (src || '').toLowerCase()
+  let icon = '🌐'
+  let label = src || '中台创建'
+
+  if (/feishu|飞书|lark/i.test(text)) {
+    icon = '📘'
+    label = '飞书'
+  } else if (/github/i.test(text)) {
+    icon = '🐙'
+    label = 'GitHub'
+  } else if (/gitlab/i.test(text)) {
+    icon = '🦊'
+    label = 'GitLab'
+  } else if (/sentry/i.test(text)) {
+    icon = '🚨'
+    label = 'Sentry'
+  } else if (/jira/i.test(text)) {
+    icon = '🔷'
+    label = 'Jira'
+  } else if (/tapd/i.test(text)) {
+    icon = '📋'
+    label = 'TAPD'
+  } else if (/dingtalk|钉钉/i.test(text)) {
+    icon = '⚡'
+    label = '钉钉'
+  } else if (/wecom|企业微信|企微/i.test(text)) {
+    icon = '💬'
+    label = '企业微信'
+  } else if (/slack/i.test(text)) {
+    icon = '🟣'
+    label = 'Slack'
+  } else if (/cron|巡检|定时/i.test(text)) {
+    icon = '⏰'
+    label = '定时巡检'
+  } else if (/邮件|mail/i.test(text)) {
+    icon = '✉️'
+    label = '邮件'
+  } else if (src === 'manual-ui' || text === 'manual-ui') {
+    label = '中台创建'
+    icon = '🖥️'
+  }
+
+  const color = stringToColor(label)
+  return {
+    label,
+    icon,
+    bg: color.bg,
+    color: color.color,
+    border: color.border,
   }
 }
 
@@ -101,8 +188,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   )
   const [threadSelection, setThreadSelection] = useState('')
   const [customThreadId, setCustomThreadId] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('auto')
-  const [selectedSource, setSelectedSource] = useState('manual-ui')
+  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedSource, setSelectedSource] = useState('')
   const [selectedPriority, setSelectedPriority] = useState('auto')
   const [selectedSchedule, setSelectedSchedule] = useState('immediate')
   const [selectedModel, setSelectedModel] = useState('default')
@@ -183,12 +270,12 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       await request('/events', {
         method: 'POST',
         body: JSON.stringify({
-          source: selectedSource,
+          source: selectedSource.trim() && selectedSource !== 'auto' ? selectedSource.trim() : undefined,
           summary: summary.trim(),
           threadId: finalThreadId,
           payload: {
             workspacePath: effectiveWorkspacePath,
-            category: selectedCategory !== 'auto' ? selectedCategory : undefined,
+            category: selectedCategory.trim() && selectedCategory !== 'auto' ? selectedCategory.trim() : undefined,
             priority: selectedPriority !== 'auto' ? selectedPriority : undefined,
             scheduleMode: selectedSchedule,
             model: selectedModel !== 'default' ? { model: selectedModel } : undefined,
@@ -199,8 +286,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
       setSummary('')
       setThreadSelection('')
       setCustomThreadId('')
-      setSelectedCategory('auto')
-      setSelectedSource('manual-ui')
+      setSelectedCategory('')
+      setSelectedSource('')
       setSelectedPriority('auto')
       setSelectedSchedule('immediate')
       setSelectedModel('default')
@@ -309,7 +396,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
           {ticket.title}
         </div>
 
-        {/* Badges row: Category + Schedule */}
+        {/* Badges row: Category + Tags + Schedule */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
           <span
             style={{
@@ -318,14 +405,36 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
               borderRadius: '4px',
               background: cat.bg,
               color: cat.color,
+              border: `1px solid ${cat.border}`,
               fontWeight: 600,
               display: 'inline-flex',
               alignItems: 'center',
               gap: '3px',
             }}
           >
-            {cat.icon} {cat.label}
+            {cat.icon} {ticket.triage?.categoryLabel || cat.label}
           </span>
+
+          {/* Dynamic domain tags extracted by Router */}
+          {ticket.tags && ticket.tags.map(tag => {
+            const tc = stringToColor(tag)
+            return (
+              <span
+                key={tag}
+                style={{
+                  fontSize: '11px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  background: tc.bg,
+                  color: tc.color,
+                  border: `1px solid ${tc.border}`,
+                  fontWeight: 500,
+                }}
+              >
+                #{tag}
+              </span>
+            )
+          })}
 
           {ticket.scheduleMode === 'nightly' && (
             <span
@@ -750,15 +859,21 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 )}
               </div>
 
-              {/* Category and Source Grid */}
+              {/* Category and Source Grid (Open & Semantic, with datalist & quick pills) */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
-                    {t('categoryLabel')}
-                  </label>
-                  <select
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                      {t('categoryLabel')}
+                    </label>
+                    <span style={{ fontSize: '11px', color: '#6366f1' }}>🤖 Router 智能研判</span>
+                  </div>
+                  <input
+                    type="text"
                     value={selectedCategory}
                     onChange={e => setSelectedCategory(e.target.value)}
+                    placeholder="留空自动研判，或输入自定义分类..."
+                    list="autoloop-categories"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -768,25 +883,63 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       boxSizing: 'border-box',
                       backgroundColor: '#ffffff',
                     }}
-                  >
-                    <option value="auto">{t('categoryAuto')}</option>
-                    <option value="bugfix">{t('catBugfix')}</option>
-                    <option value="feature">{t('catFeature')}</option>
-                    <option value="refactor">{t('catRefactor')}</option>
-                    <option value="testing">{t('catTesting')}</option>
-                    <option value="documentation">{t('catDocOps')}</option>
-                    <option value="review">{t('catReview')}</option>
-                    <option value="general">{t('catGeneral')}</option>
-                  </select>
+                  />
+                  <datalist id="autoloop-categories">
+                    <option value="缺陷修复" />
+                    <option value="PPT设计" />
+                    <option value="视觉设计" />
+                    <option value="运营策略" />
+                    <option value="运维部署" />
+                    <option value="功能开发" />
+                    <option value="数据分析" />
+                    <option value="架构治理" />
+                    <option value="测试验证" />
+                    <option value="文档方案" />
+                  </datalist>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
+                    {['缺陷修复', 'PPT设计', '视觉设计', '运营策略', '运维部署', '功能开发'].map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setSelectedCategory(c)}
+                        style={{
+                          fontSize: '10px',
+                          padding: '1px 6px',
+                          borderRadius: '10px',
+                          border: '1px solid #e2e8f0',
+                          background: selectedCategory === c ? '#e0e7ff' : '#f8fafc',
+                          color: selectedCategory === c ? '#3730a3' : '#64748b',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                    {selectedCategory && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategory('')}
+                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                      >
+                        ✕ 重置
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
-                    {t('sourceFormLabel')}
-                  </label>
-                  <select
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label style={{ fontSize: '12px', fontWeight: 600 }}>
+                      {t('sourceFormLabel')}
+                    </label>
+                    <span style={{ fontSize: '11px', color: '#6366f1' }}>🤖 Router 自动提取</span>
+                  </div>
+                  <input
+                    type="text"
                     value={selectedSource}
                     onChange={e => setSelectedSource(e.target.value)}
+                    placeholder="留空自动识别渠道，或输入自定义来源..."
+                    list="autoloop-sources"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -796,13 +949,47 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                       boxSizing: 'border-box',
                       backgroundColor: '#ffffff',
                     }}
-                  >
-                    <option value="manual-ui">{t('srcManual')}</option>
-                    <option value="feishu">{t('srcFeishu')}</option>
-                    <option value="github">{t('srcGithub')}</option>
-                    <option value="sentry">{t('srcSentry')}</option>
-                    <option value="cron">{t('srcCron')}</option>
-                  </select>
+                  />
+                  <datalist id="autoloop-sources">
+                    <option value="飞书" />
+                    <option value="GitHub" />
+                    <option value="Sentry" />
+                    <option value="TAPD" />
+                    <option value="Jira" />
+                    <option value="钉钉" />
+                    <option value="企业微信" />
+                    <option value="定时巡检" />
+                    <option value="中台创建" />
+                  </datalist>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
+                    {['飞书', 'GitHub', 'Sentry', 'TAPD', '钉钉', '巡检'].map(s => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setSelectedSource(s)}
+                        style={{
+                          fontSize: '10px',
+                          padding: '1px 6px',
+                          borderRadius: '10px',
+                          border: '1px solid #e2e8f0',
+                          background: selectedSource === s ? '#e0e7ff' : '#f8fafc',
+                          color: selectedSource === s ? '#3730a3' : '#64748b',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                    {selectedSource && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSource('')}
+                        style={{ fontSize: '10px', padding: '1px 4px', border: 'none', background: 'transparent', color: '#ef4444', cursor: 'pointer' }}
+                      >
+                        ✕ 重置
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1324,6 +1511,36 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     </span>
                   </div>
                 </div>
+
+                {/* Domain tags if present */}
+                {((activeTicket.triage?.tags && activeTicket.triage.tags.length > 0) || (activeTicket.tags && activeTicket.tags.length > 0)) && (
+                  <div style={{ marginBottom: '10px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>
+                      识别业务标签 (Domain Tags)
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {(activeTicket.triage?.tags ?? activeTicket.tags ?? []).map(tag => {
+                        const tc = stringToColor(tag)
+                        return (
+                          <span
+                            key={tag}
+                            style={{
+                              fontSize: '11px',
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                              background: tc.bg,
+                              color: tc.color,
+                              border: `1px solid ${tc.border}`,
+                              fontWeight: 600,
+                            }}
+                          >
+                            #{tag}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Matched rules tags */}
                 {activeTicket.triage?.matchedRules && activeTicket.triage.matchedRules.length > 0 && (

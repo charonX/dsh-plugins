@@ -1,7 +1,8 @@
 /**
  * Intent Router (inspired by yetone/magpie).
- * Dynamically infers task intent, model tier, priority, execution timing,
- * and operational skills from event metadata with an auditable triage log.
+ * Acts as an intelligent triage role: dynamically infers task categories (development, design, ops,
+ * marketing, etc.), extracts sources from text/metadata without rigid hardcoding,
+ * identifies domain tags, and resolves priority and schedule timing.
  *
  * @module @charonx/dsh-autoloop/core/router
  */
@@ -22,24 +23,87 @@ export interface RouterOptions {
   fastModel?: { provider?: string; model?: string }
 }
 
-export const CATEGORY_LABELS: Record<string, string> = {
-  bugfix: '缺陷修复',
-  feature: '功能开发',
-  refactor: '架构治理',
-  testing: '测试验证',
-  documentation: '文档运维',
-  review: '审查调研',
-  general: '通用任务',
+export interface DynamicCategoryRule {
+  id: string
+  label: string
+  pattern: RegExp
+  skills: string[]
+  preferReasoner?: boolean
 }
 
-export const SOURCE_LABELS: Record<string, string> = {
-  'manual-ui': '中台手动创建',
-  feishu: '飞书工单',
-  github: 'GitHub',
-  sentry: 'Sentry 告警',
-  cron: '定时巡检',
-  webhook: '外部 Webhook',
-}
+/** Open semantic category classification rules covering dev, design, ops, and business */
+export const CATEGORY_RULES: DynamicCategoryRule[] = [
+  {
+    id: 'bugfix',
+    label: '缺陷修复',
+    pattern: /bug|error|exception|crash|panic|fail|sentry|故障|缺陷|报错|崩溃|异常|修复|500/i,
+    skills: ['diagnosing-bugs'],
+  },
+  {
+    id: 'ppt',
+    label: 'PPT设计',
+    pattern: /ppt|powerpoint|slide|幻灯片|演示文稿|演示/i,
+    skills: ['codebase-design'],
+    preferReasoner: true,
+  },
+  {
+    id: 'ui_design',
+    label: '视觉设计',
+    pattern: /ui|壁纸|图标|动画|设计|界面|前端样式|css|排版|视觉|主题/i,
+    skills: ['codebase-design'],
+  },
+  {
+    id: 'operation',
+    label: '运营策略',
+    pattern: /运营|推广|策略|活动|营销|用户增长|转化|扫码/i,
+    skills: ['research'],
+  },
+  {
+    id: 'ops',
+    label: '运维部署',
+    pattern: /部署|发布|上线|运维|服务器|nginx|docker|k8s|电脑配置|机器/i,
+    skills: ['codebase-design'],
+  },
+  {
+    id: 'data',
+    label: '数据分析',
+    pattern: /数据|统计|分析|报表|埋点|指标|看板|人数/i,
+    skills: ['research'],
+  },
+  {
+    id: 'refactor',
+    label: '架构治理',
+    pattern: /refactor|governance|reorganize|structure|cleanup|debt|重构|治理|解耦|坏味|精简|契约/i,
+    skills: ['codebase-design'],
+    preferReasoner: true,
+  },
+  {
+    id: 'testing',
+    label: '测试验证',
+    pattern: /test|spec|e2e|unit test|coverage|vitest|jest|测试|单测|用例|覆盖率|回归|验收/i,
+    skills: ['tdd'],
+  },
+  {
+    id: 'documentation',
+    label: '文档方案',
+    pattern: /doc|readme|markdown|文档|手册|方案|规范|纪要/i,
+    skills: ['codebase-design'],
+  },
+  {
+    id: 'review',
+    label: '审查调研',
+    pattern: /review|audit|diff|pr|research|investigate|审查|评估|调研|对比|巡检/i,
+    skills: ['code-review', 'research'],
+    preferReasoner: true,
+  },
+  {
+    id: 'feature',
+    label: '功能开发',
+    pattern: /feat|implement|create|build|develop|add|enhance|新增|实现|开发|支持|功能|改进|接入/i,
+    skills: ['codebase-design', 'tdd'],
+    preferReasoner: true,
+  },
+]
 
 export class IntentRouter {
   constructor(private readonly options: RouterOptions) {}
@@ -48,96 +112,132 @@ export class IntentRouter {
   route(event: IngressEvent): TicketMandate {
     const text = `${event.summary} ${JSON.stringify(event.payload ?? {})}`.toLowerCase()
     const matchedRules: string[] = []
+    const tags: string[] = []
 
-    // 1. Resolve Intent / Category
-    let intent: TaskCategory = 'general'
-    const explicitCategory = event.payload?.category
-    if (typeof explicitCategory === 'string' && explicitCategory && explicitCategory !== 'auto') {
-      intent = explicitCategory
-      matchedRules.push(`用户指定分类: ${CATEGORY_LABELS[intent] || intent}`)
-    } else {
-      if (/error|exception|fail|crash|bug|fix|panic|sentry|报错|异常|崩溃|修复|缺陷|失败|500/.test(text)) {
-        intent = 'bugfix'
-        matchedRules.push('匹配缺陷与异常关键词 (error/crash/bug/修复/报错)')
-      } else if (/refactor|governance|reorganize|structure|cleanup|debt|重构|治理|解耦|坏味|精简/.test(text)) {
-        intent = 'refactor'
-        matchedRules.push('匹配架构治理关键词 (refactor/重构/治理/解耦)')
-      } else if (/test|spec|e2e|unit test|coverage|vitest|jest|测试|单测|用例|覆盖率|回归/.test(text)) {
-        intent = 'testing'
-        matchedRules.push('匹配质量测试关键词 (test/spec/测试/用例/回归)')
-      } else if (/doc|readme|markdown|deploy|ci|cd|ops|流水线|文档|部署|发布|配置/.test(text)) {
-        intent = 'documentation'
-        matchedRules.push('匹配文档运维关键词 (doc/deploy/ci/文档/部署)')
-      } else if (/review|audit|diff|pr|research|investigate|审查|评估|调研|对比|巡检/.test(text)) {
-        intent = 'review'
-        matchedRules.push('匹配审查调研关键词 (review/audit/审查/调研/评估)')
-      } else if (/feat|implement|create|build|develop|add|enhance|新增|实现|开发|支持|功能|改进/.test(text)) {
-        intent = 'feature'
-        matchedRules.push('匹配功能演进关键词 (feat/add/新增/实现/功能)')
-      } else {
-        intent = 'general'
-        matchedRules.push('未匹配特定意图规则，归入通用任务')
+    // 1. Dynamic Domain Tag Extraction (e.g. [PPT 标准化], [组件契约], [官网])
+    const bracketMatches = event.summary.match(/\[([^\]]+)\]/g)
+    if (bracketMatches) {
+      for (const m of bracketMatches) {
+        const clean = m.slice(1, -1).trim()
+        if (clean && !tags.includes(clean)) {
+          tags.push(clean)
+          matchedRules.push(`提取标题标签: [${clean}]`)
+        }
       }
     }
 
-    // 2. Resolve Operational Skills
+    // 2. Open Category Detection (Supports custom string or semantic pattern matching)
+    let intent: TaskCategory = 'general'
+    let categoryLabel = '常规任务'
     let skills: string[] = []
-    switch (intent) {
-      case 'bugfix':
-        skills = ['diagnosing-bugs']
-        break
-      case 'refactor':
-        skills = ['codebase-design']
-        break
-      case 'testing':
-        skills = ['tdd']
-        break
-      case 'documentation':
-        skills = ['codebase-design']
-        break
-      case 'review':
-        skills = ['code-review', 'research']
-        break
-      case 'feature':
-        skills = ['codebase-design', 'tdd']
-        break
-      default:
-        skills = []
-        break
+    let preferReasoner = false
+
+    const explicitCategory = event.payload?.category
+    if (typeof explicitCategory === 'string' && explicitCategory && explicitCategory !== 'auto') {
+      intent = explicitCategory
+      categoryLabel = explicitCategory
+      matchedRules.push(`用户指定分类: ${categoryLabel}`)
+    } else {
+      // Evaluate open category rules
+      let matched = false
+      for (const rule of CATEGORY_RULES) {
+        if (rule.pattern.test(text)) {
+          intent = rule.id
+          categoryLabel = rule.label
+          skills = [...rule.skills]
+          preferReasoner = Boolean(rule.preferReasoner)
+          matchedRules.push(`命中分类规则: ${rule.label}`)
+          matched = true
+          break
+        }
+      }
+      if (!matched) {
+        intent = 'general'
+        categoryLabel = '常规任务'
+        matchedRules.push('未命中预设规则，自动分配为开放常规任务')
+      }
     }
 
-    // 3. Resolve Priority (P0, P1, P2, P3)
+    // 3. Dynamic Source Auto-Detection (Never locked to a rigid list)
+    let detectedSource = '中台创建'
+    const rawSource = typeof event.payload?.source === 'string' ? event.payload.source : event.source
+
+    if (typeof rawSource === 'string' && rawSource && rawSource !== 'manual-ui' && rawSource !== 'auto') {
+      detectedSource = rawSource
+      matchedRules.push(`任务来源设定: ${detectedSource}`)
+    } else {
+      // Auto-identify source from context/URL/keywords
+      if (/feishu|lark|飞书/i.test(text)) {
+        detectedSource = '飞书'
+        matchedRules.push('上下文识别来源: 飞书渠道')
+      } else if (/github/i.test(text)) {
+        detectedSource = 'GitHub'
+        matchedRules.push('上下文识别来源: GitHub')
+      } else if (/gitlab/i.test(text)) {
+        detectedSource = 'GitLab'
+        matchedRules.push('上下文识别来源: GitLab')
+      } else if (/sentry/i.test(text)) {
+        detectedSource = 'Sentry'
+        matchedRules.push('检测到告警监控: Sentry')
+      } else if (/jira/i.test(text)) {
+        detectedSource = 'Jira'
+        matchedRules.push('上下文识别工单: Jira')
+      } else if (/tapd/i.test(text)) {
+        detectedSource = 'TAPD'
+        matchedRules.push('上下文识别工单: TAPD')
+      } else if (/dingtalk|钉钉/i.test(text)) {
+        detectedSource = '钉钉'
+        matchedRules.push('上下文识别来源: 钉钉')
+      } else if (/wecom|企业微信|企微/i.test(text)) {
+        detectedSource = '企业微信'
+        matchedRules.push('上下文识别来源: 企业微信')
+      } else if (/slack/i.test(text)) {
+        detectedSource = 'Slack'
+        matchedRules.push('上下文识别来源: Slack')
+      } else if (/cron|timer|定时|巡检/i.test(text)) {
+        detectedSource = '定时巡检'
+        matchedRules.push('上下文识别来源: 定时巡检')
+      } else if (/官网|小灶/i.test(text)) {
+        detectedSource = '官网业务'
+        matchedRules.push('识别为官网业务任务')
+      } else {
+        detectedSource = '中台交互'
+      }
+    }
+
+    // 4. Dynamic Priority Resolution (P0, P1, P2, P3)
     let priority: PriorityLevel = 'p2'
     const explicitPriority = event.payload?.priority
     if (typeof explicitPriority === 'string' && explicitPriority && explicitPriority !== 'auto') {
       priority = explicitPriority as PriorityLevel
-      matchedRules.push(`用户显式指定优先级: ${priority.toUpperCase()}`)
+      matchedRules.push(`指定优先级: ${priority.toUpperCase()}`)
     } else {
-      if (/crash|panic|sentry|p0|紧急|致命|严重|阻断|线上|宕机/.test(text) || event.source === 'sentry') {
+      if (/crash|panic|sentry|p0|紧急|致命|严重|阻断|线上|宕机/i.test(text) || detectedSource === 'Sentry') {
         priority = 'p0'
-        matchedRules.push('检测到致命告警/紧急阻断指标 -> P0 紧急')
-      } else if (intent === 'bugfix' || intent === 'feature') {
+        matchedRules.push('检测到紧急阻断指标 -> P0 紧急')
+      } else if (intent === 'bugfix' || intent === 'feature' || /核心|关键|重点|p1/i.test(text)) {
         priority = 'p1'
-        matchedRules.push(`核心研发类别 (${CATEGORY_LABELS[intent]}) -> P1 高优`)
-      } else if (/nightly|夜间|闲时|低峰|不急|低优/.test(text)) {
+        matchedRules.push(`核心研发/业务类别 (${categoryLabel}) -> P1 高优`)
+      } else if (/壁纸|闲时|夜间|优化图标|不急|低优|p3/i.test(text)) {
         priority = 'p3'
-        matchedRules.push('意向为低峰/闲时处理 -> P3 低优')
+        matchedRules.push('低频或闲时处理意向 -> P3 低优')
       } else {
         priority = 'p2'
-        matchedRules.push('常规研发与支持类别 -> P2 普通')
+        matchedRules.push('常规优先级标准 -> P2 普通')
       }
     }
 
-    // 4. Resolve Execution Schedule (immediate, nightly, scheduled)
+    // 5. Dynamic Execution Schedule (immediate, nightly, scheduled)
     let scheduleMode: ScheduleMode = 'immediate'
     let scheduledAt: number | undefined = undefined
     const explicitSchedule = event.payload?.scheduleMode
+
     if (typeof explicitSchedule === 'string' && explicitSchedule) {
       scheduleMode = explicitSchedule as ScheduleMode
-      matchedRules.push(`用户显式指定执行时机: ${scheduleMode === 'nightly' ? '夜间低峰' : scheduleMode === 'scheduled' ? '定时执行' : '立即执行'}`)
-    } else if (/nightly|夜间|晚上|低峰|闲时|节省token|非工作时间/.test(text)) {
+      matchedRules.push(`指定执行时机: ${scheduleMode === 'nightly' ? '夜间低峰' : scheduleMode === 'scheduled' ? '定时执行' : '立即执行'}`)
+    } else if (/nightly|夜间|晚上|低峰|闲时|节省token|非工作时间/i.test(text)) {
       scheduleMode = 'nightly'
-      matchedRules.push('提示词中包含夜间/低峰关键词 -> 研判为夜间低峰执行')
+      matchedRules.push('检测到夜间/闲时意图 -> 自动排入夜间低峰队列')
     } else {
       scheduleMode = 'immediate'
       matchedRules.push('默认调度策略 -> 立即调度执行')
@@ -147,22 +247,22 @@ export class IntentRouter {
       scheduledAt = event.payload.scheduledAt
     }
 
-    // 5. Model Selection
+    // 6. Model Selection
     let model = this.options.fastModel ?? { provider: 'deepseek-official', model: 'deepseek-chat' }
     if (event.payload?.model && typeof event.payload.model === 'object') {
       const m = event.payload.model as { provider?: string; model?: string }
       if (m.model && m.model !== 'default') {
         model = { provider: m.provider, model: m.model }
-        matchedRules.push(`用户手动指定模型: ${m.model}`)
+        matchedRules.push(`用户指定模型: ${m.model}`)
       }
-    } else if (intent === 'feature' || intent === 'refactor' || intent === 'review') {
+    } else if (preferReasoner || intent === 'feature' || intent === 'refactor' || intent === 'review') {
       model = this.options.flagshipModel ?? { provider: 'deepseek-official', model: 'deepseek-reasoner' }
-      matchedRules.push(`复杂逻辑/架构治理任务 -> 推荐旗舰推理模型 (${model.model})`)
+      matchedRules.push(`深度逻辑或创作设计任务 -> 推荐旗舰推理模型 (${model.model})`)
     } else {
-      matchedRules.push(`轻量/诊断任务 -> 推荐高速通用模型 (${model.model})`)
+      matchedRules.push(`高速处理任务 -> 推荐通用高速模型 (${model.model})`)
     }
 
-    // 6. Security & Workspace Permissions
+    // 7. Security & Workspace Permissions
     const permissionPreset = (typeof event.payload?.permissionPreset === 'string' && event.payload.permissionPreset) || 'workspace-write'
     const agentPreset = typeof event.payload?.agentPreset === 'string' ? event.payload.agentPreset : undefined
 
@@ -182,25 +282,28 @@ export class IntentRouter {
       payload: event.payload,
     })
 
-    // 7. Synthesize Triage Reasoning Narrative
-    const categoryLabel = CATEGORY_LABELS[intent] || intent
-    const sourceLabel = SOURCE_LABELS[event.source] || event.source
+    // 8. Synthesize Human-Readable Triage Narrative
     const scheduleDesc = scheduleMode === 'nightly'
-      ? '已排入「🌙 夜间低峰时段 (23:00~07:00)」自动批处理，可显著节省 Token 费用；期间支持随时手动一键唤醒。'
+      ? '已排入「🌙 夜间低峰时段 (23:00~07:00)」自动批处理（可节省模型费用，支持随时一键唤醒）。'
       : scheduleMode === 'scheduled'
-      ? `已设定为「🕒 定时执行」(计划时间: ${scheduledAt ? new Date(scheduledAt).toLocaleString() : '待定'})。`
-      : '设定为「⚡ 立即执行」，工单创建后自动分配 Agent 实时运行。'
+      ? `已设定为「🕒 定时执行」(时间: ${scheduledAt ? new Date(scheduledAt).toLocaleString() : '待定'})。`
+      : '设定为「⚡ 立即执行」，创建后自动分发至 Agent 实时运行。'
 
     const reasoning = [
-      `【任务意图研判】：根据输入内容，研判归属为「${categoryLabel}」。`,
-      `【来源与优先级】：任务来源为「${sourceLabel}」，综合紧迫度评定为「${priority.toUpperCase()}」。`,
-      `【执行时机决策】：${scheduleDesc}`,
-      `【资源技能装配】：模型配置为 [${model.model ?? '系统默认'}]，安全沙箱设为「${permissionPreset}」，挂载专业技能 [${skills.join(', ') || '通用基础'}]。`,
+      `【Router 智能研判日志】`,
+      `• 任务分类：智能研判为「${categoryLabel}」`,
+      `• 来源判定：识别任务渠道为「${detectedSource}」`,
+      `• 业务标签：${tags.length > 0 ? tags.map(t => `#${t}`).join(' ') : '常规'}`,
+      `• 优先级评定：评定为「${priority.toUpperCase()}」(${priority === 'p0' ? '紧急阻断' : priority === 'p1' ? '核心任务' : priority === 'p3' ? '闲时低优' : '常规标准'})`,
+      `• 执行时机：${scheduleDesc}`,
+      `• 算力装配：模型分配 [${model.model ?? '系统默认'}]，安全沙箱「${permissionPreset}」，技能 [${skills.join(', ') || '基础通用'}]。`,
     ].join('\n')
 
     const triage: RouterTriage = {
       intent,
       categoryLabel,
+      detectedSource,
+      tags,
       priority,
       scheduleMode,
       scheduledAt,
@@ -223,6 +326,7 @@ export class IntentRouter {
       priority,
       scheduleMode,
       scheduledAt,
+      tags,
       triage,
     }
   }
