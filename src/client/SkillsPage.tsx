@@ -60,42 +60,42 @@ export interface TranslateProps {
 
 const COLORS = {
   // Container & Layers
-  bgLayer1: 'var(--dsw-alias-bg-layer-1)',
-  bgLayer2: 'var(--dsw-alias-bg-layer-2)',
-  bgLayer3: 'var(--dsw-alias-bg-layer-3)',
-  bgMask: 'var(--dsw-alias-bg-mask-2)',
+  bgLayer1: 'var(--dsw-alias-bg-layer-1, #f8fafc)',
+  bgLayer2: 'var(--dsw-alias-bg-layer-2, #ffffff)',
+  bgLayer3: 'var(--dsw-alias-bg-layer-3, #f1f5f9)',
+  bgMask: 'var(--dsw-alias-bg-mask-2, rgba(0,0,0,0.45))',
 
   // Legacy surface aliases
-  surface: 'var(--dsw-alias-bg-layer-2)',
-  surfaceAlt: 'var(--dsw-alias-bg-layer-1)',
-  surfaceElevated: 'var(--dsw-alias-bg-layer-3)',
+  surface: 'var(--dsw-alias-bg-layer-2, #ffffff)',
+  surfaceAlt: 'var(--dsw-alias-bg-layer-1, #f8fafc)',
+  surfaceElevated: 'var(--dsw-alias-bg-layer-3, #f1f5f9)',
 
   // Typography
-  text: 'var(--dsw-alias-label-primary)',
-  secondary: 'var(--dsw-alias-label-secondary)',
-  tertiary: 'var(--dsw-alias-label-tertiary)',
+  text: 'var(--dsw-alias-label-primary, #111827)',
+  secondary: 'var(--dsw-alias-label-secondary, #4b5563)',
+  tertiary: 'var(--dsw-alias-label-tertiary, #9ca3af)',
 
   // Border hierarchy (l1 -> l4)
-  borderSubtle: 'var(--dsw-alias-border-l1)',
-  border: 'var(--dsw-alias-border-l2)',
-  borderInput: 'var(--dsw-alias-border-l3)',
-  borderStrong: 'var(--dsw-alias-border-l4)',
+  borderSubtle: 'var(--dsw-alias-border-l1, rgba(0,0,0,0.04))',
+  border: 'var(--dsw-alias-border-l2, rgba(0,0,0,0.08))',
+  borderInput: 'var(--dsw-alias-border-l3, rgba(0,0,0,0.12))',
+  borderStrong: 'var(--dsw-alias-border-l4, rgba(0,0,0,0.18))',
 
   // Brand & States
-  brand: 'var(--dsw-alias-brand-primary)',
-  onBrand: 'var(--dsw-alias-label-primary-foreground)',
-  error: 'var(--dsw-alias-state-error-primary)',
-  success: 'var(--dsw-alias-state-success-primary)',
-  warn: 'var(--dsw-alias-state-warn-primary)',
+  brand: 'var(--dsw-alias-brand-primary, #2563eb)',
+  onBrand: 'var(--dsw-alias-label-primary-foreground, #ffffff)',
+  error: 'var(--dsw-alias-state-error-primary, #ef4444)',
+  success: 'var(--dsw-alias-state-success-primary, #10b981)',
+  warn: 'var(--dsw-alias-state-warn-primary, #f59e0b)',
 
   // Interactive
-  interactiveHover: 'var(--dsw-alias-interactive-bg-hover)',
-  interactiveActive: 'var(--dsw-alias-interactive-bg-active)',
+  interactiveHover: 'var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04))',
+  interactiveActive: 'var(--dsw-alias-interactive-bg-active, rgba(0,0,0,0.08))',
 
   // Dedicated widgets
-  codeBlock: 'var(--dsw-alias-markdown-code-block)',
-  switchTrack: 'var(--dsw-alias-bg-module-platform)',
-  switchThumb: 'var(--dsw-alias-switch-thumb)',
+  codeBlock: 'var(--dsw-alias-markdown-code-block, #f1f5f9)',
+  switchTrack: 'var(--dsw-alias-bg-module-platform, rgba(0,0,0,0.06))',
+  switchThumb: 'var(--dsw-alias-switch-thumb, #ffffff)',
 } as const
 
 const cardStyle: React.CSSProperties = {
@@ -128,6 +128,9 @@ const buttonStyle: React.CSSProperties = {
   justifyContent: 'center',
   gap: 6,
   lineHeight: '18px',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+  boxSizing: 'border-box',
   transition: 'background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease',
 }
 
@@ -378,6 +381,9 @@ export function SkillsPage({ t }: TranslateProps): ReactElement {
     >
       <style>{`
         .dsh-sm-btn {
+          white-space: nowrap !important;
+          flex-shrink: 0 !important;
+          box-sizing: border-box;
           transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
         }
         .dsh-sm-btn:hover:not(:disabled) {
@@ -1609,14 +1615,23 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                   })}
                   <div style={{
                     display: 'flex',
-                    gap: 6,
-                    padding: 6,
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 8px',
                     marginTop: 4,
                     borderTop: `0.5px solid ${COLORS.borderSubtle}`,
                   }}>
                     <input
                       className="dsh-sm-input"
-                      style={{ ...inputStyle, padding: '4px 8px', height: 28, fontSize: 12 }}
+                      style={{
+                        ...inputStyle,
+                        flex: 1,
+                        minWidth: 0,
+                        width: 'auto',
+                        height: 30,
+                        padding: '0 10px',
+                        fontSize: 12,
+                      }}
                       value={customPath}
                       placeholder={t('customProjectPath')}
                       aria-label={t('customProjectPath')}
@@ -1632,7 +1647,14 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                     <button
                       type="button"
                       className="dsh-sm-btn"
-                      style={{ ...buttonStyle, padding: '3px 10px', height: 28 }}
+                      style={{
+                        ...buttonStyle,
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                        height: 30,
+                        padding: '0 14px',
+                        fontSize: 12,
+                      }}
                       disabled={busy || customPath.trim() === ''}
                       onClick={addCustomProject}
                     >
