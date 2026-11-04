@@ -43,8 +43,8 @@ const COLORS = {
 } as const
 
 const buttonBaseStyle: React.CSSProperties = {
-  border: `1px solid ${COLORS.borderStrong}`,
-  borderRadius: 'var(--dsw-radius-sm, 6px)',
+  border: `0.5px solid ${COLORS.borderStrong}`,
+  borderRadius: 'var(--dsw-radius-md, 8px)',
   background: COLORS.surface,
   color: COLORS.text,
   padding: '6px 12px',
@@ -68,15 +68,394 @@ const primaryButtonStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
-  border: `1px solid ${COLORS.borderInput}`,
-  borderRadius: 'var(--dsw-radius-sm, 6px)',
-  background: COLORS.surface,
+  height: '32px',
+  border: `0.5px solid ${COLORS.borderStrong}`,
+  borderRadius: 'var(--dsw-radius-md, 8px)',
+  background: COLORS.surfaceAlt,
   color: COLORS.text,
-  padding: '7px 10px',
+  padding: '0 10px',
   fontSize: '13px',
   fontFamily: 'inherit',
   outline: 'none',
-  transition: 'border-color 0.15s ease',
+  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+}
+
+const textareaStyle: React.CSSProperties = {
+  ...inputStyle,
+  height: 'auto',
+  minHeight: '70px',
+  padding: '8px 10px',
+  lineHeight: '1.5',
+}
+
+export interface SelectOption {
+  value: string
+  label: string
+  subLabel?: string
+  badge?: string
+  badgeColor?: { bg: string; color: string }
+}
+
+export interface SelectGroup {
+  id: string
+  label?: string
+  options: SelectOption[]
+}
+
+export interface DshSelectProps {
+  value: string
+  onChange: (value: string) => void
+  options?: SelectOption[]
+  groups?: SelectGroup[]
+  placeholder?: string
+  disabled?: boolean
+  style?: React.CSSProperties
+}
+
+/**
+ * Custom Dropdown adhering strictly to DeepSeek Harness UI Primitives & Design Tokens
+ * Features 32px height, 0.5px subtle border, 8px radius, rotating 12px DSH chevron,
+ * floating elevated popover panel with hover highlights, groups, badges, and active checkmarks.
+ */
+export function DshSelect({
+  value,
+  onChange,
+  options,
+  groups,
+  placeholder = '请选择...',
+  disabled = false,
+  style,
+}: DshSelectProps): React.ReactElement {
+  const [isOpen, setIsOpen] = useState(false)
+  const [openUpwards, setOpenUpwards] = useState(false)
+  const [hoveredValue, setHoveredValue] = useState<string | null>(null)
+  const containerRef = React.useRef<HTMLDivElement>(null)
+
+  const allOptions = React.useMemo(() => {
+    if (groups && groups.length > 0) {
+      return groups.flatMap(g => g.options)
+    }
+    return options || []
+  }, [groups, options])
+
+  const selectedOption = allOptions.find(opt => opt.value === value) || (value ? { value, label: value } : null)
+
+  const toggleDropdown = () => {
+    if (disabled) return
+    if (!isOpen && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      if (spaceBelow < 230 && rect.top > 230) {
+        setOpenUpwards(true)
+      } else {
+        setOpenUpwards(false)
+      }
+    }
+    setIsOpen(prev => !prev)
+  }
+
+  React.useEffect(() => {
+    if (!isOpen) return
+
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen])
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        position: 'relative',
+        width: '100%',
+        userSelect: 'none',
+        ...style,
+      }}
+    >
+      {/* Trigger Button adhering to DSH selectInput & ModelSelect */}
+      <div
+        role="combobox"
+        aria-expanded={isOpen}
+        tabIndex={disabled ? -1 : 0}
+        onClick={toggleDropdown}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            toggleDropdown()
+          }
+        }}
+        className="dsh-autoloop-select-trigger"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          height: '32px',
+          padding: '0 10px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '8px',
+          background: COLORS.surfaceAlt,
+          border: `0.5px solid ${isOpen ? COLORS.brand : COLORS.borderStrong}`,
+          borderRadius: 'var(--dsw-radius-md, 8px)',
+          color: COLORS.text,
+          fontSize: '13px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          outline: 'none',
+          boxShadow: isOpen ? '0 0 0 2px rgba(37, 99, 235, 0.15)' : 'none',
+          opacity: disabled ? 0.6 : 1,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, overflow: 'hidden' }}>
+          {selectedOption ? (
+            <>
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 500,
+                  color: COLORS.text,
+                }}
+              >
+                {selectedOption.label}
+              </span>
+              {selectedOption.badge && (
+                <span
+                  style={{
+                    flexShrink: 0,
+                    fontSize: '10px',
+                    padding: '1px 5px',
+                    borderRadius: 'var(--dsw-radius-xs, 4px)',
+                    background: selectedOption.badgeColor?.bg || 'rgba(37, 99, 235, 0.08)',
+                    color: selectedOption.badgeColor?.color || COLORS.brand,
+                    fontWeight: 600,
+                  }}
+                >
+                  {selectedOption.badge}
+                </span>
+              )}
+              {selectedOption.subLabel && (
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontSize: '11px',
+                    color: COLORS.tertiary,
+                  }}
+                >
+                  ({selectedOption.subLabel})
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{ color: COLORS.tertiary }}>{placeholder}</span>
+          )}
+        </div>
+
+        {/* DSH 12px Chevron Icon with 180deg smooth animation */}
+        <div
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--dsw-alias-label-caption, #81858c)',
+            transform: isOpen ? 'rotate(180deg)' : 'none',
+            transition: 'transform 140ms ease',
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path
+              d="M3 4.5L6 7.5L9 4.5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
+      </div>
+
+      {/* Floating Popover Panel matching Menu & ModelSelect */}
+      {isOpen && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute',
+            ...(openUpwards ? { bottom: 'calc(100% + 4px)' } : { top: 'calc(100% + 4px)' }),
+            left: 0,
+            right: 0,
+            zIndex: 1100,
+            boxSizing: 'border-box',
+            background: COLORS.surface,
+            border: `0.5px solid ${COLORS.border}`,
+            borderRadius: 'var(--dsw-radius-lg, 10px)',
+            boxShadow: 'var(--dsw-elevation-prominent, 0 12px 32px rgba(0, 0, 0, 0.16))',
+            padding: '4px',
+            maxHeight: '240px',
+            overflowY: 'auto',
+          }}
+          onClick={e => e.stopPropagation()}
+        >
+          {groups && groups.length > 0 ? (
+            groups.map((group, groupIdx) => (
+              <div key={group.id}>
+                {groupIdx > 0 && (
+                  <div
+                    style={{
+                      height: '0.5px',
+                      background: COLORS.borderSubtle,
+                      margin: '4px 6px',
+                    }}
+                  />
+                )}
+                {group.label && (
+                  <div
+                    style={{
+                      padding: '6px 8px 3px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: COLORS.tertiary,
+                      letterSpacing: '0.3px',
+                    }}
+                  >
+                    {group.label}
+                  </div>
+                )}
+                {group.options.map(opt => renderOptionItem(opt))}
+              </div>
+            ))
+          ) : (
+            allOptions.map(opt => renderOptionItem(opt))
+          )}
+          {allOptions.length === 0 && (
+            <div style={{ padding: '8px', fontSize: '12px', color: COLORS.tertiary, textAlign: 'center' }}>
+              无可选项目
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+
+  function renderOptionItem(opt: SelectOption) {
+    const isSelected = opt.value === value
+    const isHovered = hoveredValue === opt.value
+
+    return (
+      <div
+        key={opt.value}
+        role="option"
+        aria-selected={isSelected}
+        onMouseEnter={() => setHoveredValue(opt.value)}
+        onMouseLeave={() => setHoveredValue(null)}
+        onClick={() => {
+          onChange(opt.value)
+          setIsOpen(false)
+        }}
+        className="dsh-autoloop-opt"
+        style={{
+          minHeight: '32px',
+          boxSizing: 'border-box',
+          padding: '6px 8px',
+          borderRadius: 'var(--dsw-radius-md, 6px)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '8px',
+          cursor: 'pointer',
+          background: isHovered
+            ? COLORS.interactiveHover
+            : isSelected
+            ? 'rgba(37, 99, 235, 0.05)'
+            : 'transparent',
+          color: COLORS.text,
+          fontSize: '13px',
+          lineHeight: '20px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, overflow: 'hidden' }}>
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontWeight: isSelected ? 600 : 400,
+              color: isSelected ? COLORS.brand : COLORS.text,
+            }}
+          >
+            {opt.label}
+          </span>
+          {opt.badge && (
+            <span
+              style={{
+                flexShrink: 0,
+                fontSize: '10px',
+                padding: '1px 5px',
+                borderRadius: 'var(--dsw-radius-xs, 4px)',
+                background: opt.badgeColor?.bg || 'rgba(37, 99, 235, 0.08)',
+                color: opt.badgeColor?.color || COLORS.brand,
+                fontWeight: 600,
+              }}
+            >
+              {opt.badge}
+            </span>
+          )}
+          {opt.subLabel && (
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: '11px',
+                color: COLORS.tertiary,
+              }}
+            >
+              ({opt.subLabel})
+            </span>
+          )}
+        </div>
+
+        {/* Selected Checkmark Icon */}
+        {isSelected && (
+          <div
+            style={{
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              color: COLORS.brand,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M3.5 8.5L6.5 11.5L12.5 5.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+        )}
+      </div>
+    )
+  }
 }
 
 /** Deterministic pastel color generator with soft opacity for modern tags */
@@ -374,6 +753,78 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   const currentWorkspace = workspaces.find(w => w.path === selectedWorkspacePath) || workspaces[0]
   const availableSessions = currentWorkspace?.sessions ?? []
   const activeTicket = selectedTicket ? (tickets.find(t => t.id === selectedTicket.id) ?? selectedTicket) : null
+
+  const workspaceOptions: SelectOption[] = workspaces.map(w => ({
+    value: w.path,
+    label: w.title,
+    subLabel: w.path,
+  }))
+
+  const threadGroups: SelectGroup[] = [
+    {
+      id: 'default',
+      options: [{ value: '', label: t('newThreadOption') }],
+    },
+    ...(availableSessions.length > 0
+      ? [
+          {
+            id: 'sessions',
+            label: t('recentConversationsGroup'),
+            options: availableSessions.map(s => ({
+              value: `dsh:session:${s.id}`,
+              label: s.title,
+              subLabel: s.id.slice(0, 8),
+            })),
+          },
+        ]
+      : []),
+    {
+      id: 'custom',
+      options: [{ value: '__custom__', label: t('customThreadOption') }],
+    },
+  ]
+
+  const priorityOptions: SelectOption[] = [
+    { value: 'auto', label: t('priorityAuto'), subLabel: 'Router智能评级' },
+    { value: 'p0', label: t('prioP0'), badge: '紧急', badgeColor: { bg: 'rgba(239, 68, 68, 0.1)', color: 'var(--dsw-alias-state-error-primary, #ef4444)' } },
+    { value: 'p1', label: t('prioP1'), badge: '高优', badgeColor: { bg: 'rgba(245, 158, 11, 0.12)', color: '#c2410c' } },
+    { value: 'p2', label: t('prioP2'), badge: '普通', badgeColor: { bg: 'rgba(37, 99, 235, 0.1)', color: 'var(--dsw-alias-brand-primary, #2563eb)' } },
+    { value: 'p3', label: t('prioP3'), badge: '低优', badgeColor: { bg: 'rgba(107, 114, 128, 0.1)', color: 'var(--dsw-alias-label-secondary, #4b5563)' } },
+  ]
+
+  const scheduleOptions: SelectOption[] = [
+    { value: 'immediate', label: t('scheduleImmediate'), subLabel: '研判通过后立即调度执行' },
+    { value: 'nightly', label: t('scheduleNightly'), subLabel: '闲时排队执行 (00:00 - 08:00)' },
+    { value: 'scheduled', label: t('scheduleScheduled'), subLabel: '按设定定时策略启动' },
+  ]
+
+  const modelGroups: SelectGroup[] = [
+    {
+      id: 'default',
+      options: [
+        {
+          value: 'default',
+          label: `${t('modelDefault')}${modelCatalog?.defaultSelection?.model ? ` (${modelCatalog.defaultSelection.model})` : ''}`,
+          subLabel: '推荐',
+        },
+      ],
+    },
+    ...(modelCatalog?.groups?.map(g => ({
+      id: g.id,
+      label: g.name || g.id,
+      options: g.models.map(m => ({
+        value: `${g.id}/${m.id}`,
+        label: m.name || m.id,
+        badge: m.badge,
+      })),
+    })) || []),
+  ]
+
+  const permissionOptions: SelectOption[] = [
+    { value: 'workspace-write', label: t('permWorkspace'), subLabel: '安全沙箱，仅修改指定工作区目录' },
+    { value: 'danger-full-access', label: t('permFullAccess'), subLabel: '高危，允许全盘访问与执行高危命令', badge: '高危', badgeColor: { bg: 'rgba(239, 68, 68, 0.1)', color: 'var(--dsw-alias-state-error-primary, #ef4444)' } },
+    { value: 'read-only', label: t('permReadOnly'), subLabel: '只读探索，不写入任何代码与文件' },
+  ]
 
   const renderCard = (ticket: Ticket) => {
     const hasResult = Boolean(ticket.assignment?.resultSummary)
@@ -774,6 +1225,29 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         fontFamily: 'var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif)',
       }}
     >
+      <style>{`
+        .dsh-autoloop-select-trigger {
+          transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+        }
+        .dsh-autoloop-select-trigger:hover:not(:disabled) {
+          background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04)) !important;
+          border-color: var(--dsw-alias-border-l4, rgba(0,0,0,0.22)) !important;
+        }
+        .dsh-autoloop-opt {
+          transition: background 0.1s ease;
+        }
+        .dsh-autoloop-opt:hover {
+          background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.05)) !important;
+        }
+        .dsh-autoloop-input:focus {
+          border-color: var(--dsw-alias-brand-primary, #2563eb) !important;
+          box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15) !important;
+        }
+        .dsh-autoloop-input::placeholder {
+          color: var(--dsw-alias-label-tertiary, #9ca3af);
+        }
+      `}</style>
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
@@ -832,9 +1306,9 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
             style={{
               background: COLORS.surface,
               borderRadius: 'var(--dsw-radius-lg, 12px)',
-              border: `1px solid ${COLORS.border}`,
+              border: `0.5px solid ${COLORS.border}`,
               padding: '24px',
-              width: '520px',
+              width: '540px',
               maxWidth: '92%',
               maxHeight: '90vh',
               overflowY: 'auto',
@@ -866,33 +1340,27 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   placeholder={t('summaryPlaceholder')}
                   required
                   rows={3}
+                  className="dsh-autoloop-input"
                   style={{
-                    ...inputStyle,
+                    ...textareaStyle,
                     resize: 'vertical',
                   }}
                 />
               </div>
 
-              {/* Workspace Selector (Required Dropdown) */}
+              {/* Workspace Selector (Native DSH Dropdown) */}
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('workspaceLabel')}
                 </label>
-                <select
+                <DshSelect
                   value={effectiveWorkspacePath}
-                  onChange={e => {
-                    setSelectedWorkspacePath(e.target.value)
+                  onChange={val => {
+                    setSelectedWorkspacePath(val)
                     setThreadSelection('')
                   }}
-                  required
-                  style={inputStyle}
-                >
-                  {workspaces.map(w => (
-                    <option key={w.id} value={w.path}>
-                      {w.title} ({w.path})
-                    </option>
-                  ))}
-                </select>
+                  options={workspaceOptions}
+                />
               </div>
 
               {/* Linked Thread / Conversation Selector */}
@@ -900,23 +1368,11 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                   {t('threadIdLabel')}
                 </label>
-                <select
+                <DshSelect
                   value={threadSelection}
-                  onChange={e => setThreadSelection(e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">{t('newThreadOption')}</option>
-                  {availableSessions.length > 0 && (
-                    <optgroup label={t('recentConversationsGroup')}>
-                      {availableSessions.map(s => (
-                        <option key={s.id} value={`dsh:session:${s.id}`}>
-                          {s.title} ({s.id.slice(0, 8)})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <option value="__custom__">{t('customThreadOption')}</option>
-                </select>
+                  onChange={val => setThreadSelection(val)}
+                  groups={threadGroups}
+                />
 
                 {threadSelection === '__custom__' && (
                   <input
@@ -924,6 +1380,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     value={customThreadId}
                     onChange={e => setCustomThreadId(e.target.value)}
                     placeholder={t('customThreadPlaceholder')}
+                    className="dsh-autoloop-input"
                     style={{ ...inputStyle, marginTop: '8px' }}
                   />
                 )}
@@ -944,6 +1401,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     onChange={e => setSelectedCategory(e.target.value)}
                     placeholder="留空自动研判，或输入自定义分类..."
                     list="autoloop-categories"
+                    className="dsh-autoloop-input"
                     style={inputStyle}
                   />
                   <datalist id="autoloop-categories">
@@ -968,7 +1426,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                           fontSize: '10px',
                           padding: '2px 6px',
                           borderRadius: '999px',
-                          border: `1px solid ${selectedCategory === c ? COLORS.brand : COLORS.borderSubtle}`,
+                          border: `0.5px solid ${selectedCategory === c ? COLORS.brand : COLORS.borderSubtle}`,
                           background: selectedCategory === c ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
                           color: selectedCategory === c ? COLORS.brand : COLORS.secondary,
                           cursor: 'pointer',
@@ -1002,6 +1460,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                     onChange={e => setSelectedSource(e.target.value)}
                     placeholder="留空自动识别渠道，或输入自定义来源..."
                     list="autoloop-sources"
+                    className="dsh-autoloop-input"
                     style={inputStyle}
                   />
                   <datalist id="autoloop-sources">
@@ -1025,7 +1484,7 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                           fontSize: '10px',
                           padding: '2px 6px',
                           borderRadius: '999px',
-                          border: `1px solid ${selectedSource === s ? COLORS.brand : COLORS.borderSubtle}`,
+                          border: `0.5px solid ${selectedSource === s ? COLORS.brand : COLORS.borderSubtle}`,
                           background: selectedSource === s ? 'rgba(37, 99, 235, 0.12)' : COLORS.surfaceAlt,
                           color: selectedSource === s ? COLORS.brand : COLORS.secondary,
                           cursor: 'pointer',
@@ -1053,74 +1512,47 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('priorityLabel')}
                   </label>
-                  <select
+                  <DshSelect
                     value={selectedPriority}
-                    onChange={e => setSelectedPriority(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="auto">{t('priorityAuto')}</option>
-                    <option value="p0">{t('prioP0')}</option>
-                    <option value="p1">{t('prioP1')}</option>
-                    <option value="p2">{t('prioP2')}</option>
-                    <option value="p3">{t('prioP3')}</option>
-                  </select>
+                    onChange={val => setSelectedPriority(val)}
+                    options={priorityOptions}
+                  />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('scheduleLabel')}
                   </label>
-                  <select
+                  <DshSelect
                     value={selectedSchedule}
-                    onChange={e => setSelectedSchedule(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="immediate">{t('scheduleImmediate')}</option>
-                    <option value="nightly">{t('scheduleNightly')}</option>
-                    <option value="scheduled">{t('scheduleScheduled')}</option>
-                  </select>
+                    onChange={val => setSelectedSchedule(val)}
+                    options={scheduleOptions}
+                  />
                 </div>
               </div>
 
               {/* Dynamic Model (from DSH) and Permission Settings Grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('modelLabel')}
                   </label>
-                  <select
+                  <DshSelect
                     value={selectedModel}
-                    onChange={e => setSelectedModel(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="default">
-                      {t('modelDefault')} {modelCatalog?.defaultSelection?.model ? `(${modelCatalog.defaultSelection.model})` : ''}
-                    </option>
-                    {modelCatalog?.groups.map(group => (
-                      <optgroup key={group.id} label={group.name || group.id}>
-                        {group.models.map(m => (
-                          <option key={`${group.id}/${m.id}`} value={`${group.id}/${m.id}`}>
-                            {m.name || m.id} {m.badge ? `[${m.badge}]` : ''}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
+                    onChange={val => setSelectedModel(val)}
+                    groups={modelGroups}
+                  />
                 </div>
 
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: COLORS.text, marginBottom: '5px' }}>
                     {t('permissionLabel')}
                   </label>
-                  <select
+                  <DshSelect
                     value={selectedPermission}
-                    onChange={e => setSelectedPermission(e.target.value)}
-                    style={inputStyle}
-                  >
-                    <option value="workspace-write">{t('permWorkspace')}</option>
-                    <option value="danger-full-access">{t('permFullAccess')}</option>
-                    <option value="read-only">{t('permReadOnly')}</option>
-                  </select>
+                    onChange={val => setSelectedPermission(val)}
+                    options={permissionOptions}
+                  />
                 </div>
               </div>
 
