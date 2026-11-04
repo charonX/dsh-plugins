@@ -1,0 +1,6 @@
+- insert:
+    id: autoloop
+    name: '@charonx/dsh-autoloop'
+    config:
+      enabled: true
+      maxHops: 8
