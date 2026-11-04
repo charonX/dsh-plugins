@@ -284,10 +284,10 @@ export class IntentRouter {
 
     // 8. Synthesize Human-Readable Triage Narrative
     const scheduleDesc = scheduleMode === 'nightly'
-      ? '已排入「🌙 夜间低峰时段 (23:00~07:00)」自动批处理（可节省模型费用，支持随时一键唤醒）。'
+      ? '已排入「夜间低峰时段 (23:00~07:00)」自动批处理（可节省模型费用，支持随时一键唤醒）。'
       : scheduleMode === 'scheduled'
-      ? `已设定为「🕒 定时执行」(时间: ${scheduledAt ? new Date(scheduledAt).toLocaleString() : '待定'})。`
-      : '设定为「⚡ 立即执行」，创建后自动分发至 Agent 实时运行。'
+      ? `已设定为「定时执行」(时间: ${scheduledAt ? new Date(scheduledAt).toLocaleString() : '待定'})。`
+      : '设定为「立即执行」，创建后自动分发至 Agent 实时运行。'
 
     const reasoning = [
       `【Router 智能研判日志】`,
