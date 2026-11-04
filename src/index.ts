@@ -22,7 +22,7 @@ export { IntentRouter } from './core/router.js'
 export * from './shared/types.js'
 
 export const name = 'autoloop'
-export const inject = ['webServer?']
+export const inject = ['webServer?', 'workspaceRegistry?', 'sessions?', 'sessionTitle?']
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -80,6 +80,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     prefix: DEFAULT_ROUTE_PREFIX,
     kernel,
     ctx,
+    defaultWorkspacePath,
   })
 
   const webServer = ctx.get('webServer') as {
