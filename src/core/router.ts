@@ -43,6 +43,20 @@ export class IntentRouter {
       model = this.options.flagshipModel ?? { provider: 'deepseek-official', model: 'deepseek-reasoner' }
     }
 
+    // Allow user/event to explicitly specify model
+    if (event.payload?.model && typeof event.payload.model === 'object') {
+      const m = event.payload.model as { provider?: string; model?: string }
+      if (m.model) {
+        model = { provider: m.provider, model: m.model }
+      }
+    } else if (intent === 'coding') {
+      model = this.options.flagshipModel ?? { provider: 'deepseek-official', model: 'deepseek-reasoner' }
+    }
+
+    // Permission preset (defaults to 'workspace-write')
+    const permissionPreset = (typeof event.payload?.permissionPreset === 'string' && event.payload.permissionPreset) || 'workspace-write'
+    const agentPreset = typeof event.payload?.agentPreset === 'string' ? event.payload.agentPreset : undefined
+
     // Determine target workspace from payload if provided and safe, or fallback
     let candidatePath = this.options.defaultWorkspacePath
     if (typeof event.payload?.workspacePath === 'string' && event.payload.workspacePath.trim()) {
@@ -66,6 +80,8 @@ export class IntentRouter {
       model,
       skills,
       instruction,
+      permissionPreset,
+      agentPreset,
     }
   }
 }

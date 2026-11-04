@@ -53,6 +53,10 @@ export interface TicketMandate {
   skills: string[]
   /** Safe, synthesized instruction (separate from untrusted payload) */
   instruction: string
+  /** Permission preset (e.g. 'workspace-write' | 'danger-full-access' | 'read-only') */
+  permissionPreset?: string
+  /** Agent preset identity */
+  agentPreset?: string
 }
 
 /** Supplemental input fanned out to an active Ticket */

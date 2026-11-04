@@ -79,13 +79,48 @@ export class DshAgentExecutor implements AgentExecutor {
       ticket.assignment.sessionId = sessionId
     }
 
+    // Resolve model options: prefer ticket.mandate.model if specified,
+    // otherwise fallback to system active default model (from ctx.agentDefaultModel)
+    let agentOptions: any = undefined
+    try {
+      const defaultModelService = (this.ctx.get('agentDefaultModel') ?? (this.ctx as any).root?.get?.('agentDefaultModel'))
+      const currentDefault = defaultModelService?.currentSelection?.()
+      if (ticket.mandate.model?.model && ticket.mandate.model.model !== 'default') {
+        agentOptions = {
+          provider: ticket.mandate.model.provider || currentDefault?.provider || 'deepseek-official',
+          model: ticket.mandate.model.model,
+          reasoningEffort: currentDefault?.reasoningEffort,
+        }
+      } else if (currentDefault) {
+        agentOptions = {
+          provider: currentDefault.provider,
+          model: currentDefault.model,
+          reasoningEffort: currentDefault.reasoningEffort,
+        }
+      }
+    } catch {}
+
+    const presetsService = (this.ctx.get('agentPresets') ?? (this.ctx as any).root?.get?.('agentPresets')) as {
+      mount?: (agentCtx: any, id?: string) => Promise<any>
+    } | undefined
+
     const handle = await agentsService.create({
       sessionId,
       signal,
-      meta: { cwd: workingDirectory },
-      agentOptions: {
-        provider: ticket.mandate.model.provider,
-        model: ticket.mandate.model.model,
+      meta: {
+        cwd: workingDirectory,
+        agentPreset: ticket.mandate.agentPreset,
+      },
+      agentOptions,
+      setup: async (agentCtx: any) => {
+        if (presetsService && typeof presetsService.mount === 'function') {
+          try {
+            await presetsService.mount(agentCtx, ticket.mandate.agentPreset)
+            this.ctx.logger.info(`[Autoloop] Mounted preset ${ticket.mandate.agentPreset || 'default'} for session ${sessionId}`)
+          } catch (err) {
+            this.ctx.logger.warn(`[Autoloop] Failed to mount preset: ${String(err)}`)
+          }
+        }
       },
     })
 
@@ -113,6 +148,20 @@ export class DshAgentExecutor implements AgentExecutor {
       }
     } catch (err) {
       this.ctx.logger.warn(`[Autoloop] attachSession failed: ${String(err)}`)
+    }
+
+    // Apply permission preset if configured (e.g. 'workspace-write', 'danger-full-access', 'read-only')
+    try {
+      const permissionsService = (this.ctx.get('permissionPresets') ?? (this.ctx as any).root?.get?.('permissionPresets')) as {
+        set?: (session: any, preset: string) => void
+      } | undefined
+      const perm = ticket.mandate.permissionPreset || 'workspace-write'
+      if (permissionsService?.set && handle.agent.session) {
+        permissionsService.set(handle.agent.session, perm)
+        this.ctx.logger.info(`[Autoloop] Applied permission preset "${perm}" to session ${sessionId}`)
+      }
+    } catch (err) {
+      this.ctx.logger.warn(`[Autoloop] Failed to set permission preset: ${String(err)}`)
     }
 
     // Rename session title for friendly UI display

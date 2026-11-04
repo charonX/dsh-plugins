@@ -52,6 +52,8 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
   )
   const [threadSelection, setThreadSelection] = useState('')
   const [customThreadId, setCustomThreadId] = useState('')
+  const [selectedModel, setSelectedModel] = useState('default')
+  const [selectedPermission, setSelectedPermission] = useState('workspace-write')
   const [loading, setLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [summary, setSummary] = useState('')
@@ -129,12 +131,18 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
         body: JSON.stringify({
           summary: summary.trim(),
           threadId: finalThreadId,
-          payload: { workspacePath: effectiveWorkspacePath },
+          payload: {
+            workspacePath: effectiveWorkspacePath,
+            model: selectedModel !== 'default' ? { model: selectedModel } : undefined,
+            permissionPreset: selectedPermission,
+          },
         }),
       })
       setSummary('')
       setThreadSelection('')
       setCustomThreadId('')
+      setSelectedModel('default')
+      setSelectedPermission('workspace-write')
       setDialogOpen(false)
       await fetchSnapshot()
     } catch (err) {
@@ -567,6 +575,55 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 )}
               </div>
 
+              {/* Model and Permission Settings Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('modelLabel')}
+                  </label>
+                  <select
+                    value={selectedModel}
+                    onChange={e => setSelectedModel(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="default">{t('modelDefault')}</option>
+                    <option value="deepseek-reasoner">{t('modelReasoner')}</option>
+                    <option value="deepseek-chat">{t('modelChat')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
+                    {t('permissionLabel')}
+                  </label>
+                  <select
+                    value={selectedPermission}
+                    onChange={e => setSelectedPermission(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: '1px solid #d1d5db',
+                      fontSize: '13px',
+                      boxSizing: 'border-box',
+                      backgroundColor: '#ffffff',
+                    }}
+                  >
+                    <option value="workspace-write">{t('permWorkspace')}</option>
+                    <option value="danger-full-access">{t('permFullAccess')}</option>
+                    <option value="read-only">{t('permReadOnly')}</option>
+                  </select>
+                </div>
+              </div>
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
                 <button
                   type="button"
@@ -872,6 +929,14 @@ export function KanbanPage({ t, initialWorkspaces, onOpenSession }: KanbanPagePr
                 <div>
                   <span style={{ color: '#64748b' }}>{t('hopCount')}: </span>
                   <span style={{ fontWeight: 500 }}>{activeTicket.hopCount}</span>
+                </div>
+                <div>
+                  <span style={{ color: '#64748b' }}>{t('modelLabel')}: </span>
+                  <span style={{ fontWeight: 500 }}>{activeTicket.mandate.model?.model || 'default'}</span>
+                </div>
+                <div>
+                  <span style={{ color: '#64748b' }}>{t('permissionLabel')}: </span>
+                  <span style={{ fontWeight: 500 }}>{activeTicket.mandate.permissionPreset || 'workspace-write'}</span>
                 </div>
                 {activeTicket.assignment?.startedAt && (
                   <div>

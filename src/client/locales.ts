@@ -56,6 +56,14 @@ export const zh = {
   status: '工单状态',
   source: '来源',
   followupsTitle: '后续追言记录',
+  modelLabel: '模型选择 (Model)',
+  modelDefault: '系统默认模型 (推荐，跟随设置)',
+  modelReasoner: 'DeepSeek Reasoner (R1 深度推理)',
+  modelChat: 'DeepSeek Chat / Flash (快速通用)',
+  permissionLabel: '安全权限策略 (Permissions)',
+  permWorkspace: '工作区内读写 (workspace-write, 推荐)',
+  permFullAccess: '完全访问权限 (danger-full-access, 允许跨项目)',
+  permReadOnly: '只读审查 (read-only, 禁止修改文件)',
 }
 
 export const en = {
@@ -110,6 +118,14 @@ export const en = {
   status: 'Status',
   source: 'Source',
   followupsTitle: 'Follow-up Inputs',
+  modelLabel: 'Model Selection',
+  modelDefault: 'System Default Model (Recommended)',
+  modelReasoner: 'DeepSeek Reasoner (R1 Deep Thinking)',
+  modelChat: 'DeepSeek Chat / Flash (Fast)',
+  permissionLabel: 'Security Permissions',
+  permWorkspace: 'Workspace Write (workspace-write, Recommended)',
+  permFullAccess: 'Full Access (danger-full-access, Cross-project)',
+  permReadOnly: 'Read Only (read-only, Code inspection only)',
 }
 
 export type MessageKey = keyof typeof zh
