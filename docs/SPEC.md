@@ -7,6 +7,11 @@
 工作区：`/Users/zhanglei/charon/code/workspace/dsh`（每个顶层目录是独立 git 仓库）。
 本仓库：`dsh-model-studio`。
 
+> 第一版的实现设计见 [`DESIGN.md`](./DESIGN.md)，术语见 [`../GLOSSARY.md`](../GLOSSARY.md)。
+> 本版**不实现**本文 §5.2（探测）与 §5.3（记忆），兼容块改为由构建期快照推导，
+> 理由与回退路径见 [`adr/0001`](./adr/0001-no-probe-snapshot-derived-compat.md)；
+> 里程碑顺序以 `DESIGN.md` 为准。
+
 ---
 
 ## 1. 目标与非目标

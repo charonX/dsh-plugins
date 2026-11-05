@@ -14,8 +14,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
 
-export { THINKING_FORMATS, candidateFormats, compatSuggestion, profileOf, reasoningEffortsOf } from './dialect.js'
-export type { CompatSuggestion, ReasoningOption, ReasoningProfile, ThinkingFormat } from './dialect.js'
+export {
+  THINKING_FORMATS, candidateFormats, compatSuggestion, profileOf, reasoningEffortsOf, switchFormatOf,
+} from './dialect.ts'
+export type { CompatSuggestion, ReasoningOption, ReasoningProfile, ThinkingFormat } from './dialect.ts'
 
 export const name = 'model-studio'
 export const inject: string[] = []

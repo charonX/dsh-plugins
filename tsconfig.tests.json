@@ -3,7 +3,8 @@
     "target": "es2024",
     "module": "esnext",
     "moduleResolution": "bundler",
-    "lib": ["es2024"],
+    "lib": ["es2024", "dom"],
+    "jsx": "react-jsx",
     "types": ["node"],
     "strict": true,
     "noImplicitAny": true,
@@ -13,6 +14,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["tests/**/*.ts", "src/**/*.ts"],
-  "exclude": ["src/client/**/*"]
+  "include": ["tests/**/*.ts", "tests/**/*.tsx", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["lib", "client"]
 }

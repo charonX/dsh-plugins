@@ -10,6 +10,8 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,
     "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
     "declaration": true,
     "declarationMap": false,
@@ -19,5 +21,5 @@
     "declarationDir": "lib/types"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/client/**/*"]
+  "exclude": ["src/client/**/*", "src/data/**/*"]
 }

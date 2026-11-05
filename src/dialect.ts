@@ -124,6 +124,19 @@ export function candidateFormats(profile: ReasoningProfile): readonly ThinkingFo
 }
 
 /**
+ * First switch-shaped dialect worth declaring for one profile.
+ *
+ * A profile can document both shapes; only the switch family carries a wire
+ * spelling for `off`, so a route that must be able to turn thinking off is
+ * configured with one of these even when an effort ladder is documented too.
+ * @param profile - documented control shapes.
+ * @returns the first switch dialect, or undefined when the model does not reason.
+ */
+export function switchFormatOf(profile: ReasoningProfile): ThinkingFormat | undefined {
+  return candidateFormats(profile).find(format => TOGGLE_FORMATS.includes(format))
+}
+
+/**
  * Compat block to try first, before any probe.
  * @param profile - documented control shapes.
  * @returns the recommended route compat; empty when the model does not reason.
