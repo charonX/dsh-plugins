@@ -1,0 +1,104 @@
+# @charonx/dsh-immersive-translate
+
+Immersive bilingual translation for DeepSeek Harness, driven by the model this
+Harness already serves: a frame-wide floating control, whole-page bilingual
+rendering, and a dictionary pane beside the conversation.
+
+## Status
+
+Milestone 1 is implemented: the floating control, the Host translation engine
+(agent call with thinking disabled when the route allows it), and the settings
+page. Whole-page bilingual rendering (M2) and the dictionary pane (M3) are next.
+
+| Area | State |
+|---|---|
+| Frame-wide floating control with a manual batch box | done |
+| Host engine: `ctx.llm.prepareCall` + batch prompt + JSON contract | done |
+| Model catalog read from the Harness providers, thinking-capability flags | done |
+| Settings page: destination language, follow/default or explicit model | done |
+| Session-log pointer `plugin:immersive-translate/batch` + payload archive | done |
+| Whole-page bilingual rendering (`data-dsh-tr` + CSS `::after`) | M2 |
+| Dictionary pane in the right sidebar | M3 |
+| Translation cache and glossary | M4 |
+
+## Install
+
+```sh
+dsh plugin --profile dev add ./dsh-immersive-translate
+dsh --profile dev
+```
+
+The bundle patch inserts one row (`id: immersive-translate`); configuration from
+a profile patch replaces the whole `config` block, not individual keys.
+
+## Configuration
+
+| Field | Default | Meaning |
+|---|---|---|
+| `routePrefix` | `/dsh-immersive-translate` | HTTP prefix for the plugin routes |
+| `statePath` | `<dshHome>/immersive-translate/prefs.json` | Reader preferences |
+| `batchDir` | `<dshHome>/immersive-translate/batches` | Content-addressed batch archive |
+| `targetLanguage` | `zh-CN` | Default destination language |
+| `maxItemsPerBatch` | `20` | Text units per model request |
+| `maxCharsPerItem` | `4000` | Longest accepted single text unit |
+| `maxOutputTokens` | `4096` | Output ceiling per request |
+| `requestTimeoutMs` | `120000` | Whole-request deadline |
+
+Reader preferences (destination language, following the default model or naming
+one) are written by the settings page into `statePath`, never into the profile.
+
+Providers and credentials are **not** configured here: this plugin only lists what
+`ctx.llm` already serves, and its settings page offers a selector plus a pointer
+to the Harness model settings.
+
+## Engine behaviour
+
+- The model is resolved in three steps: an explicit preference, then the Session's
+  recorded `modelSelection` projection (when the caller passes a session id), then
+  `ctx.agentDefaultModel.currentSelection()`.
+- Thinking is turned off with a `ConfigureCall` that only selects the `off` effort
+  when the resolved route advertises it. A route without `off`, or without any
+  reasoning metadata, receives no effort at all — the runtime rejects an
+  unsupported one.
+- Every batch is one auxiliary request outside the agent loop: fixed system
+  prompt, one JSON user message, no conversation history.
+- The reply must be `{"items":[{"id","text"}]}` with one entry per input, in
+  request order; a missing id, a non-text answer, or a non-`stop` finish is
+  refused rather than partially applied.
+
+## Session trace
+
+Each translated batch writes one `plugin:immersive-translate/batch` record to the
+Session log: destination language, provider, model, recipe, content key, and item
+count. The exact source and result live in `batchDir/<contentKey>.json`, so the
+request stays reconstructable without inflating the log. Recording is best
+effort: an inactive Session leaves the translation itself unaffected.
+
+## HTTP surface
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/state` | GET | Preferences, provider catalog, effective selection, limits |
+| `/api/prefs` | POST | Persist a preference patch |
+| `/api/translate` | POST | Translate one batch (`items`, optional `targetLanguage`, `sessionId`) |
+
+Mutating requests apply the Host trust rules (loopback or declared hosts, no
+cross-site fetch, matching `Origin`).
+
+## Known limitations
+
+- **Only bilingual mode exists.** There is no translation-only mode, so nothing
+  removes original text; M2 renders translations through a block attribute and a
+  CSS `::after`, which leaves React's subtree untouched.
+- **The floating control cannot see a Session.** `shell.overlay` is root-scoped and
+  the Client keeps no global current Session, so today the engine uses the Host
+  default model. Session-level following arrives with the session-scoped
+  dictionary pane.
+- **No jump to the model settings page.** The settings shell exposes `openSettings`
+  to launcher slots only and `openSection` to onboarding steps, so a third-party
+  section cannot navigate to another section; the page states where providers are
+  configured instead.
+- **The sidebar Browser is out of scope.** In Web it is a cross-origin iframe and
+  unreadable; the Desktop `<webview>` guest is deliberately closed to plugins.
+- Translation calls spend model quota and send page text to the model; every
+  surface must stay behind an explicit user action.
