@@ -103,6 +103,15 @@ expresses "off" as a positive flag needs both a compat format and a declared
               low: low                # at least one thinking level must be declared
 ```
 
+A gateway that only knows `system`/`user`/`assistant`/`tool` also needs the role
+compat switch, because declaring reasoning levels makes pi-ai treat the model as
+reasoning-capable and switch system messages to `developer`:
+
+```yaml
+        compat:
+          supportsDeveloperRole: false
+```
+
 With that in place the settings page lists `off, low` under the engine and the
 floating panel states that thinking is turned off. The settings page always
 prints the adapter-reported list, so this is checkable without reading the
@@ -114,8 +123,13 @@ a parameter and the gateway then applies its own default. Every translate
 response therefore carries `reasoned`, whether any reasoning output accompanied
 the batch, and the panel reports it: "no reasoning output" proves the setting
 took effect, "reasoned for this batch" proves it did not.
-- Every batch is one auxiliary request outside the agent loop: fixed system
-  prompt, one JSON user message, no conversation history.
+- Every batch is one auxiliary request outside the agent loop: one leading user
+  message carrying the instruction plus the JSON payload, and no conversation
+  history. The instruction deliberately does not use `GenerateOptions.system`,
+  because an OpenAI-style adapter maps a system message to the provider-specific
+  `developer` role when the model is declared reasoning-capable, and gateways
+  outside that dialect reject it (SiliconFlow answers `Input tag 'developer' ...
+  does not match`). See the provider note below if a route still needs it.
 - The reply must be `{"items":[{"id","text"}]}` with one entry per input, in
   request order; a missing id, no text block, a tool call, or a non-`stop` finish
   is refused rather than partially applied.

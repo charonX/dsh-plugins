@@ -33,14 +33,14 @@ async function serve(deps: HttpDeps): Promise<{ base: string; close: () => Promi
  * @param capture - receives the prompt the engine dispatched.
  * @returns an LLM runtime shaped like the Host service.
  */
-function fakeLlm(capture: { system?: string } = {}): LlmRuntime {
+function fakeLlm(capture: { instruction?: string } = {}): LlmRuntime {
   return {
     prepareCall: async (config: Record<string, unknown>) => {
       const resolved = { ...config, reasoningEffort: ReasoningEffortId('off') }
       return {
         config: resolved,
-        stream: (options: { system?: string }) => {
-          capture.system = options.system
+        stream: (options: { messages?: readonly { content: readonly { text: string }[] }[] }) => {
+          capture.instruction = options.messages?.[0]?.content[0]?.text
           return (async function* produce() {
             yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
             yield { type: 'text-delta' as const, index: 0, text: '{"items":[{"id":"a","text":"甲"}]}' }
@@ -111,7 +111,7 @@ describe('routes', () => {
   })
 
   it('translates a batch through the resolved route', async () => {
-    const capture: { system?: string } = {}
+    const capture: { instruction?: string } = {}
     const { base, close } = await serve(deps({ llm: () => ({ runtime: fakeLlm(capture) }) }))
     running = { close }
     const response = await fetch(`${base}/api/translate`, {
@@ -126,7 +126,7 @@ describe('routes', () => {
       source: 'default',
       reasoned: false,
     })
-    expect(capture.system).toContain('translation engine')
+    expect(capture.instruction).toContain('translation engine')
   })
 
   it('refuses a batch above the configured item limit', async () => {

@@ -137,7 +137,10 @@ describe('translateBatch', () => {
     expect(results.reasoned).toBe(false)
     expect(captures.config?.reasoningEffort).toBe('off')
     expect(captures.config?.maxTokens).toBe(1024)
-    expect(String(captures.options?.system)).toContain('translation engine')
+    const messages = captures.options?.messages as readonly { role: string; content: readonly { text: string }[] }[]
+    expect(messages[0]?.role).toBe('user')
+    expect(messages[0]?.content[0]?.text).toContain('translation engine')
+    expect(captures.options?.system).toBeUndefined()
   })
 
   it('omits the effort when the route cannot turn thinking off', async () => {

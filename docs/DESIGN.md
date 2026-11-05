@@ -62,6 +62,15 @@ non-reasoning model), not something this plugin forces.
 Model resolution order: explicit preference, then the bound Session's
 `modelSelection` projection, then `ctx.agentDefaultModel.currentSelection()`.
 
+## Requests stay off the provider's role dialect
+
+The batch instruction rides the leading user message instead of
+`GenerateOptions.system`. An OpenAI-compatible adapter maps a system message to
+the `developer` role once the model is declared reasoning-capable, and a gateway
+that only implements `system`/`user`/`assistant`/`tool` rejects the whole request
+with a 400. An auxiliary request buys nothing from that role, so it does not ask
+for it.
+
 ## Session trace: lightweight pointer plus archive
 
 The Session log receives `plugin:immersive-translate/batch` with destination
