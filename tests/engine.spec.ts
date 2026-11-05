@@ -55,7 +55,12 @@ function fakeLlm(
             }
             yield { type: 'block-start' as const, index: reasoning === undefined ? 0 : 1, blockType: 'text' as const }
             yield { type: 'text-delta' as const, index: reasoning === undefined ? 0 : 1, text: answer }
-            yield { type: 'finish' as const, reason: { kind: finishKind } }
+            yield {
+              type: 'finish' as const,
+              reason: finishKind === 'error'
+                ? { kind: 'error' as const, failure: { code: 'AUTH', message: 'bad key', status: 401 } }
+                : { kind: finishKind },
+            }
           })()
         },
       }
@@ -185,7 +190,7 @@ describe('translateBatch', () => {
     )).rejects.toMatchObject({ code: 'INVALID_MODEL_OUTPUT' })
   })
 
-  it('reports a failed finish instead of returning a partial answer', async () => {
+  it('surfaces the provider failure behind a failed finish', async () => {
     const failure = translateBatch(
       fakeLlm('{"items":[]}', {}, ['off'], 'error'),
       { provider: 'p', model: 'm' },
@@ -195,6 +200,29 @@ describe('translateBatch', () => {
       new AbortController().signal,
     )
     await expect(failure).rejects.toBeInstanceOf(TranslateError)
-    await expect(failure).rejects.toMatchObject({ code: 'INVALID_MODEL_OUTPUT' })
+    await expect(failure).rejects.toMatchObject({
+      code: 'MODEL_FAILED',
+      message: 'AUTH (HTTP 401): bad key',
+    })
+  })
+
+  it('surfaces a transport failure thrown by the stream', async () => {
+    const throwing = {
+      prepareCall: async () => ({
+        config: { provider: 'p', model: 'm' },
+        stream: () => (async function* produce() {
+          throw new Error('socket closed')
+        })(),
+      }),
+    } as unknown as LlmRuntime
+
+    await expect(translateBatch(
+      throwing,
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'one', text: 'one' }],
+      limits,
+      new AbortController().signal,
+    )).rejects.toMatchObject({ code: 'MODEL_FAILED', message: 'socket closed' })
   })
 })

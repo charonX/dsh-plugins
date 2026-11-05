@@ -158,20 +158,33 @@ export async function translateBatch(
   const assembler = new BlockAssembler()
   let terminal: FinishReason | undefined
   let reasoned = false
-  for await (const chunk of prepared.stream(options)) {
-    // A hybrid-thinking route may emit a reasoning block before its text even
-    // when no effort was requested; that is slower, not wrong.
-    if (chunk.type === 'tool-call-delta') {
-      throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request tried to call a tool')
+  try {
+    for await (const chunk of prepared.stream(options)) {
+      // A hybrid-thinking route may emit a reasoning block before its text even
+      // when no effort was requested; that is slower, not wrong.
+      if (chunk.type === 'tool-call-delta') {
+        throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request tried to call a tool')
+      }
+      if (chunk.type === 'reasoning-delta' || (chunk.type === 'block-end' && chunk.block.type === 'reasoning')) {
+        reasoned = true
+      }
+      assembler.push(chunk)
+      if (chunk.type === 'finish') terminal = chunk.reason
     }
-    if (chunk.type === 'reasoning-delta' || (chunk.type === 'block-end' && chunk.block.type === 'reasoning')) {
-      reasoned = true
-    }
-    assembler.push(chunk)
-    if (chunk.type === 'finish') terminal = chunk.reason
+  } catch (error) {
+    if (error instanceof TranslateError) throw error
+    throw new TranslateError(502, 'MODEL_FAILED', failureText(error))
   }
-  if (terminal === undefined || terminal.kind !== 'stop') {
-    throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', `translation request finished with "${terminal?.kind ?? 'nothing'}"`)
+  if (terminal === undefined) {
+    throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request finished without a reason')
+  }
+  if (terminal.kind === 'error' || terminal.kind === 'aborted') {
+    // The route's own failure carries the only useful diagnostic: a provider
+    // status, an auth refusal, or a rejected parameter.
+    throw new TranslateError(502, 'MODEL_FAILED', failureText(terminal.failure))
+  }
+  if (terminal.kind !== 'stop') {
+    throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', `translation request finished with "${terminal.kind}"`)
   }
   const blocks = assembler.blocks()
   const text = blocks.filter((block): block is TextBlock => block.type === 'text')
@@ -198,6 +211,26 @@ async function withCancellation<T>(work: Promise<T>, signal: AbortSignal): Promi
     }
     throw new TranslateError(502, 'MODEL_FAILED', error instanceof Error ? error.message : String(error))
   }
+}
+
+/**
+ * Render one provider failure for the operator and the panel.
+ * @param failure - adapter-reported failure or a thrown value.
+ * @returns a single line naming the code and the provider message.
+ */
+function failureText(failure: unknown): string {
+  if (typeof failure === 'object' && failure !== null) {
+    const record = failure as { code?: unknown; message?: unknown; status?: unknown }
+    // A provider failure carries a routing code; a thrown Error carries only a
+    // message, and prefixing it with a synthetic code hides the real one.
+    if (typeof record.code === 'string') {
+      const message = typeof record.message === 'string' ? record.message : 'no message'
+      const status = typeof record.status === 'number' ? ` (HTTP ${String(record.status)})` : ''
+      return `${record.code}${status}: ${message}`
+    }
+    if (typeof record.message === 'string') return record.message
+  }
+  return failure instanceof Error ? failure.message : String(failure)
 }
 
 function deadlineOf(signal: AbortSignal): boolean {
