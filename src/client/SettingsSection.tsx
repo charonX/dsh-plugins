@@ -76,12 +76,13 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
   }, [language, follow, route, t])
 
   const effective = state?.resolution.selection ?? null
-  const canDisableThinking = effective === null
+  const effectiveModel = effective === null
     ? undefined
     : state?.catalog
       .find(group => group.id === effective.provider)
       ?.models.find(model => model.id === effective.model)
-      ?.canDisableThinking
+  const canDisableThinking = effectiveModel?.canDisableThinking
+  const efforts = effectiveModel?.efforts ?? []
 
   return (
     <section style={{
@@ -168,6 +169,9 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
                   </>
                 )
                 : <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('canDisableThinking')}</span>}
+              <span style={{ color: COLORS.tertiary, fontSize: 12 }}>
+                {`${t('effortsLabel')}: ${efforts.length === 0 ? t('effortsNone') : efforts.join(', ')}`}
+              </span>
             </div>
           )}
 

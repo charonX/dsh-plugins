@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { canDisableThinking, listCatalog, resolveSelection, selectionOfProjection } from '../src/models.ts'
+import { advertisedEfforts, canDisableThinking, listCatalog, resolveSelection, selectionOfProjection } from '../src/models.ts'
 
 describe('canDisableThinking', () => {
   it('accepts a route that advertises an off effort', () => {
@@ -13,6 +13,16 @@ describe('canDisableThinking', () => {
 
   it('refuses a route without reasoning metadata', () => {
     expect(canDisableThinking({})).toBe(false)
+  })
+})
+
+describe('advertisedEfforts', () => {
+  it('lists the advertised ids in adapter order', () => {
+    expect(advertisedEfforts({ reasoning: { efforts: [{ id: 'off' }, { id: 'low' }] } })).toEqual(['off', 'low'])
+  })
+
+  it('reports an empty list when the adapter sends no reasoning metadata', () => {
+    expect(advertisedEfforts({})).toEqual([])
   })
 })
 
@@ -77,8 +87,8 @@ describe('listCatalog', () => {
       id: 'ok',
       name: 'OK Provider',
       models: [
-        { id: 'm1', name: 'Model One', canDisableThinking: true },
-        { id: 'm2', name: 'Model Two', canDisableThinking: false },
+        { id: 'm1', name: 'Model One', efforts: ['off'], canDisableThinking: true },
+        { id: 'm2', name: 'Model Two', efforts: [], canDisableThinking: false },
       ],
     }])
   })

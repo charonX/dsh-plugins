@@ -32,6 +32,8 @@ export interface TranslatePrefs {
 export interface ModelView {
   readonly id: string
   readonly name: string
+  /** Reasoning efforts the adapter advertises, least first; empty means it reports none. */
+  readonly efforts: readonly string[]
   /** Whether this route advertises an `off` reasoning effort, so translation can skip thinking. */
   readonly canDisableThinking: boolean
 }

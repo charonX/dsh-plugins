@@ -70,7 +70,11 @@ function deps(overrides: Partial<HttpDeps> = {}): HttpDeps {
     llm: () => ({ runtime: fakeLlm() }),
     defaultSelection: () => ({ provider: 'p', model: 'm' }),
     sessionSelection: () => undefined,
-    catalog: async () => [{ id: 'p', name: 'P', models: [{ id: 'm', name: 'M', canDisableThinking: true }] }],
+    catalog: async () => [{
+      id: 'p',
+      name: 'P',
+      models: [{ id: 'm', name: 'M', efforts: ['off'], canDisableThinking: true }],
+    }],
     recordPointer: async () => true,
     ...overrides,
   }

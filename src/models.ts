@@ -24,13 +24,27 @@ interface ReasoningInfo {
 }
 
 /**
+ * List the reasoning efforts one route advertises, least first.
+ *
+ * An empty list means the adapter reports no reasoning metadata at all, which
+ * is not the same as "thinking is always on": it is the adapter saying that no
+ * effort can be selected on this route, because `off` there would mean
+ * "omit the parameter" and leave the gateway default in place.
+ * @param info - resolved model metadata from the adapter.
+ * @returns the advertised effort ids.
+ */
+export function advertisedEfforts(info: ReasoningInfo): string[] {
+  return info.reasoning?.efforts.map(effort => effort.id) ?? []
+}
+
+/**
  * Whether one route advertises an `off` effort, which is what lets a
  * translation request skip thinking.
  * @param info - resolved model metadata from the adapter.
  * @returns true when `off` is a selectable effort.
  */
 export function canDisableThinking(info: ReasoningInfo): boolean {
-  return info.reasoning?.efforts.some(effort => effort.id === 'off') ?? false
+  return advertisedEfforts(info).includes('off')
 }
 
 /**
@@ -53,13 +67,18 @@ export async function listCatalog(llm: LlmRuntime, signal?: AbortSignal): Promis
     const rows: ModelView[] = []
     for (const model of models) {
       signal?.throwIfAborted()
-      let canOff = false
+      let efforts: string[] = []
       try {
-        canOff = canDisableThinking(await llm.resolveModelInfo(provider.id, model.id, signal))
+        efforts = advertisedEfforts(await llm.resolveModelInfo(provider.id, model.id, signal))
       } catch {
-        canOff = false
+        efforts = []
       }
-      rows.push({ id: model.id, name: model.name, canDisableThinking: canOff })
+      rows.push({
+        id: model.id,
+        name: model.name,
+        efforts,
+        canDisableThinking: efforts.includes('off'),
+      })
     }
     if (rows.length > 0) groups.push({ id: provider.id, name: provider.name, models: rows })
   }

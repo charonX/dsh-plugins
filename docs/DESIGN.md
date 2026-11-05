@@ -40,6 +40,16 @@ conversation history, fixed system prompt, one JSON batch in and out.
 that effort, because the runtime rejects an unsupported effort and rejects any
 effort on a route without reasoning metadata.
 
+The decision input is the adapter's report, never a probe: the plugin offers
+`off` exactly when the resolved route's `reasoning.efforts` contains it. A
+`llm-pi-ai` route that declares no `reasoningEfforts` and has no installed
+catalog entry reports no reasoning metadata at all, because pi-ai will not offer
+`off` where `off` would only mean "omit the parameter" and leave the gateway
+default thinking. Turning thinking off for such a gateway is a provider
+configuration: declare a `compat.thinkingFormat` plus an `off` level, and the
+adapter then sends the gateway's own "off" spelling. The settings page prints the
+reported list so this is diagnosable from the UI.
+
 Reasoning output is tolerated rather than refused: a hybrid-thinking route (for
 example a Qwen3 model behind an OpenAI-compatible gateway) may emit a reasoning
 block before its text even when no effort was requested, and on pi-ai routes

@@ -60,13 +60,53 @@ to the Harness model settings.
   when the resolved route advertises it. A route without `off`, or without any
   reasoning metadata, receives no effort at all — the runtime rejects an
   unsupported one.
-- A hybrid-thinking route may still reason before answering, either because it
-  advertises no `off` effort or because the gateway applies its own default when
-  the reasoning field is omitted. The reasoning block is ignored and its text
-  block is used, so such a route translates correctly but more slowly, and its
-  reasoning tokens share the request's output ceiling. To remove that cost,
-  select a non-thinking model here or declare the model non-reasoning in the
-  provider configuration (`reasoningEfforts: false` on a pi-ai route).
+- A hybrid-thinking route may still reason before answering. The reasoning block
+  is ignored and its text block is used, so such a route translates correctly but
+  more slowly, and its reasoning tokens share the request's output ceiling.
+
+### How "thinking can be turned off" is decided
+
+The plugin reads one fact only: the `reasoning.efforts` list the adapter reports
+for the resolved route, and whether it contains `off`. It never probes a
+gateway. When `off` is absent it sends no effort at all, because the runtime
+rejects an unsupported effort and rejects any effort on a route that reports no
+reasoning metadata.
+
+For a `llm-pi-ai` route that list comes from the model's `thinkingLevelMap`,
+which is built from the provider configuration:
+
+- `reasoningEfforts` declared → the declared levels become the offered list, and
+  every undeclared level is pinned to unsupported;
+- `reasoningEfforts: false` → a non-reasoning model;
+- neither, and no installed catalog entry for that model id → the adapter
+  reports **no reasoning metadata**, so no effort can be selected and the
+  gateway's own default decides whether to think.
+
+Disabling thinking therefore has to be spelled the way the gateway understands
+it, which is a provider-configuration concern, not a plugin one. A gateway that
+expresses "off" as a positive flag needs both a compat format and a declared
+`off` level:
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      siliconflow:
+        api: openai-completions
+        baseURL: https://api.siliconflow.cn/v1
+        compat:
+          thinkingFormat: qwen        # emits enable_thinking for this gateway
+        models:
+          - id: Qwen/Qwen3-8B
+            reasoningEfforts:
+              off:                    # off travels as the absence of an effort
+              low: low                # at least one thinking level must be declared
+```
+
+With that in place the settings page lists `off, low` under the engine and the
+floating panel states that thinking is turned off. The settings page always
+prints the adapter-reported list, so this is checkable without reading the
+adapter source.
 - Every batch is one auxiliary request outside the agent loop: fixed system
   prompt, one JSON user message, no conversation history.
 - The reply must be `{"items":[{"id","text"}]}` with one entry per input, in
