@@ -145,8 +145,10 @@ export async function translateBatch(
   const assembler = new BlockAssembler()
   let terminal: FinishReason | undefined
   for await (const chunk of prepared.stream(options)) {
-    if (chunk.type === 'reasoning-delta' || chunk.type === 'tool-call-delta') {
-      throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request produced non-text output')
+    // A hybrid-thinking route may emit a reasoning block before its text even
+    // when no effort was requested; that is slower, not wrong.
+    if (chunk.type === 'tool-call-delta') {
+      throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request tried to call a tool')
     }
     assembler.push(chunk)
     if (chunk.type === 'finish') terminal = chunk.reason
@@ -154,7 +156,13 @@ export async function translateBatch(
   if (terminal === undefined || terminal.kind !== 'stop') {
     throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', `translation request finished with "${terminal?.kind ?? 'nothing'}"`)
   }
-  const text = (assembler.blocks() as TextBlock[]).map(block => block.text).join('')
+  const blocks = assembler.blocks()
+  const text = blocks.filter((block): block is TextBlock => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+  if (text.trim() === '') {
+    throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request returned no text')
+  }
   return parseBatchOutput(text, items.map(item => item.id))
 }
 

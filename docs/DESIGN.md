@@ -40,6 +40,15 @@ conversation history, fixed system prompt, one JSON batch in and out.
 that effort, because the runtime rejects an unsupported effort and rejects any
 effort on a route without reasoning metadata.
 
+Reasoning output is tolerated rather than refused: a hybrid-thinking route (for
+example a Qwen3 model behind an OpenAI-compatible gateway) may emit a reasoning
+block before its text even when no effort was requested, and on pi-ai routes
+selecting `off` does not guarantee disabled reasoning when the protocol carries
+it by omitting the field. The engine ignores the reasoning block, requires at
+least one non-empty text block, and refuses tool calls; disabling thinking for
+good is a provider-configuration decision (`reasoningEfforts: false` declares a
+non-reasoning model), not something this plugin forces.
+
 Model resolution order: explicit preference, then the bound Session's
 `modelSelection` projection, then `ctx.agentDefaultModel.currentSelection()`.
 

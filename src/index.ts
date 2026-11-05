@@ -53,7 +53,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const limits: EngineLimits = {
     maxItemsPerBatch: config.maxItemsPerBatch ?? 20,
     maxCharsPerItem: config.maxCharsPerItem ?? 4000,
-    maxOutputTokens: config.maxOutputTokens ?? 4096,
+    maxOutputTokens: config.maxOutputTokens ?? 8192,
     requestTimeoutMs: config.requestTimeoutMs ?? 120_000,
   }
 

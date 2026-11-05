@@ -41,7 +41,7 @@ a profile patch replaces the whole `config` block, not individual keys.
 | `targetLanguage` | `zh-CN` | Default destination language |
 | `maxItemsPerBatch` | `20` | Text units per model request |
 | `maxCharsPerItem` | `4000` | Longest accepted single text unit |
-| `maxOutputTokens` | `4096` | Output ceiling per request |
+| `maxOutputTokens` | `8192` | Output ceiling per request; reasoning tokens count toward it |
 | `requestTimeoutMs` | `120000` | Whole-request deadline |
 
 Reader preferences (destination language, following the default model or naming
@@ -60,11 +60,18 @@ to the Harness model settings.
   when the resolved route advertises it. A route without `off`, or without any
   reasoning metadata, receives no effort at all — the runtime rejects an
   unsupported one.
+- A hybrid-thinking route may still reason before answering, either because it
+  advertises no `off` effort or because the gateway applies its own default when
+  the reasoning field is omitted. The reasoning block is ignored and its text
+  block is used, so such a route translates correctly but more slowly, and its
+  reasoning tokens share the request's output ceiling. To remove that cost,
+  select a non-thinking model here or declare the model non-reasoning in the
+  provider configuration (`reasoningEfforts: false` on a pi-ai route).
 - Every batch is one auxiliary request outside the agent loop: fixed system
   prompt, one JSON user message, no conversation history.
 - The reply must be `{"items":[{"id","text"}]}` with one entry per input, in
-  request order; a missing id, a non-text answer, or a non-`stop` finish is
-  refused rather than partially applied.
+  request order; a missing id, no text block, a tool call, or a non-`stop` finish
+  is refused rather than partially applied.
 
 ## Session trace
 

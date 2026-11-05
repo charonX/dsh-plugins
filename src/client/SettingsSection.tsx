@@ -161,7 +161,12 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
                 {`${t('engine')}: ${effective.provider} / ${effective.model}`}
               </span>
               {canDisableThinking === false
-                ? <span style={{ color: COLORS.warn, fontSize: 12 }}>{t('cannotDisableThinking')}</span>
+                ? (
+                  <>
+                    <span style={{ color: COLORS.warn, fontSize: 12 }}>{t('cannotDisableThinking')}</span>
+                    <span style={{ color: COLORS.tertiary, fontSize: 12, lineHeight: 1.45 }}>{t('thinkingSlowHint')}</span>
+                  </>
+                )
                 : <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('canDisableThinking')}</span>}
             </div>
           )}

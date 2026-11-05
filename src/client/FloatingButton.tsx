@@ -119,7 +119,12 @@ export function FloatingButton({ t }: PropsRuntime<'shell.overlay'> & TranslateP
                 ? t('modelUnavailable')
                 : `${t('engine')}: ${selection.provider} / ${selection.model}`}
             </span>
-            {canOff === false && <span style={{ color: COLORS.warn, fontSize: 12 }}>{t('cannotDisableThinking')}</span>}
+            {canOff === false && (
+              <>
+                <span style={{ color: COLORS.warn, fontSize: 12 }}>{t('cannotDisableThinking')}</span>
+                <span style={{ color: COLORS.tertiary, fontSize: 11, lineHeight: 1.45 }}>{t('thinkingSlowHint')}</span>
+              </>
+            )}
             {canOff === true && <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('canDisableThinking')}</span>}
           </header>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

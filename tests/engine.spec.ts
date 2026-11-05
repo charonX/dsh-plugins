@@ -21,6 +21,7 @@ interface Captures {
  * @param captures - sink for the prepared config and dispatched options.
  * @param efforts - effort ids the fake route advertises; empty means no reasoning metadata.
  * @param finishKind - terminal reason kind the fake reports.
+ * @param reasoning - reasoning text emitted before the answer, as hybrid routes do.
  * @returns an LLM runtime shaped like the Host service.
  */
 function fakeLlm(
@@ -28,6 +29,7 @@ function fakeLlm(
   captures: Captures,
   efforts: readonly string[] = ['off', 'high'],
   finishKind = 'stop',
+  reasoning?: string,
 ): LlmRuntime {
   return {
     prepareCall: async (
@@ -46,8 +48,13 @@ function fakeLlm(
         stream: (options: Record<string, unknown>) => {
           captures.options = options
           return (async function* produce() {
-            yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
-            yield { type: 'text-delta' as const, index: 0, text: answer }
+            if (reasoning !== undefined) {
+              yield { type: 'block-start' as const, index: 0, blockType: 'reasoning' as const }
+              yield { type: 'reasoning-delta' as const, index: 0, text: reasoning }
+              yield { type: 'block-end' as const, index: 0, block: { type: 'reasoning' as const, text: reasoning } }
+            }
+            yield { type: 'block-start' as const, index: reasoning === undefined ? 0 : 1, blockType: 'text' as const }
+            yield { type: 'text-delta' as const, index: reasoning === undefined ? 0 : 1, text: answer }
             yield { type: 'finish' as const, reason: { kind: finishKind } }
           })()
         },
@@ -151,6 +158,29 @@ describe('translateBatch', () => {
       new AbortController().signal,
     )).resolves.toEqual([])
     expect(captures.config).toBeUndefined()
+  })
+
+  it('keeps the answer when a hybrid route reasons first', async () => {
+    const results = await translateBatch(
+      fakeLlm(JSON.stringify({ items: [{ id: 'one', text: '一' }] }), {}, ['high'], 'stop', 'weighing wording'),
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'one', text: 'one' }],
+      limits,
+      new AbortController().signal,
+    )
+    expect(results).toEqual([{ id: 'one', text: '一' }])
+  })
+
+  it('refuses an answer with no text block', async () => {
+    await expect(translateBatch(
+      fakeLlm('', {}, ['high'], 'stop', 'only thinking'),
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'one', text: 'one' }],
+      limits,
+      new AbortController().signal,
+    )).rejects.toMatchObject({ code: 'INVALID_MODEL_OUTPUT' })
   })
 
   it('reports a failed finish instead of returning a partial answer', async () => {

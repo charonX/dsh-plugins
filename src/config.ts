@@ -22,7 +22,7 @@ export interface Config {
   maxItemsPerBatch?: number
   /** Longest accepted single text unit, in UTF-16 code units. */
   maxCharsPerItem?: number
-  /** Output-token ceiling per batch request. */
+  /** Output-token ceiling per batch request; reasoning tokens count toward it. */
   maxOutputTokens?: number
   /** Whole-request deadline in milliseconds. */
   requestTimeoutMs?: number
@@ -36,6 +36,6 @@ export const Config: Schema<Config> = z.object({
   targetLanguage: z.string().default(DEFAULT_TARGET_LANGUAGE),
   maxItemsPerBatch: z.number().default(20),
   maxCharsPerItem: z.number().default(4000),
-  maxOutputTokens: z.number().default(4096),
+  maxOutputTokens: z.number().default(8192),
   requestTimeoutMs: z.number().default(120_000),
 })
