@@ -89,6 +89,11 @@ export interface TranslateResponseBody {
   readonly results: readonly TranslateItem[]
   readonly selection: SelectionView
   readonly source: SelectionSource
+  /**
+   * Whether the route emitted reasoning for this batch. A route that advertises
+   * `off` can still reason, so this is the only proof the setting took effect.
+   */
+  readonly reasoned: boolean
 }
 
 /** Failure body every route returns outside the 2xx range. */

@@ -109,6 +109,19 @@ export function stripFence(text: string): string {
 }
 
 /**
+ * One translated batch plus whether the route reasoned while producing it.
+ *
+ * `reasoned` is the only way to tell a route that honoured `off` from one whose
+ * gateway defaulted to thinking: the adapter's effort list cannot answer that.
+ */
+export interface BatchAnswer {
+  /** Translated units in request order. */
+  readonly items: readonly TranslateItem[]
+  /** Whether any reasoning output accompanied the answer. */
+  readonly reasoned: boolean
+}
+
+/**
  * Translate one batch through the selected route.
  * @param llm - Host LLM runtime.
  * @param selection - provider route and model id.
@@ -116,7 +129,7 @@ export function stripFence(text: string): string {
  * @param items - text units; the caller already enforced the per-item limit.
  * @param limits - request ceilings.
  * @param signal - caller cancellation, combined with the request deadline.
- * @returns translated units in request order.
+ * @returns translated units in request order, plus whether the route reasoned.
  */
 export async function translateBatch(
   llm: LlmRuntime,
@@ -125,8 +138,8 @@ export async function translateBatch(
   items: readonly TranslateItem[],
   limits: EngineLimits,
   signal: AbortSignal,
-): Promise<TranslateItem[]> {
-  if (items.length === 0) return []
+): Promise<BatchAnswer> {
+  if (items.length === 0) return { items: [], reasoned: false }
   const deadline = AbortSignal.timeout(limits.requestTimeoutMs)
   const combined = AbortSignal.any([signal, deadline])
   const messages: RequestUserInput[] = [{
@@ -144,11 +157,15 @@ export async function translateBatch(
   const options: GenerateOptions = { ...prepared.config, system: SYSTEM_PROMPT, messages, signal: combined }
   const assembler = new BlockAssembler()
   let terminal: FinishReason | undefined
+  let reasoned = false
   for await (const chunk of prepared.stream(options)) {
     // A hybrid-thinking route may emit a reasoning block before its text even
     // when no effort was requested; that is slower, not wrong.
     if (chunk.type === 'tool-call-delta') {
       throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request tried to call a tool')
+    }
+    if (chunk.type === 'reasoning-delta' || (chunk.type === 'block-end' && chunk.block.type === 'reasoning')) {
+      reasoned = true
     }
     assembler.push(chunk)
     if (chunk.type === 'finish') terminal = chunk.reason
@@ -163,7 +180,7 @@ export async function translateBatch(
   if (text.trim() === '') {
     throw new TranslateError(502, 'INVALID_MODEL_OUTPUT', 'translation request returned no text')
   }
-  return parseBatchOutput(text, items.map(item => item.id))
+  return { items: parseBatchOutput(text, items.map(item => item.id)), reasoned }
 }
 
 /**

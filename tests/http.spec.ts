@@ -124,6 +124,7 @@ describe('routes', () => {
       results: [{ id: 'a', text: '甲' }],
       selection: { provider: 'p', model: 'm' },
       source: 'default',
+      reasoned: false,
     })
     expect(capture.system).toContain('translation engine')
   })

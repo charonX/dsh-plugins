@@ -128,7 +128,8 @@ describe('translateBatch', () => {
       new AbortController().signal,
     )
 
-    expect(results).toEqual([{ id: 'one', text: '一' }, { id: 'two', text: '二' }])
+    expect(results.items).toEqual([{ id: 'one', text: '一' }, { id: 'two', text: '二' }])
+    expect(results.reasoned).toBe(false)
     expect(captures.config?.reasoningEffort).toBe('off')
     expect(captures.config?.maxTokens).toBe(1024)
     expect(String(captures.options?.system)).toContain('translation engine')
@@ -156,7 +157,7 @@ describe('translateBatch', () => {
       [],
       limits,
       new AbortController().signal,
-    )).resolves.toEqual([])
+    )).resolves.toEqual({ items: [], reasoned: false })
     expect(captures.config).toBeUndefined()
   })
 
@@ -169,7 +170,8 @@ describe('translateBatch', () => {
       limits,
       new AbortController().signal,
     )
-    expect(results).toEqual([{ id: 'one', text: '一' }])
+    expect(results.items).toEqual([{ id: 'one', text: '一' }])
+    expect(results.reasoned).toBe(true)
   })
 
   it('refuses an answer with no text block', async () => {

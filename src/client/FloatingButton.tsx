@@ -39,6 +39,7 @@ export function FloatingButton({ t }: PropsRuntime<'shell.overlay'> & TranslateP
   const [state, setState] = useState<EngineState | null>(null)
   const [text, setText] = useState('')
   const [result, setResult] = useState<string | null>(null)
+  const [reasoned, setReasoned] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const request = useRef<AbortController | undefined>(undefined)
@@ -67,10 +68,12 @@ export function FloatingButton({ t }: PropsRuntime<'shell.overlay'> & TranslateP
         ...(state === null ? {} : { targetLanguage: state.prefs.targetLanguage }),
       }, abort.signal)
       setResult(answer.results[0]?.text ?? '')
+      setReasoned(answer.reasoned)
     } catch (failure: unknown) {
       if (abort.signal.aborted) return
       setError(describe(failure, t))
       setResult(null)
+      setReasoned(null)
     } finally {
       if (request.current === abort) setBusy(false)
     }
@@ -158,6 +161,11 @@ export function FloatingButton({ t }: PropsRuntime<'shell.overlay'> & TranslateP
                 maxHeight: 220,
                 overflow: 'auto',
               }}>{result}</div>
+              {reasoned !== null && (
+                <span style={{ color: reasoned ? COLORS.warn : COLORS.tertiary, fontSize: 11, lineHeight: 1.45 }}>
+                  {reasoned ? t('thinkingObserved') : t('thinkingAbsent')}
+                </span>
+              )}
             </div>
           )}
         </section>

@@ -167,7 +167,7 @@ async function translate(
   }
   const abort = new AbortController()
   request.on('close', () => { abort.abort() })
-  const results = await translateBatch(
+  const answer = await translateBatch(
     engine.runtime,
     resolution.selection,
     targetLanguage,
@@ -175,6 +175,7 @@ async function translate(
     deps.limits,
     abort.signal,
   )
+  const results = answer.items
   const key = batchKey(targetLanguage, resolution.selection.provider, resolution.selection.model, items)
   const archived = deps.archive.write(key, {
     targetLanguage,
@@ -197,6 +198,7 @@ async function translate(
     results,
     selection: resolution.selection,
     source: resolution.source,
+    reasoned: answer.reasoned,
   })
 }
 

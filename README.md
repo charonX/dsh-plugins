@@ -107,6 +107,13 @@ With that in place the settings page lists `off, low` under the engine and the
 floating panel states that thinking is turned off. The settings page always
 prints the adapter-reported list, so this is checkable without reading the
 adapter source.
+
+The reverse is the part no configuration read can answer: a route that offers
+`off` can still think, because on some protocols `off` is expressed by omitting
+a parameter and the gateway then applies its own default. Every translate
+response therefore carries `reasoned`, whether any reasoning output accompanied
+the batch, and the panel reports it: "no reasoning output" proves the setting
+took effect, "reasoned for this batch" proves it did not.
 - Every batch is one auxiliary request outside the agent loop: fixed system
   prompt, one JSON user message, no conversation history.
 - The reply must be `{"items":[{"id","text"}]}` with one entry per input, in
