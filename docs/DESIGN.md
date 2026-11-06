@@ -154,8 +154,12 @@ src/shared/preset.ts    # 生成物类型（两端共用）
   provider-card 是 keyed 槽，key 必须是确切的 `settingsNs`，所以整个注册挂在
   `ctx.inject(['remote.llm'], …)` 里等 llm Remote 就绪，再用
   `listConfigurableProviders()` 解析命名空间；读不到时退回 `'llm-pi-ai'`。
-- **注入面**：`inject` 声明 `slots` / `locale` / `remote` / `remote.llm` / `configForms`，
-  缺失时对应座位不渲染而不是抛错（`ctx.get()` 动态感知）。
+- **数据源**：两个页面都从 **settings describe 镜像**（`ctx.configForms.describe()`）读，
+  那是官方模型页用的同一份答案，含每个命名空间的脱敏值、revision 与 writable；因此页面里的行
+  就是实际参与调度的配置，不需要每次读都走一次 Remote。`llm/listConfigurableProviders` 只在
+  "预设路由 id 是否已存在" 时读，读失败只降级这一项检查。
+- **注入面**：`inject` 只声明 `slots` / `locale`；其余服务用 `ctx.get()`（cordis 的无 inject
+  读取）动态感知，缺失时对应座位降级而不是让插件不激活。
 - **不碰 React 之外的宿主实现**：按钮等用 `@deepseek-ai/dsh-client-ui-primitives`，
   不复制宿主组件，不自建样式文件（本仓库 `tsdown` 无 CSS modules 管线，样式一律 inline +
   `var(--dsw-alias-*)`）。

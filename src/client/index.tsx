@@ -181,14 +181,12 @@ function ModelsSeat({ t, host }: PropsRuntime<'settings.section'> & SeatFace): R
     return () => { live = false }
   }, [host])
 
-  // Re-read whenever the provider namespace changes (another window, the
-  // official card, or this page's own write), so rows never go stale.
-  const namespace = snapshot?.namespace
+  // Re-read on every pushed settings change (another window, the official
+  // card, or this page's own write), so rows never go stale.
   useEffect(() => {
-    if (namespace === undefined) return
     const refresh = (): void => { void host.readModels().then(setSnapshot) }
-    return host.watchCompat(namespace, refresh)
-  }, [host, namespace])
+    return host.watchSettings(refresh)
+  }, [host])
 
   const save = async (path: readonly string[], ops: PathOp[]): Promise<CompatSaveResult> => {
     if (snapshot?.namespace === undefined) return { kind: 'refused', message: 'the provider namespace is unavailable' }
@@ -226,16 +224,24 @@ function CompatSeat({ t, host, provider }: PropsRuntime<'settings.models.provide
       setSnapshot(undefined)
       return
     }
-    setSnapshot(host.readCompat(namespace, routePath))
+    let live = true
+    const load = (): void => {
+      void host.readCompat(namespace, routePath).then((next) => { if (live) setSnapshot(next) })
+    }
+    load()
+    const off = host.watchSettings(load)
+    return () => {
+      live = false
+      off()
+    }
     // `routeKey` covers the array identity; the segments themselves are stable.
-    return host.watchCompat(namespace, () => setSnapshot(host.readCompat(namespace, routePath)))
   }, [host, namespace, routeKey])
 
   if (snapshot === undefined || namespace === '' || routePath.length === 0) return null
 
   const save = async (ops: PathOp[]): Promise<CompatSaveResult> => {
     const result = await host.writeCompat(namespace, ops, snapshot.revision)
-    setSnapshot(host.readCompat(namespace, routePath))
+    setSnapshot(await host.readCompat(namespace, routePath))
     return result
   }
 
