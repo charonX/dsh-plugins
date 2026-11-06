@@ -13,7 +13,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ApiFailure, readState, savePrefs } from './api.ts'
 import type { TranslateProps } from './FloatingButton.tsx'
 import { COLORS, inputStyle, primaryButtonStyle } from './tokens.ts'
-import { TARGET_LANGUAGES, type EngineState } from '../shared/api.ts'
+import { SUBMIT_KEYS, TARGET_LANGUAGES, languageLabel, submitKeyOf, type EngineState, type SubmitKey } from '../shared/api.ts'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'failed'
 
@@ -33,6 +33,7 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
   const [status, setStatus] = useState<SaveStatus>('idle')
   const [follow, setFollow] = useState(true)
   const [language, setLanguage] = useState('zh-CN')
+  const [submitKey, setSubmitKey] = useState<SubmitKey>('enter')
   const [route, setRoute] = useState('')
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
       setState(next)
       setFollow(next.prefs.followDefaultModel)
       setLanguage(next.prefs.targetLanguage)
+      setSubmitKey(next.prefs.submitKey)
       setRoute(next.prefs.provider === undefined || next.prefs.model === undefined
         ? ''
         : `${next.prefs.provider}\u0000${next.prefs.model}`)
@@ -54,7 +56,6 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
     .flatMap(group => group.models.map(model => ({
       value: `${group.id}\u0000${model.id}`,
       label: `${group.name} · ${model.name}`,
-      canDisableThinking: model.canDisableThinking,
     }))) ?? [], [state])
 
   const save = useCallback(async () => {
@@ -64,6 +65,7 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
       const prefs = await savePrefs({
         targetLanguage: language,
         followDefaultModel: follow,
+        submitKey,
         ...provider === undefined || model === undefined ? {} : { provider, model },
       })
       setStatus('saved')
@@ -73,16 +75,9 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
       setStatus('failed')
       setError(describe(failure, t('saveFailed')))
     }
-  }, [language, follow, route, t])
+  }, [language, follow, route, submitKey, t])
 
   const effective = state?.resolution.selection ?? null
-  const effectiveModel = effective === null
-    ? undefined
-    : state?.catalog
-      .find(group => group.id === effective.provider)
-      ?.models.find(model => model.id === effective.model)
-  const canDisableThinking = effectiveModel?.canDisableThinking
-  const efforts = effectiveModel?.efforts ?? []
 
   return (
     <section style={{
@@ -114,8 +109,23 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
               value={language}
               onChange={(event) => { setLanguage(event.target.value); setStatus('idle') }}
               style={{ ...inputStyle, width: 220 }}>
-              {TARGET_LANGUAGES.map(code => <option key={code} value={code}>{code}</option>)}
+              {TARGET_LANGUAGES.map(code => <option key={code} value={code}>{languageLabel(code)}</option>)}
             </select>
+          </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ color: COLORS.secondary }}>{t('submitKey')}</span>
+            <select
+              value={submitKey}
+              onChange={(event) => { setSubmitKey(submitKeyOf(event.target.value) ?? 'enter'); setStatus('idle') }}
+              style={{ ...inputStyle, width: 260 }}>
+              {SUBMIT_KEYS.map(mode => (
+                <option key={mode} value={mode}>
+                  {mode === 'mod-enter' ? t('submitKeyMod') : t('submitKeyEnter')}
+                </option>
+              ))}
+            </select>
+            <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('submitKeyHint')}</span>
           </label>
 
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -140,39 +150,16 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
               style={{ ...inputStyle, width: '100%', maxWidth: 420 }}>
               {options.length === 0 && <option value="">{t('modelUnavailable')}</option>}
               {options.map(option => (
-                <option key={option.value} value={option.value}>
-                  {option.label}{option.canDisableThinking ? '' : ' · thinking'}
-                </option>
+                <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
             <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('modelHint')}</span>
           </label>
 
           {effective !== null && (
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              padding: '8px 10px',
-              background: COLORS.layer1,
-              border: `0.5px solid ${COLORS.border}`,
-              borderRadius: COLORS.radiusMd,
-            }}>
-              <span style={{ color: COLORS.secondary, fontSize: 12 }}>
-                {`${t('engine')}: ${effective.provider} / ${effective.model}`}
-              </span>
-              {canDisableThinking === false
-                ? (
-                  <>
-                    <span style={{ color: COLORS.warn, fontSize: 12 }}>{t('cannotDisableThinking')}</span>
-                    <span style={{ color: COLORS.tertiary, fontSize: 12, lineHeight: 1.45 }}>{t('thinkingSlowHint')}</span>
-                  </>
-                )
-                : <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('canDisableThinking')}</span>}
-              <span style={{ color: COLORS.tertiary, fontSize: 12 }}>
-                {`${t('effortsLabel')}: ${efforts.length === 0 ? t('effortsNone') : efforts.join(', ')}`}
-              </span>
-            </div>
+            <span style={{ color: COLORS.tertiary, fontSize: 12 }}>
+              {`${t('engine')}: ${effective.provider} / ${effective.model}`}
+            </span>
           )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

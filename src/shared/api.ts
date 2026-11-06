@@ -16,12 +16,66 @@ export const DEFAULT_TARGET_LANGUAGE = 'zh-CN'
 /** Languages offered by the reader-facing selector. */
 export const TARGET_LANGUAGES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'ru'] as const
 
+/**
+ * Native name of each offered language.
+ *
+ * Language names are not translated: a reader looking for their own language
+ * should recognize it in the selector, and the model prompt needs a name next
+ * to the bare tag so a weak route cannot mistake the tag for the source text.
+ */
+export const LANGUAGE_LABELS: Readonly<Record<string, string>> = {
+  'zh-CN': '简体中文',
+  'zh-TW': '繁體中文',
+  en: 'English',
+  ja: '日本語',
+  ko: '한국어',
+  fr: 'Français',
+  de: 'Deutsch',
+  es: 'Español',
+  ru: 'Русский',
+}
+
+/**
+ * Render a language tag for the selector and for the translation prompt.
+ * @param language - BCP 47-ish tag stored in preferences.
+ * @returns the native name when known, otherwise the tag itself.
+ */
+export function languageLabel(language: string): string {
+  return LANGUAGE_LABELS[language] ?? language
+}
+
+/**
+ * Keys that submit the translate box.
+ *
+ * `enter` translates on Enter and leaves Shift+Enter for a line break;
+ * `mod-enter` requires Ctrl or Command and gives plain Enter back to the box.
+ * The choice is per reader and applies to that box only, never to the window.
+ */
+export const SUBMIT_KEYS = ['enter', 'mod-enter'] as const
+
+/** One accepted submit-key mode. */
+export type SubmitKey = typeof SUBMIT_KEYS[number]
+
+/** Submit-key mode used until the reader picks another one. */
+export const DEFAULT_SUBMIT_KEY: SubmitKey = 'enter'
+
+/**
+ * Accept one submit-key mode, ignoring anything a box cannot honour.
+ * @param value - candidate from a preference file, a patch, or a selector.
+ * @returns the mode, or undefined when it is not one of {@link SUBMIT_KEYS}.
+ */
+export function submitKeyOf(value: unknown): SubmitKey | undefined {
+  return SUBMIT_KEYS.find(mode => mode === value)
+}
+
 /** One reader-facing preference set; persisted by the plugin, not by the settings service. */
 export interface TranslatePrefs {
   /** Language every translation is rendered into. */
   readonly targetLanguage: string
   /** Whether the model follows the Host default instead of the explicit override. */
   readonly followDefaultModel: boolean
+  /** Which key submits the translate box. */
+  readonly submitKey: SubmitKey
   /** Explicit provider route, used only when `followDefaultModel` is false. */
   readonly provider?: string
   /** Explicit provider-owned model id, used only when `followDefaultModel` is false. */
@@ -32,10 +86,6 @@ export interface TranslatePrefs {
 export interface ModelView {
   readonly id: string
   readonly name: string
-  /** Reasoning efforts the adapter advertises, least first; empty means it reports none. */
-  readonly efforts: readonly string[]
-  /** Whether this route advertises an `off` reasoning effort, so translation can skip thinking. */
-  readonly canDisableThinking: boolean
 }
 
 /** One provider route with at least one advertised model. */

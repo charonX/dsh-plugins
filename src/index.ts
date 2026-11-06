@@ -20,12 +20,12 @@ import { createRequestHandler } from './http.js'
 import { listCatalog, selectionOfProjection } from './models.js'
 import { PrefsStore } from './prefs.js'
 import { appendBatchPointer, BatchArchive } from './records.js'
-import { DEFAULT_TARGET_LANGUAGE, ROUTE_PREFIX, type SelectionView, type TranslatePrefs } from './shared/api.js'
+import { DEFAULT_SUBMIT_KEY, DEFAULT_TARGET_LANGUAGE, ROUTE_PREFIX, type SelectionView, type TranslatePrefs } from './shared/api.js'
 
 export { Config } from './config.js'
 export type { Config as ImmersiveTranslateConfig } from './config.js'
 export { parseBatchOutput, preferNoThinking, stripFence, translateBatch } from './engine.js'
-export { canDisableThinking, listCatalog, resolveSelection } from './models.js'
+export { listCatalog, resolveSelection } from './models.js'
 export { batchKey, BatchArchive } from './records.js'
 
 export const name = 'immersive-translate'
@@ -46,6 +46,7 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const defaults: TranslatePrefs = {
     targetLanguage: config.targetLanguage ?? DEFAULT_TARGET_LANGUAGE,
     followDefaultModel: true,
+    submitKey: DEFAULT_SUBMIT_KEY,
   }
 
   const prefs = new PrefsStore(statePath, logger, defaults)

@@ -43,6 +43,8 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-settings"
       ]
@@ -54,6 +56,7 @@
     "build:client": "tsdown",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
     "test": "vitest run",
+    "e2e": "playwright test",
     "test:watch": "vitest",
     "prepack": "npm run build"
   },
@@ -68,6 +71,8 @@
     "@deepseek-ai/cordis": "~4.0.6-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-client-locale": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-chat": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-client-ui-layout": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-client-ui-settings": "0.2.2-alpha.3",
@@ -78,8 +83,10 @@
     "@deepseek-ai/dsh-session": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-session-projection": "0.2.2-alpha.3",
     "@deepseek-ai/schemastery": "~3.18.6-alpha.2",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^22.20.1",
     "@types/react": "~18.3.1",
+    "jsdom": "^31.0.0",
     "react": "^18.3.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",

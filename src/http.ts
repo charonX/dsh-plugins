@@ -161,6 +161,39 @@ async function translate(
   if (resolution.selection === null || resolution.source === null) {
     throw new TranslateError(409, 'NO_MODEL', 'no model is selected for translation')
   }
+  const key = batchKey({
+    recipe: RECIPE,
+    targetLanguage,
+    provider: resolution.selection.provider,
+    model: resolution.selection.model,
+    items,
+  })
+  const replay = deps.archive.read(key)
+  if (replay !== undefined && replay.cacheable === true) {
+    if (sessionId !== undefined) {
+      await deps.recordPointer(sessionId, {
+        targetLanguage,
+        provider: resolution.selection.provider,
+        model: resolution.selection.model,
+        recipe: RECIPE,
+        storeKey: key,
+        itemCount: items.length,
+        reasoned: replay.reasoned,
+        attempts: 0,
+        durationMs: 0,
+        cached: true,
+      })
+    }
+    sendJson(response, 200, {
+      results: replay.results,
+      selection: resolution.selection,
+      source: resolution.source,
+      reasoned: replay.reasoned,
+    })
+    return
+  }
+  // Only a miss needs the engine, so a replay works even while the Host LLM
+  // service is unmounted or restarting.
   const engine = deps.llm()
   if (engine === undefined) {
     throw new TranslateError(503, 'ENGINE_UNAVAILABLE', 'the Host LLM service is not mounted')
@@ -176,13 +209,16 @@ async function translate(
     abort.signal,
   )
   const results = answer.items
-  const key = batchKey(targetLanguage, resolution.selection.provider, resolution.selection.model, items)
   const archived = deps.archive.write(key, {
     targetLanguage,
     provider: resolution.selection.provider,
     model: resolution.selection.model,
     items,
     results,
+    reasoned: answer.reasoned,
+    attempts: answer.attempts,
+    durationMs: answer.durationMs,
+    cacheable: answer.cacheable,
   })
   if (sessionId !== undefined && archived) {
     await deps.recordPointer(sessionId, {
@@ -192,6 +228,10 @@ async function translate(
       recipe: RECIPE,
       storeKey: key,
       itemCount: items.length,
+      reasoned: answer.reasoned,
+      attempts: answer.attempts,
+      durationMs: answer.durationMs,
+      cached: false,
     })
   }
   sendJson(response, 200, {
@@ -203,7 +243,7 @@ async function translate(
 }
 
 /** Semantic identity of the prompt and controls; bump on any prompt change. */
-const RECIPE = 'immersive-translate/batch-v1'
+const RECIPE = 'immersive-translate/batch-v2'
 
 function readItems(value: unknown, limits: EngineLimits): TranslateItem[] {
   if (!Array.isArray(value)) throw new TranslateError(400, 'BAD_REQUEST', 'items must be an array')
@@ -228,6 +268,7 @@ function prefsPatch(body: Record<string, unknown>): Partial<TranslatePrefs> {
   const patch: Record<string, unknown> = {}
   if (typeof body.targetLanguage === 'string') patch.targetLanguage = body.targetLanguage
   if (typeof body.followDefaultModel === 'boolean') patch.followDefaultModel = body.followDefaultModel
+  if (typeof body.submitKey === 'string') patch.submitKey = body.submitKey
   if (typeof body.provider === 'string') patch.provider = body.provider
   if (typeof body.model === 'string') patch.model = body.model
   return patch as Partial<TranslatePrefs>

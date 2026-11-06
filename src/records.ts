@@ -30,6 +30,14 @@ export interface TranslateBatchRecord {
   readonly storeKey: string
   /** Number of text units in the batch. */
   readonly itemCount: number
+  /** Whether the route reasoned while translating, which is what makes it slow. */
+  readonly reasoned: boolean
+  /** Requests the batch cost: 2 means a copied source text forced a retry. */
+  readonly attempts: number
+  /** Wall-clock time of the batch, in milliseconds. */
+  readonly durationMs: number
+  /** Whether the answer was served from the archive instead of the model. */
+  readonly cached: boolean
 }
 
 declare module '@deepseek-ai/dsh-session/types' {
@@ -46,23 +54,54 @@ export interface BatchPayload {
   readonly model: string
   readonly items: readonly TranslateItem[]
   readonly results: readonly TranslateItem[]
+  /** Whether the route reasoned while translating. */
+  readonly reasoned: boolean
+  /** Requests the batch cost: 2 means a copied source text forced a retry. */
+  readonly attempts: number
+  /** Wall-clock time of the batch, in milliseconds. */
+  readonly durationMs: number
+  /**
+   * Whether this answer may be replayed.
+   *
+   * False for an answer that copied its source text even after the retry: an
+   * echo stored as a translation would be served forever.
+   */
+  readonly cacheable: boolean
+}
+
+/** Everything that decides one batch answer, and therefore its content key. */
+export interface BatchIdentity {
+  /** Semantic recipe identity: a prompt or control change must miss the cache. */
+  readonly recipe: string
+  /** Destination language tag. */
+  readonly targetLanguage: string
+  /** Provider route. */
+  readonly provider: string
+  /** Model id. */
+  readonly model: string
+  /** Source units in request order. */
+  readonly items: readonly TranslateItem[]
 }
 
 /**
- * Content key of one batch request: the same source always yields the same key.
- * @param targetLanguage - destination language tag.
- * @param provider - provider route.
- * @param model - model id.
- * @param items - source units in request order.
+ * Content key of one batch request: the same identity always yields the same key.
+ *
+ * The recipe is part of the digest because the answer depends on the prompt:
+ * keying only on text plus route would serve a translation produced by an older
+ * instruction after the prompt changes, which is exactly the bug a cache is
+ * supposed to make impossible.
+ * @param identity - what decides the answer.
  * @returns a stable hex digest.
  */
-export function batchKey(
-  targetLanguage: string,
-  provider: string,
-  model: string,
-  items: readonly TranslateItem[],
-): string {
-  const canonical = JSON.stringify([targetLanguage, provider, model, items.map(item => [item.id, item.text])])
+export function batchKey(identity: BatchIdentity): string {
+  const { recipe, targetLanguage, provider, model, items } = identity
+  const canonical = JSON.stringify([
+    recipe,
+    targetLanguage,
+    provider,
+    model,
+    items.map(item => [item.id, item.text]),
+  ])
   return createHash('sha256').update(canonical).digest('hex')
 }
 

@@ -18,38 +18,14 @@ import type {
   TranslatePrefs,
 } from './shared/api.js'
 
-/** Reasoning metadata subset this plugin reads. */
-interface ReasoningInfo {
-  readonly reasoning?: { readonly efforts: readonly { readonly id: string }[] }
-}
-
 /**
- * List the reasoning efforts one route advertises, least first.
+ * List every advertised provider and its models.
  *
- * An empty list means the adapter reports no reasoning metadata at all, which
- * is not the same as "thinking is always on": it is the adapter saying that no
- * effort can be selected on this route, because `off` there would mean
- * "omit the parameter" and leave the gateway default in place.
- * @param info - resolved model metadata from the adapter.
- * @returns the advertised effort ids.
- */
-export function advertisedEfforts(info: ReasoningInfo): string[] {
-  return info.reasoning?.efforts.map(effort => effort.id) ?? []
-}
-
-/**
- * Whether one route advertises an `off` effort, which is what lets a
- * translation request skip thinking.
- * @param info - resolved model metadata from the adapter.
- * @returns true when `off` is a selectable effort.
- */
-export function canDisableThinking(info: ReasoningInfo): boolean {
-  return advertisedEfforts(info).includes('off')
-}
-
-/**
- * List every advertised provider and model with its thinking-capability flag.
- * Provider and model failures are skipped instead of failing the whole read.
+ * Only what the selector draws is read: the catalog is two adapter calls per
+ * provider (`listProviders`, `listModels`). The reasoning metadata is deliberately
+ * not resolved here - selection is the engine's business (`preferNoThinking`
+ * reads it at call time) and resolving it per model made `/api/state` wait on a
+ * round trip for every model the reader would never pick.
  * @param llm - Host LLM runtime.
  * @param signal - optional cancellation for adapter-owned catalog lookups.
  * @returns provider groups in registration order, each with at least one model.
@@ -67,18 +43,7 @@ export async function listCatalog(llm: LlmRuntime, signal?: AbortSignal): Promis
     const rows: ModelView[] = []
     for (const model of models) {
       signal?.throwIfAborted()
-      let efforts: string[] = []
-      try {
-        efforts = advertisedEfforts(await llm.resolveModelInfo(provider.id, model.id, signal))
-      } catch {
-        efforts = []
-      }
-      rows.push({
-        id: model.id,
-        name: model.name,
-        efforts,
-        canDisableThinking: efforts.includes('off'),
-      })
+      rows.push({ id: model.id, name: model.name })
     }
     if (rows.length > 0) groups.push({ id: provider.id, name: provider.name, models: rows })
   }

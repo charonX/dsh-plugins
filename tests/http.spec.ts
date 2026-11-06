@@ -52,7 +52,7 @@ function fakeLlm(capture: { instruction?: string } = {}): LlmRuntime {
   } as unknown as LlmRuntime
 }
 
-const prefs: TranslatePrefs = { targetLanguage: 'zh-CN', followDefaultModel: true }
+const prefs: TranslatePrefs = { targetLanguage: 'zh-CN', followDefaultModel: true, submitKey: 'enter' }
 
 /**
  * Build route dependencies over fakes.
@@ -73,7 +73,7 @@ function deps(overrides: Partial<HttpDeps> = {}): HttpDeps {
     catalog: async () => [{
       id: 'p',
       name: 'P',
-      models: [{ id: 'm', name: 'M', efforts: ['off'], canDisableThinking: true }],
+      models: [{ id: 'm', name: 'M' }],
     }],
     recordPointer: async () => true,
     ...overrides,
@@ -127,6 +127,86 @@ describe('routes', () => {
       reasoned: false,
     })
     expect(capture.instruction).toContain('translation engine')
+  })
+
+  it('archives the latency facts behind a batch', async () => {
+    const payloads: unknown[] = []
+    const pointer: unknown[] = []
+    const { base, close } = await serve(deps({
+      llm: () => ({ runtime: fakeLlm() }),
+      archive: {
+        read: () => undefined,
+        write: (_key: string, payload: unknown) => { payloads.push(payload); return true },
+      } as unknown as BatchArchive,
+      recordPointer: async (_sessionId: string, record: unknown) => { pointer.push(record); return true },
+    }))
+    running = { close }
+    const response = await fetch(`${base}/api/translate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's-1', items: [{ id: 'a', text: 'one' }] }),
+    })
+    expect(response.status).toBe(200)
+    // The route has no reasoning metadata, so this batch neither reasoned nor retried.
+    expect(payloads[0]).toMatchObject({ reasoned: false, attempts: 1 })
+    expect(payloads[0]).toHaveProperty('durationMs')
+    expect(pointer[0]).toMatchObject({ reasoned: false, attempts: 1, itemCount: 1 })
+  })
+
+  it('replays a cacheable batch without calling the model', async () => {
+    let called = 0
+    const pointer: unknown[] = []
+    const cached = {
+      targetLanguage: 'zh-CN',
+      provider: 'p',
+      model: 'm',
+      items: [{ id: 'a', text: 'one' }],
+      results: [{ id: 'a', text: '甲' }],
+      reasoned: false,
+      attempts: 1,
+      durationMs: 1200,
+      cacheable: true,
+    }
+    const { base, close } = await serve(deps({
+      llm: () => { called += 1; return { runtime: fakeLlm() } },
+      archive: { read: () => cached, write: () => true } as unknown as BatchArchive,
+      recordPointer: async (_sessionId: string, record: unknown) => { pointer.push(record); return true },
+    }))
+    running = { close }
+    const response = await fetch(`${base}/api/translate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's-1', items: [{ id: 'a', text: 'one' }] }),
+    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ results: [{ id: 'a', text: '甲' }] })
+    expect(called).toBe(0)
+    expect(pointer[0]).toMatchObject({ cached: true, attempts: 0 })
+  })
+
+  it('translates again when the archived answer must not be replayed', async () => {
+    const echo = {
+      targetLanguage: 'zh-CN',
+      provider: 'p',
+      model: 'm',
+      items: [{ id: 'a', text: 'one' }],
+      results: [{ id: 'a', text: 'one' }],
+      reasoned: false,
+      attempts: 2,
+      durationMs: 4000,
+      cacheable: false,
+    }
+    const { base, close } = await serve(deps({
+      archive: { read: () => echo, write: () => true } as unknown as BatchArchive,
+    }))
+    running = { close }
+    const response = await fetch(`${base}/api/translate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ items: [{ id: 'a', text: 'one' }] }),
+    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ results: [{ id: 'a', text: '甲' }] })
   })
 
   it('refuses a batch above the configured item limit', async () => {

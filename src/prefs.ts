@@ -9,7 +9,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { TranslatePrefs } from './shared/api.js'
+import { submitKeyOf, type TranslatePrefs } from './shared/api.js'
 
 /** Minimal logger shape the plugin needs from `ctx.logger`. */
 export interface Logger {
@@ -89,11 +89,13 @@ export function normalize(value: unknown, defaults: TranslatePrefs): TranslatePr
   const followDefaultModel = typeof source.followDefaultModel === 'boolean'
     ? source.followDefaultModel
     : defaults.followDefaultModel
+  const submitKey = submitKeyOf(source.submitKey) ?? defaults.submitKey
   const provider = nonEmpty(source.provider)
   const model = nonEmpty(source.model)
   return {
     targetLanguage,
     followDefaultModel,
+    submitKey,
     ...provider === undefined ? {} : { provider },
     ...model === undefined ? {} : { model },
   }

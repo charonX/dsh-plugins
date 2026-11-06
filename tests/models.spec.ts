@@ -1,30 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
-import { advertisedEfforts, canDisableThinking, listCatalog, resolveSelection, selectionOfProjection } from '../src/models.ts'
-
-describe('canDisableThinking', () => {
-  it('accepts a route that advertises an off effort', () => {
-    expect(canDisableThinking({ reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } })).toBe(true)
-  })
-
-  it('refuses a route whose efforts start above off', () => {
-    expect(canDisableThinking({ reasoning: { efforts: [{ id: 'low' }, { id: 'high' }] } })).toBe(false)
-  })
-
-  it('refuses a route without reasoning metadata', () => {
-    expect(canDisableThinking({})).toBe(false)
-  })
-})
-
-describe('advertisedEfforts', () => {
-  it('lists the advertised ids in adapter order', () => {
-    expect(advertisedEfforts({ reasoning: { efforts: [{ id: 'off' }, { id: 'low' }] } })).toEqual(['off', 'low'])
-  })
-
-  it('reports an empty list when the adapter sends no reasoning metadata', () => {
-    expect(advertisedEfforts({})).toEqual([])
-  })
-})
+import { listCatalog, resolveSelection, selectionOfProjection } from '../src/models.ts'
 
 describe('resolveSelection', () => {
   const override = { provider: 'local', model: 'm1' }
@@ -68,7 +44,8 @@ describe('selectionOfProjection', () => {
 })
 
 describe('listCatalog', () => {
-  it('lists models with their thinking capability and skips failing providers', async () => {
+  it('lists models without resolving reasoning metadata and skips failing providers', async () => {
+    let resolved = 0
     const llm = {
       listProviders: () => [
         { id: 'ok', name: 'OK Provider' },
@@ -78,18 +55,16 @@ describe('listCatalog', () => {
         if (provider === 'down') throw new Error('catalog unavailable')
         return [{ id: 'm1', name: 'Model One' }, { id: 'm2', name: 'Model Two' }]
       },
-      resolveModelInfo: async (_provider: string, model: string) => (model === 'm1'
-        ? { provider: 'ok', id: model, name: model, reasoning: { efforts: [{ id: 'off', name: 'Off' }] } }
-        : { provider: 'ok', id: model, name: model }),
+      resolveModelInfo: async () => { resolved += 1; return { provider: 'ok', id: 'm1', name: 'm1' } },
     } as unknown as LlmRuntime
 
     await expect(listCatalog(llm)).resolves.toEqual([{
       id: 'ok',
       name: 'OK Provider',
-      models: [
-        { id: 'm1', name: 'Model One', efforts: ['off'], canDisableThinking: true },
-        { id: 'm2', name: 'Model Two', efforts: [], canDisableThinking: false },
-      ],
+      models: [{ id: 'm1', name: 'Model One' }, { id: 'm2', name: 'Model Two' }],
     }])
+    // The settings selector never shows reasoning capability, so the state read
+    // must not pay a per-model adapter round trip for it.
+    expect(resolved).toBe(0)
   })
 })
