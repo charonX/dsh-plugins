@@ -256,16 +256,31 @@ if [ ! -d "$HARNESS/packages/boot/hmr/lib" ]; then
 fi
 
 repair_profile_links() {
-  local broken=0
-  if [ -d "$PROFILE_DIR/node_modules" ]; then
-    while IFS= read -r link; do
-      if [ -L "$link" ] && [ ! -e "$link" ]; then
-        broken=1
-        break
-      fi
-    done < <(find "$PROFILE_DIR/node_modules" -maxdepth 3 -type l 2>/dev/null)
-  fi
-  if [ "$broken" -eq 1 ]; then
+  local broken
+  broken=$(node - "$PROFILE_DIR" <<'NODE'
+const fs = require('node:fs')
+const path = require('node:path')
+const nm = path.join(process.argv[2], 'node_modules')
+if (!fs.existsSync(nm)) { console.log('0'); process.exit(0) }
+let hasBroken = false
+const walk = (dir, depth = 0) => {
+  if (depth > 2 || hasBroken) return
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        try { fs.statSync(full) } catch { hasBroken = true; return }
+      } else if (entry.isDirectory()) {
+        walk(full, depth + 1)
+      }
+    }
+  } catch {}
+}
+walk(nm)
+console.log(hasBroken ? '1' : '0')
+NODE
+)
+  if [ "$broken" = "1" ]; then
     warn "检测到 profile ${PROFILE} 存在失效的插件软链，自动执行修复..."
     ( cd "$HARNESS" && pnpm dsh plugin --profile "$PROFILE" install >/dev/null 2>&1 ) || true
   fi
