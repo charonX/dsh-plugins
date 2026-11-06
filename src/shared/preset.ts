@@ -26,6 +26,15 @@ export interface PresetModel {
    * keeps the `developer` role switch out of play.
    */
   readonly reasoningEfforts?: Readonly<Record<string, string | null>>
+  /**
+   * Capabilities that belong to this model rather than to the gateway.
+   * Only the thinking-token budget lives here today: whether a model accepts a
+   * budget is documented per model, so writing it on the route would send the
+   * field to models that never take one.
+   */
+  readonly compat?: {
+    readonly supportsThinkingTokenBudget?: boolean
+  }
 }
 
 /** Route-level endpoint compatibility a preset writes. */

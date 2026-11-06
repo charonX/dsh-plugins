@@ -140,8 +140,10 @@ describe('compatOf', () => {
     expect(compatOf(profileOfOptions([...toggle, ...effort('low')]), false)).toEqual({ thinkingFormat: 'qwen' })
   })
 
-  it('adds the budget flag for a documented budget', () => {
-    expect(compatOf(profileOfOptions(budget), false)).toEqual({ thinkingFormat: 'qwen', supportsThinkingTokenBudget: true })
+  it('leaves the budget capability to the model, not the route', () => {
+    // Whether a model takes a thinking budget is documented per model, so a
+    // route-level flag would speak for models that never accept one.
+    expect(compatOf(profileOfOptions(budget), false)).toEqual({ thinkingFormat: 'qwen' })
   })
 
   it('never overrides an endpoint pi-ai already classifies', () => {
@@ -166,6 +168,12 @@ describe('presetModelOf', () => {
       input: ['text', 'image'],
       reasoningEfforts: { off: null, high: 'high' },
     })
+  })
+
+  it('declares the budget capability on the model that documents one', () => {
+    expect(presetModelOf(model('m', { reasoning_options: [...toggle, ...budget] }))?.compat)
+      .toEqual({ supportsThinkingTokenBudget: true })
+    expect(presetModelOf(model('m', { reasoning_options: toggle }))?.compat).toBeUndefined()
   })
 })
 

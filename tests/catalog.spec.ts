@@ -56,6 +56,18 @@ describe('generated catalogue', () => {
     }
   })
 
+  it('keeps gateway capabilities on the route and model capabilities on the model', () => {
+    for (const preset of PRESETS.presets) {
+      // The thinking budget is documented per model: never speak for the route.
+      expect(preset.compat.supportsThinkingTokenBudget).toBeUndefined()
+      for (const model of preset.models) {
+        if (model.compat === undefined) continue
+        expect(Object.keys(model.compat)).toEqual(['supportsThinkingTokenBudget'])
+        expect(model.compat.supportsThinkingTokenBudget).toBe(true)
+      }
+    }
+  })
+
   it('never pins a dialect on an endpoint pi-ai already classifies', () => {
     for (const preset of PRESETS.presets) {
       if (!isDetectedEndpoint(preset.baseURL)) continue

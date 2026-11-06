@@ -44,6 +44,7 @@ export const en = {
 
   compatTitle: 'Endpoint compatibility',
   compatHint: 'These switches decide how this provider sends requests. Leaving a field on "auto" hands it back to the adapter; changes apply without a restart.',
+  compatScope: 'These fields apply to every model under this provider. Per-model thinking levels and capabilities are edited in the model rows.',
   compatFieldFormat: 'Thinking format',
   compatFieldMaxTokens: 'Output cap field',
   compatFieldDeveloperRole: 'Send the system prompt as "developer"',
@@ -108,6 +109,7 @@ export const zh: Record<MessageKey, string> = {
 
   compatTitle: '端点兼容',
   compatHint: '这些开关决定该供应商怎么发请求。留空即交还给适配器自动探测，改完无需重启。',
+  compatScope: '这些字段对该供应商下的所有模型生效；单个模型的思考档位与能力在模型行里编辑。',
   compatFieldFormat: '思考格式',
   compatFieldMaxTokens: '输出上限字段',
   compatFieldDeveloperRole: '用 developer 角色发送系统消息',

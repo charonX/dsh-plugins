@@ -49,6 +49,7 @@ function modelValue(model: PresetModel): Json {
     ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
     ...model.input === undefined ? {} : { input: [...model.input] },
     ...model.reasoningEfforts === undefined ? {} : { reasoningEfforts: { ...model.reasoningEfforts } },
+    ...model.compat === undefined ? {} : { compat: { ...model.compat } },
   }
 }
 

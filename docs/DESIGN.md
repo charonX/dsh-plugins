@@ -64,7 +64,10 @@
 
 ### 4.2 预计算规则（全部在构建期完成，客户端只搬运结果）
 
-- **R1** 只生成路由级兼容块，不生成模型级兼容块。
+- **R1** 网关能力写路由级（`thinkingFormat`、`supportsDeveloperRole`），**模型能力写模型级**：
+  唯一会写进 `models[i].compat` 的是 `supportsThinkingTokenBudget`，因为「这个模型收不收思考
+  预算」是逐模型文档的事实，写在路由上会把该字段发给不收预算的模型（实测 13 个带预算的预设有
+  8 个是同路由混合能力）。
 - **R2** 仅当形状含 `toggle` 或 `budget_tokens` 时写 `thinkingFormat`，且只在 switch 家族里取首个
   （`switchFormatOf()`，典型是 `qwen`）——即使同一模型也文档了 effort 档位，也只有 switch 家族
   给 `off` 一个线上拼写。`effort` 型**不写**：兜底 `openai` 已经会发 `reasoning_effort`，写死反而
@@ -75,8 +78,8 @@
   `zai` 判型顶掉。这份 host 表是脚本里的一处常量，注释指向 pi-ai 的 `detectCompat()`，上游新增分支时同步。
 - **R4** 只要写了任一模型的 `reasoningEfforts`，同一份预设里写 `supportsDeveloperRole: false`
   （SPEC §3.4 的坑：声明推理会打开 `developer` 角色）。只对**本插件新建**的路由生效。
-- **R5** 形状含 `budget_tokens` 时追加 `supportsThinkingTokenBudget: true`（`thinkingTokenBudgetField`
-  的别名），不额外发明字段。
+- **R5** 形状含 `budget_tokens` 的**模型**追加 `models[i].compat.supportsThinkingTokenBudget: true`
+  （`thinkingTokenBudgetField` 的别名），不额外发明字段；路由级不写该项。
 - **R6** 代表模型必须与供应商主导形状一致：主导形状为 toggle/budget 时，不挑 effort-only 模型，
   避免路由级方言把该模型的档位语义改掉。没有一致模型的供应商，只挑"无推理"模型（此时不写 R4）。
 - **R7** `reasoningEfforts` 一律以 `off: null` 开头（`off` 的线上拼写由 `thinkingFormat` 决定，
@@ -117,6 +120,9 @@
 - "自动" = `unset` 该字段 → 回到 `detectCompat()`。这是所有推测的唯一撤销方式，必须显眼。
 - 字段来源只按"用户层是否存在该键"判定，显示为**已显式设置 / 自动**。不引入"预设写的 / 手写的"
   标记：两者都在用户层，发明标记会污染用户配置，也无法在配置被复制到另一台机器后保持真实。
+- **作用域写清楚**：编辑器只改路由级字段，并明确告诉用户"这些字段对该供应商下所有模型生效；
+  单个模型的档位与能力在模型行里编辑"。模型级 `models[i].compat` 目前只由预设写入（预算能力），
+  编辑器不提供模型级覆盖——那需要一个模型行 UI，官方没有对应座位。
 - 写入沿用官方卡片的路径：`ctx.configForms.get(ns)` → `mutate(ops, revision)`，逐字段 `set`/`unset`。
 - 协议不接受的字段不渲染（按 `namespace.schema` 与该路由的 `api` 判断），避免保存时被
   `assertServiceable()` 拒。

@@ -245,6 +245,7 @@ export function PresetDialog({ t, catalog, knownRouteIds, writable, unavailable 
                 {model.name}
                 {model.contextWindow === undefined ? '' : ` · ctx ${model.contextWindow}`}
                 {model.reasoningEfforts === undefined ? '' : ` · ${Object.keys(model.reasoningEfforts).join('/')}`}
+                {model.compat?.supportsThinkingTokenBudget === true ? ' · budget' : ''}
               </li>
             ))}
           </ul>

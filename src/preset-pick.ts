@@ -233,7 +233,9 @@ export function compatOf(profile: ReasoningProfile, detected: boolean): PresetCo
   // plugin exists to fix.
   const format = switchFormatOf(profile)
   if (!detected && controlClass(profile) === 'switch' && format !== undefined) compat.thinkingFormat = format
-  if (profile.shapes.includes('budget')) compat.supportsThinkingTokenBudget = true
+  // The budget capability is deliberately NOT decided here: it is documented per
+  // model, and a route-level flag would send the field to every model on the
+  // route. {@link presetModelOf} attaches it to the models that take one.
   return compat
 }
 
@@ -261,6 +263,7 @@ export function presetModelOf(model: ModelsDevModel): PresetModel | undefined {
     ...typeof maxTokens === 'number' && maxTokens > 0 ? { maxTokens } : {},
     input,
     ...efforts === undefined ? {} : { reasoningEfforts: efforts },
+    ...profile.shapes.includes('budget') ? { compat: { supportsThinkingTokenBudget: true } } : {},
   }
 }
 

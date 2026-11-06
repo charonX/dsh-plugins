@@ -103,6 +103,7 @@ export function CompatEditor(props: CompatEditorProps): ReactNode {
     <ExtensionFrame t={t} title={`${t('compatTitle')} — ${routeName}`} surface="recessed">
       {available ? null : <p style={errorStyle}>{t('compatUnavailable')}</p>}
       <p style={hintStyle}>{t('compatHint')}</p>
+      <p style={hintStyle}>{t('compatScope')}</p>
 
       <div style={fieldStyle}>
         <label style={labelStyle} htmlFor={`${routeId}-thinkingFormat`}>{t('compatFieldFormat')}</label>
