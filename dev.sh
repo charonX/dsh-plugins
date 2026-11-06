@@ -255,6 +255,24 @@ if [ ! -d "$HARNESS/packages/boot/hmr/lib" ]; then
   warn "harness 似乎还没构建过；若启动失败，先在 deepseek-harness 里跑 pnpm run build"
 fi
 
+repair_profile_links() {
+  local broken=0
+  if [ -d "$PROFILE_DIR/node_modules" ]; then
+    while IFS= read -r link; do
+      if [ -L "$link" ] && [ ! -e "$link" ]; then
+        broken=1
+        break
+      fi
+    done < <(find "$PROFILE_DIR/node_modules" -maxdepth 3 -type l 2>/dev/null)
+  fi
+  if [ "$broken" -eq 1 ]; then
+    warn "检测到 profile ${PROFILE} 存在失效的插件软链，自动执行修复..."
+    ( cd "$HARNESS" && pnpm dsh plugin --profile "$PROFILE" install >/dev/null 2>&1 ) || true
+  fi
+}
+
+repair_profile_links
+
 SCAN=$(scan_plugins)
 if [ -z "$SCAN" ]; then
   warn "没有扫描到带 dsh.bundle 的插件仓库"
