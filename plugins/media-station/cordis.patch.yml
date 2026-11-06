@@ -1,0 +1,4 @@
+# dsh bundle patch: inserts the media station plugin into profile
+- insert:
+    - id: media-station
+      name: '@charonx/dsh-media-station'
