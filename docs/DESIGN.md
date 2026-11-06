@@ -18,7 +18,7 @@
 
 | 座位 | 组件 | 作用 |
 |---|---|---|
-| `settings.models.footer`（list） | `PresetPanel` | 从数据快照一键写入一条完整路由（端点 / 协议 / 密钥变量 / 代表模型 / 兼容块） |
+| `settings.models.footer`（list） | `PresetPanel` | 与官方"添加模型提供商"同尺寸的入口按钮；点开是插件自己的弹窗，从数据快照写入一条完整路由（端点 / 协议 / 密钥变量 / 代表模型 / 兼容块） |
 | `settings.models.provider-card`（keyed，key = `settingsNs`） | `CompatEditor` | 逐字段编辑该路由的兼容块，或清除某一字段回到自动探测 |
 
 官方已经具备、本插件**不碰**的：供应商增删、模型列表、`/models` 探测、API key 输入、
@@ -127,7 +127,8 @@
 src/client/
 ├─ index.tsx            # 注册 locale；两个座位的注册与各自的 ctx→props 适配
 ├─ host.ts              # 唯一的服务访问层：目录、表单快照、写入（组件不接触 ctx）
-├─ PresetPanel.tsx      # footer：搜索 + 列表 + 预览 + 写入
+├─ PresetPanel.tsx      # footer：与官方添加按钮同尺寸的入口 + 弹窗（搜索 / 列表 / 预览 / 写入）
+├─ StudioDialog.tsx     # 弹窗外壳：复刻官方 Modal 的遮罩、圆角、投影、头尾几何
 ├─ CompatEditor.tsx     # 卡片内：字段编辑 / 清除
 ├─ ExtensionFrame.tsx   # 两个座位共用的"扩展区"外壳（见 §8）
 ├─ ops.ts               # 预设 / 兼容块 → path ops 的纯函数（唯一写入契约）
@@ -151,14 +152,27 @@ src/shared/preset.ts    # 生成物类型（两端共用）
 
 ## 8. 扩展区视觉规范
 
-官方页面里插进来的东西必须自证身份，否则用户无从区分。两个座位共用 `ExtensionFrame`：
+官方页面里插进来的东西必须自证身份，否则用户无从区分。
 
-- 顶部 0.5px `--dsw-alias-border-l2` 分隔线；
-- 交互沿用官方"自定义设置"的 `<details>/<summary>` 折叠，**默认折叠**；
-- 标签固定为 `扩展 · model-studio`（`--dsw-alias-label-tertiary`，小字号、无 Emoji），
-  `title` 与 `aria-label` 给出完整句："此区域由插件 model-studio 提供，非官方功能"；
-- 内容容器 `--dsw-alias-bg-layer-2`、圆角 `--dsw-radius-md`、与官方卡片同宽同内边距；
-- 深浅色跟随：只用 token，不写十六进制色值。
+**footer（预设入口）**——不再是一个"看不明白点哪"的常驻面板，而是与官方 `addButton`
+同几何的一个控件：`flex: 1 1 0`、`min-width: 180px`、`height: 44px`、`border: 1px dashed
+--dsw-alias-border-l3`、`border-radius: --dsw-radius-lg`、字号 14/22。归属标记
+`扩展 · model-studio` 以 `--dsw-alias-label-tertiary` 的小徽标形式留在按钮内，不额外占一行。
+
+**弹窗**——`StudioDialog` 复刻官方 `Modal` 的几何（该 primitives 包不是可安装的客户端模块，
+不能直接 import）：根层 `position: fixed; inset: 0; z-index: 1000; padding: max(24px,
+--dsh-frame-overlay-top) 24px`；遮罩 `--dsw-alias-bg-mask-1` + `--dsw-mask-blur`；
+卡片 `--dsw-alias-bg-layer-2`、`--dsw-radius-panel`、`--dsw-elevation-prominent`，
+头部 padding `22px 14px 12px 24px`、标题 16/24/500、关闭按钮 28×28，正文/尾部 padding `0 24px`。
+Esc、点遮罩、关闭按钮都能关；`role="dialog" aria-modal aria-labelledby`。
+
+**卡片内（兼容块）**——沿用官方"自定义设置"的 `<details>/<summary>` 折叠，**默认折叠**，
+顶部 0.5px `--dsw-alias-border-l2` 分隔线，标签固定为 `扩展 · model-studio`，
+`title`/`aria-label` 给出完整句："此区域由插件 model-studio 提供，非官方功能"。
+
+按钮几何与官方一致：36px 行高、`padding: 0 14px`、`--dsw-radius-md`、字号 14/22；
+主按钮用 `--dsw-alias-button-primary-fill`，次按钮用 `--dsw-alias-border-l3` 描边。
+深浅色跟随：只用 token（`tokens.ts` 里的 fallback 只在宿主改名时兜底）。
 
 ## 9. 测试与门禁
 

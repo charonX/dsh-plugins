@@ -123,25 +123,148 @@ export const labelStyle = {
   color: COLORS.secondary,
 } as const
 
-/** Primary action button. */
-export const primaryButtonStyle = {
-  padding: '6px 12px',
-  font: 'inherit',
-  fontSize: 13,
-  fontWeight: 500,
-  color: COLORS.onBrand,
-  background: COLORS.brand,
+/** Shared control geometry: the Models page's own button base (36px row). */
+const controlBase = {
+  boxSizing: 'border-box' as const,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  height: 36,
+  padding: '0 14px',
   border: 'none',
-  borderRadius: COLORS.radiusSm,
+  borderRadius: COLORS.radiusMd,
+  font: 'inherit',
+  fontSize: 14,
+  lineHeight: '22px',
   cursor: 'pointer',
 } as const
 
-/** Secondary action button. */
+/** Primary action button (the page's filled variant). */
+export const primaryButtonStyle = {
+  ...controlBase,
+  background: 'var(--dsw-alias-button-primary-fill, #2563eb)',
+  color: COLORS.onBrand,
+} as const
+
+/** Secondary action button (the page's outlined variant). */
 export const quietButtonStyle = {
-  ...primaryButtonStyle,
+  ...controlBase,
+  border: `0.5px solid ${COLORS.borderInput}`,
+  background: 'transparent',
   color: COLORS.text,
+} as const
+
+/**
+ * The trigger that sits where the page's own "add provider" control sits: same
+ * row, same corner, dashed because it is the last slot of the provider list
+ * rather than a command in a footer.
+ */
+export const addButtonStyle = {
+  ...controlBase,
+  flex: '1 1 0',
+  minWidth: 180,
+  gap: 6,
+  height: 44,
+  border: `1px dashed ${COLORS.borderInput}`,
+  borderRadius: COLORS.radiusLg,
+  background: 'transparent',
+  color: COLORS.text,
+} as const
+
+/** Row that holds the trigger; matches the page's own add-action row. */
+export const addActionsStyle = {
+  display: 'flex',
+} as const
+
+/** Full-viewport layer, matching the page's dialog shell. */
+export const dialogRootStyle = {
+  position: 'fixed' as const,
+  inset: 0,
+  zIndex: 1000,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 'max(24px, var(--dsh-frame-overlay-top, 24px)) 24px',
+} as const
+
+/** The dimming layer behind a dialog. */
+export const dialogMaskStyle = {
+  position: 'absolute' as const,
+  inset: 0,
+  background: 'var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32))',
+  backdropFilter: 'var(--dsw-mask-blur)',
+} as const
+
+/** Dialog card: full-height column that caps against the layer's padding box. */
+export const dialogStyle = {
+  boxSizing: 'border-box' as const,
+  position: 'relative' as const,
+  zIndex: 1,
+  display: 'flex',
+  flexDirection: 'column' as const,
+  gap: 20,
+  width: 'min(560px, 100%)',
+  maxHeight: '100%',
+  padding: '0 0 24px',
+  overflow: 'hidden',
+  border: 0,
+  borderRadius: 'var(--dsw-radius-panel, 12px)',
   background: COLORS.layer2,
-  border: `0.5px solid ${COLORS.borderStrong}`,
+  boxShadow: 'var(--dsw-elevation-prominent)',
+} as const
+
+/** Dialog header row. */
+export const dialogHeaderStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  padding: '22px 14px 12px 24px',
+} as const
+
+/** Dialog title. */
+export const dialogTitleStyle = {
+  margin: 0,
+  fontSize: 16,
+  lineHeight: '24px',
+  fontWeight: 500,
+  color: COLORS.text,
+} as const
+
+/** Dialog close button. */
+export const dialogCloseStyle = {
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  border: 'none',
+  borderRadius: COLORS.radiusSm,
+  background: 'transparent',
+  color: COLORS.secondary,
+  cursor: 'pointer',
+  fontSize: 16,
+} as const
+
+/** Scrollable dialog body. */
+export const dialogBodyStyle = {
+  display: 'flex',
+  flexDirection: 'column' as const,
+  minWidth: 0,
+  marginTop: 20,
+  padding: '0 24px',
+  overflowY: 'auto' as const,
+} as const
+
+/** Dialog action row. */
+export const dialogFooterStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 8,
+  padding: '0 24px',
 } as const
 
 /** One row of a selectable list. */
@@ -173,7 +296,7 @@ export const listStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: 2,
-  maxHeight: 280,
+  maxHeight: 320,
   overflowY: 'auto' as const,
   marginTop: 8,
   padding: 2,

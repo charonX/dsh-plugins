@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ExtensionFrame } from '../src/client/ExtensionFrame.tsx'
-import { PresetPanel } from '../src/client/PresetPanel.tsx'
+import { PresetDialog, PresetPanel } from '../src/client/PresetPanel.tsx'
 import { CompatEditor } from '../src/client/CompatEditor.tsx'
 import type { Translate } from '../src/client/locales.ts'
 import type { PresetCatalog } from '../src/shared/preset.ts'
@@ -48,15 +48,50 @@ describe('ExtensionFrame', () => {
 })
 
 describe('PresetPanel', () => {
-  const render = (known: readonly string[] = []) => renderToStaticMarkup(
+  const render = (props: { writable?: boolean; unavailable?: boolean } = {}) => renderToStaticMarkup(
     <PresetPanel
       t={t}
       catalog={catalog}
-      knownRouteIds={new Set(known)}
-      writable
+      knownRouteIds={new Set()}
+      writable={props.writable ?? true}
+      unavailable={props.unavailable}
       onApply={async () => ({ kind: 'written' })}
     />,
   )
+
+  it('renders one trigger labelled like the page\'s own add control', () => {
+    const html = render()
+    expect(html).toContain('presetsTrigger')
+    expect(html).toContain('extension')
+    // The catalogue stays closed until the trigger is used.
+    expect(html).not.toContain('type="search"')
+    expect(html).not.toContain('presetsSnapshot')
+  })
+
+  it('disables the trigger when the directory cannot be read', () => {
+    expect(render({ unavailable: true })).toContain('disabled=""')
+  })
+})
+
+describe('PresetDialog', () => {
+  const render = (known: readonly string[] = [], extra: { writable?: boolean; unavailable?: boolean } = {}) => renderToStaticMarkup(
+    <PresetDialog
+      t={t}
+      catalog={catalog}
+      knownRouteIds={new Set(known)}
+      writable={extra.writable ?? true}
+      unavailable={extra.unavailable}
+      onApply={async () => ({ kind: 'written' })}
+      onClose={() => {}}
+    />,
+  )
+
+  it('is a labelled modal with the page-matching shell', () => {
+    const html = render()
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('aria-modal="true"')
+    expect(html).toContain('close')
+  })
 
   it('states where the data came from and what was excluded', () => {
     const html = render()
@@ -70,18 +105,12 @@ describe('PresetPanel', () => {
     expect(render()).not.toContain('presetsKnown')
   })
 
-  it('explains a read-only document instead of offering a dead button', () => {
-    const html = renderToStaticMarkup(
-      <PresetPanel t={t} catalog={catalog} knownRouteIds={new Set()} writable={false} onApply={async () => ({ kind: 'written' })} />,
-    )
-    expect(html).toContain('presetReadOnly')
+  it('explains a read-only document instead of offering a dead action', () => {
+    expect(render([], { writable: false })).toContain('presetReadOnly')
   })
 
   it('reports a directory it could not read', () => {
-    const html = renderToStaticMarkup(
-      <PresetPanel t={t} catalog={catalog} knownRouteIds={new Set()} writable unavailable onApply={async () => ({ kind: 'written' })} />,
-    )
-    expect(html).toContain('presetsUnavailable')
+    expect(render([], { unavailable: true })).toContain('presetsUnavailable')
   })
 })
 

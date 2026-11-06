@@ -13,8 +13,10 @@ export const en = {
   extension: 'Extension',
   extensionOwner: 'model-studio',
   extensionHint: 'This area is provided by the model-studio plugin, not by the built-in Models page.',
+  close: 'Close',
 
-  presetsTitle: 'Add a provider from a preset',
+  presetsTrigger: 'Add a provider from presets',
+  presetsTitle: 'Add a provider from presets',
   presetsHint: 'A preset writes the endpoint, protocol, API-key variable, representative models, and endpoint compatibility. Enter the API key in the provider card afterwards.',
   presetsSnapshot: 'Data snapshot {snapshot} · source models.dev ({license})',
   presetsScope: '{count} gateways are listed. {excluded} more are omitted because their protocol is not OpenAI-compatible.',
@@ -74,8 +76,10 @@ export const zh: Record<MessageKey, string> = {
   extension: '扩展',
   extensionOwner: 'model-studio',
   extensionHint: '此区域由插件 model-studio 提供，不属于官方模型页功能。',
+  close: '关闭',
 
-  presetsTitle: '从预设添加供应商',
+  presetsTrigger: '从预设添加提供商',
+  presetsTitle: '从预设添加提供商',
   presetsHint: '预设会写入端点、协议、密钥变量、代表模型与端点兼容项。密钥请写入该供应商卡片，预设不会碰任何密钥。',
   presetsSnapshot: '数据快照 {snapshot} · 来源 models.dev（{license}）',
   presetsScope: '共 {count} 个网关；另有 {excluded} 个因协议不是 OpenAI 兼容而未收录。',

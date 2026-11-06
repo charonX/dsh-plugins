@@ -1,6 +1,11 @@
 /**
  * Footer extension area: write one complete route from a snapshot preset.
  *
+ * The area is a single trigger that sits where the page's own "add provider"
+ * control sits, so it reads as one more way to add a provider instead of a
+ * panel with no obvious action. The catalogue itself lives in a dialog on the
+ * page's own mask and elevation.
+ *
  * The panel is deliberately dumb about the Host: it receives the catalogue, the
  * route ids the page already knows, and one async writer. Everything it decides
  * (search, conflict refusal, status copy) is derived from those props, which is
@@ -12,10 +17,12 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { Preset, PresetCatalog } from '../shared/preset.ts'
 import { compatSummary } from './ops.ts'
-import { ExtensionFrame } from './ExtensionFrame.tsx'
+import { StudioDialog } from './StudioDialog.tsx'
 import type { Translate } from './locales.ts'
 import {
-  actionsStyle,
+  addActionsStyle,
+  addButtonStyle,
+  badgeStyle,
   errorStyle,
   hintStyle,
   inputStyle,
@@ -38,7 +45,7 @@ export type PresetApplyResult =
   | { readonly kind: 'readonly' }
   | { readonly kind: 'refused'; readonly message: string }
 
-/** Props of {@link PresetPanel}. */
+/** Props of {@link PresetPanel} and {@link PresetDialog}. */
 export interface PresetPanelProps {
   /** Localizer bound to this plugin's namespace. */
   t: Translate
@@ -54,7 +61,7 @@ export interface PresetPanelProps {
   onApply(preset: Preset): Promise<PresetApplyResult>
 }
 
-/** Rows rendered before the panel asks the user to narrow the search. */
+/** Rows rendered before the dialog asks the user to narrow the search. */
 const MAX_ROWS = 30
 
 /**
@@ -70,38 +77,75 @@ function matches(preset: Preset, query: string): boolean {
 }
 
 /**
- * Render the preset extension area.
+ * Footer extension area: the trigger plus its dialog.
  * @param props - catalogue, known routes, and the writer.
- * @returns the footer area.
+ * @returns the trigger row, and the dialog while it is open.
  */
-export function PresetPanel({ t, catalog, knownRouteIds, writable, unavailable = false, onApply }: PresetPanelProps): ReactNode {
+export function PresetPanel(props: PresetPanelProps): ReactNode {
+  const [open, setOpen] = useState(false)
+  const disabled = props.unavailable === true
+  return (
+    <>
+      <div style={addActionsStyle}>
+        <button
+          type="button"
+          style={{ ...addButtonStyle, opacity: disabled ? 0.4 : 1, cursor: disabled ? 'default' : 'pointer' }}
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+        >
+          {props.t('presetsTrigger')}
+          <span style={badgeStyle}>
+            {props.t('extension')}
+            {' · '}
+            {props.t('extensionOwner')}
+          </span>
+        </button>
+      </div>
+      {open ? <PresetDialog {...props} onClose={() => setOpen(false)} /> : null}
+    </>
+  )
+}
+
+/** {@link PresetDialog} props: the panel's, plus dismissal. */
+export interface PresetDialogProps extends PresetPanelProps {
+  /** Close the dialog without writing. */
+  onClose(): void
+}
+
+/**
+ * The preset catalogue as a dialog.
+ * @param props - catalogue, known routes, writer, and dismissal.
+ * @returns the dialog layer.
+ */
+export function PresetDialog({ t, catalog, knownRouteIds, writable, unavailable = false, onApply, onClose }: PresetDialogProps): ReactNode {
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<{ readonly kind: 'info' | 'error'; readonly text: string } | undefined>(undefined)
 
   const normalized = query.trim().toLowerCase()
-  const filtered = useMemo(
-    () => catalog.presets.filter(preset => matches(preset, normalized)),
-    [catalog.presets, normalized],
-  )
+  const filtered = useMemo(() => catalog.presets.filter(preset => matches(preset, normalized)), [catalog.presets, normalized])
   const visible = filtered.slice(0, MAX_ROWS)
   const remaining = filtered.length - visible.length
   const selected = filtered.find(preset => preset.id === selectedId)
+  const blocked = unavailable || !writable || selected === undefined || knownRouteIds.has(selected.id)
 
   const apply = async (preset: Preset): Promise<void> => {
-    if (busy || !writable || unavailable) return
+    if (busy || unavailable || !writable) return
     setBusy(true)
     setStatus(undefined)
     try {
       const result = await onApply(preset)
-      setStatus(result.kind === 'written'
-        ? { kind: 'info', text: t('presetWritten', { name: preset.name }) }
-        : result.kind === 'exists'
-          ? { kind: 'error', text: t('presetExists', { id: preset.id }) }
-          : result.kind === 'readonly'
-            ? { kind: 'error', text: t('presetReadOnly') }
-            : { kind: 'error', text: t('presetFailed', { message: result.message }) })
+      if (result.kind === 'written') {
+        setStatus({ kind: 'info', text: t('presetWritten', { name: preset.name }) })
+        setSelectedId(undefined)
+      } else if (result.kind === 'exists') {
+        setStatus({ kind: 'error', text: t('presetExists', { id: preset.id }) })
+      } else if (result.kind === 'readonly') {
+        setStatus({ kind: 'error', text: t('presetReadOnly') })
+      } else {
+        setStatus({ kind: 'error', text: t('presetFailed', { message: result.message }) })
+      }
     } catch (failure) {
       setStatus({ kind: 'error', text: t('presetFailed', { message: describe(failure) }) })
     } finally {
@@ -110,7 +154,26 @@ export function PresetPanel({ t, catalog, knownRouteIds, writable, unavailable =
   }
 
   return (
-    <ExtensionFrame t={t} title={t('presetsTitle')} surface="raised">
+    <StudioDialog
+      t={t}
+      title={t('presetsTitle')}
+      onClose={onClose}
+      footer={(
+        <>
+          <button type="button" style={quietButtonStyle} disabled={busy} onClick={onClose}>
+            {t('presetCancel')}
+          </button>
+          <button
+            type="button"
+            style={primaryButtonStyle}
+            disabled={busy || blocked}
+            onClick={() => { if (selected !== undefined) void apply(selected) }}
+          >
+            {busy ? t('presetApplying') : t('presetApply')}
+          </button>
+        </>
+      )}
+    >
       <p style={hintStyle}>{t('presetsHint')}</p>
       <p style={hintStyle}>
         {t('presetsSnapshot', { snapshot: catalog.snapshot, license: catalog.license })}
@@ -125,6 +188,7 @@ export function PresetPanel({ t, catalog, knownRouteIds, writable, unavailable =
         value={query}
         placeholder={t('presetsSearch')}
         aria-label={t('presetsSearch')}
+        autoFocus
         onChange={event => setQuery(event.target.value)}
       />
       <div style={listStyle} role="listbox" aria-label={t('presetsTitle')}>
@@ -184,23 +248,10 @@ export function PresetPanel({ t, catalog, knownRouteIds, writable, unavailable =
               </li>
             ))}
           </ul>
-          <div style={actionsStyle}>
-            <button
-              type="button"
-              style={primaryButtonStyle}
-              disabled={busy || !writable || unavailable || knownRouteIds.has(selected.id)}
-              onClick={() => { void apply(selected) }}
-            >
-              {busy ? t('presetApplying') : t('presetApply')}
-            </button>
-            <button type="button" style={quietButtonStyle} disabled={busy} onClick={() => setSelectedId(undefined)}>
-              {t('presetCancel')}
-            </button>
-          </div>
         </div>
       )}
       {status === undefined ? null : <p style={status.kind === 'error' ? errorStyle : noticeStyle}>{status.text}</p>}
-    </ExtensionFrame>
+    </StudioDialog>
   )
 }
 
