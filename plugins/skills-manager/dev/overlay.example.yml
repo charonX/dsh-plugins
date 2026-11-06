@@ -1,0 +1,11 @@
+# Local development overlay: insert the built host entry from this checkout.
+# Replace the absolute paths, then run from the harness checkout:
+#   pnpm dsh web --patch /path/to/dsh-skills-manager/dev/overlay.example.yml
+- insert:
+    - id: skills-manager
+      name: '/absolute/path/to/dsh-skills-manager/lib/index.js'
+      config:
+        libraryDir: /absolute/path/to/dsh-skills-manager/.dev/library
+        statePath: /absolute/path/to/dsh-skills-manager/.dev/manager-state.json
+        linksPath: /absolute/path/to/dsh-skills-manager/.dev/links.json
+        updatesPath: /absolute/path/to/dsh-skills-manager/.dev/updates.json
