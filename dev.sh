@@ -110,12 +110,25 @@ const mtime = (file) => {
   try { return fs.statSync(file).mtimeMs } catch { return 0 }
 }
 
+const candidateDirs = []
+const pluginsDir = path.join(workspace, 'plugins')
+if (fs.existsSync(pluginsDir)) {
+  for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && !entry.name.startsWith('.')) {
+      candidateDirs.push(path.join(pluginsDir, entry.name))
+    }
+  }
+}
 for (const entry of fs.readdirSync(workspace, { withFileTypes: true })) {
-  if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'deepseek-harness') continue
-  const dir = path.join(workspace, entry.name)
+  if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'deepseek-harness' || entry.name === 'plugins') continue
+  candidateDirs.push(path.join(workspace, entry.name))
+}
+
+for (const dir of candidateDirs) {
   const pkg = readJson(path.join(dir, 'package.json'))
   if (pkg?.dsh?.bundle === undefined) continue
 
+  const entryName = path.basename(dir)
   const hasBuild = typeof pkg.scripts?.build === 'string'
   const clientExport = pkg.exports?.['./client']
   const clientEntry = typeof clientExport === 'string' ? clientExport : clientExport?.default
@@ -130,7 +143,7 @@ for (const entry of fs.readdirSync(workspace, { withFileTypes: true })) {
     || (clientFile !== undefined && sourceNewest > clientNewest)
 
   console.log([
-    pkg.name ?? entry.name,
+    pkg.name ?? entryName,
     pkg.version ?? '-',
     dir,
     hasClient ? '1' : '0',

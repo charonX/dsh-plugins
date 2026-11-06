@@ -1,31 +1,34 @@
 # AGENTS.md
 
-本目录是 **DeepSeek Harness 插件开发工作区**，本身不是 npm 包，也不参与任何构建。它只是一个容器 + 工作区级约定：每个顶层子目录都是独立的 Git 仓库，各自安装依赖、各自构建、各自提交。
+本目录是 **DeepSeek Harness 插件开发工作区（dsh-plugins Monorepo）**。本仓库管理全部自建插件（位于 `plugins/`），并通过 pnpm workspace 统一管理依赖与构建；上游 `deepseek-harness` 保持源码独立检出，不纳入插件 Monorepo 版本追踪。
 
 ## 目录与仓库角色
 
 ```
 dsh/
 ├── AGENTS.md            # 工作区唯一权威说明（本文件），CLAUDE.md 为软链接
-├── .gitignore           # 只追踪工作区级文件；顶层子目录全部为独立仓库
+├── .gitignore           # 忽略上游 harness、node_modules 与产物
+├── pnpm-workspace.yaml  # pnpm workspace 配置（packages: ['plugins/*']）
+├── package.json         # Monorepo 根 package.json（定义跨插件 build/test/typecheck 脚本）
 ├── check-plugins-against-harness.sh  # harness 更新后校验全部插件（见「更新后的插件检查」）
-├── deepseek-harness/    # 上游 harness 源码 checkout（含自身 .git，分支 master，remote origin）
-├── dev.sh               # 工作区插件开发启动器（扫描自建插件 → 构建 → 官方 HMR 热重载）
-├── dsh-autoloop/        # 自建插件项目：确定性自动化中台与调度大屏（见其 README.md）
-├── dsh-immersive-translate/ # 自建插件：Agent 驱动的沉浸式双语翻译（见其 docs/DESIGN.md）
-├── dsh-media-station/   # 自建插件项目（含自身 .git），作为 dsh bundle 开发
-├── dsh-model-studio/    # 自建插件：模型层工作室（供应商预设 / compat 编辑 / 方言探测，见其 docs/SPEC.md）
-└── dsh-skills-manager/  # 自建插件项目：技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
+├── dev.sh               # 工作区插件开发启动器（扫描 plugins/* → 构建 → 官方 HMR 热重载）
+├── deepseek-harness/    # 上游 harness 源码 checkout（独立 .git，分支 master，remote origin）
+└── plugins/             # 自建插件集中目录（Monorepo 包）
+    ├── autoloop/            # 确定性自动化中台与调度大屏（见其 README.md）
+    ├── immersive-translate/ # Agent 驱动的沉浸式双语翻译（见其 docs/DESIGN.md）
+    ├── media-station/       # 自媒体工作站插件（见其 README.md）
+    ├── model-studio/        # 模型层工作室（供应商预设 / compat 编辑 / 方言探测，见其 docs/SPEC.md）
+    └── skills-manager/      # 技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
 ```
 
-| 仓库 | 角色 | 改动方式 |
+| 仓库 / 目录 | 角色 | 改动方式 |
 |---|---|---|
 | `deepseek-harness/` | Cordis "一切皆插件" 的 agent harness 本体，`@deepseek-ai/dsh-*` 包集合，当前 `0.2.2-alpha.3` | 阅读、构建、本地开发；需要上游修复才动它，按该仓库 `AGENTS.md` 的 PR/规范流程 |
-| 其他顶层目录 | 自建插件仓库，以 npm bundle 形式安装进 dsh profile | 只依赖 `@deepseek-ai/dsh-*`（peer/dev），不复制 harness 源码 |
+| `plugins/*` | 自建插件集合（Monorepo），以 npm bundle 形式安装进 dsh profile | 依赖 `@deepseek-ai/dsh-*`（peer/dev），使用根目录 pnpm 统一构建与测试 |
 
-已有插件仓库的入口文档：`dsh-skills-manager/README.md`（用法与 API）、`dsh-skills-manager/docs/DESIGN.md`（方案与阶段）、`dsh-immersive-translate/docs/DESIGN.md`（翻译方案与取舍）、`dsh-model-studio/docs/SPEC.md`（模型层规格与数据来源）；`dsh-media-station` 尚未实现。
+已有插件仓库的入口文档：`plugins/skills-manager/README.md`（用法与 API）、`plugins/skills-manager/docs/DESIGN.md`（方案与阶段）、`plugins/immersive-translate/docs/DESIGN.md`（翻译方案与取舍）、`plugins/model-studio/docs/SPEC.md`（模型层规格与数据来源）；`plugins/media-station` 尚未实现。
 
-插件仓库内**不要**复制或改写 harness 包源码；需要新增/修改上游能力时，在 `deepseek-harness/` 内开分支实现并走上游流程，插件侧继续通过公开扩展点接入。反之，harness 仓库里也不提交个人插件（官方 bundle 才进 `packages/bundle/`）。
+插件内**不要**复制或改写 harness 包源码；需要新增/修改上游能力时，在 `deepseek-harness/` 内开分支实现并走上游流程，插件侧继续通过公开扩展点接入。反之，harness 仓库里也不提交个人插件（官方 bundle 才进 `packages/bundle/`）。
 
 ## 环境
 

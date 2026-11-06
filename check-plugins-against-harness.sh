@@ -40,6 +40,9 @@ if [ ! -d "$harness" ]; then
 fi
 
 if [ ${#plugins[@]} -eq 0 ]; then
+  for dir in "$root"/plugins/*/; do
+    [ -f "$dir/package.json" ] && plugins+=("plugins/$(basename "$dir")")
+  done
   for dir in "$root"/dsh-*/; do
     [ -f "$dir/package.json" ] && plugins+=("$(basename "$dir")")
   done
@@ -103,15 +106,20 @@ declare -a results=()
 failed=0
 
 for name in "${plugins[@]}"; do
-  src="$root/$name"
-  if [ ! -f "$src/package.json" ]; then
+  if [ -f "$root/$name/package.json" ]; then
+    src="$root/$name"
+  elif [ -f "$root/plugins/$name/package.json" ]; then
+    src="$root/plugins/$name"
+    name="plugins/$name"
+  else
     results+=("$name|MISSING|")
     failed=1
     continue
   fi
 
-  dst="$work/$name"
-  cp -R "$src" "$dst"
+  dst="$work/${name//\//-}"
+  mkdir -p "$dst"
+  cp -R "$src/" "$dst/"
   rm -rf "$dst/node_modules" "$dst/lib" "$dst/client/client.js" "$dst/.git" "$dst/pnpm-lock.yaml"
 
   node - "$dst/package.json" "$work/packages.json" <<'EOF'

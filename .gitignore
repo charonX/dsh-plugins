@@ -1,9 +1,19 @@
-# 工作区根仓库只追踪工作区级文件（AGENTS.md 等）。
-# 每个顶层子目录都是独立 Git 仓库，由各自的 .git 管理。
-/*/
+# 上游 Harness 源码仓库与本地环境（独立追踪）
+deepseek-harness/
+.dsh/
+.agents/
+.pi/
 
-.DS_Store
+# 依赖与临时产物
 node_modules/
+.pnpm-store/
+coverage/
+test-results/
+playwright-report/
+blob-report/
+dist/
 *.log
+.DS_Store
 .env
 .env.*
+*.tgz

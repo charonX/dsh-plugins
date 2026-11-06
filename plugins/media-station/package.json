@@ -50,7 +50,7 @@
     }
   },
   "scripts": {
-    "build": "npm run build:host && npm run build:client",
+    "build": "npm run build:host && (test -f src/client/index.tsx && npm run build:client || exit 0)",
     "build:host": "tsc -p tsconfig.host.json",
     "build:client": "tsdown",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
