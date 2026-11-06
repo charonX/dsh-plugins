@@ -12,6 +12,10 @@ _Avoid_: Platform, framework, monolith, middle-office
 A pluggable provider that ingests external occurrences (e.g. Git, Cron, business webhooks) and emits immutable Events to the Kernel.
 _Avoid_: Listener, hook, trigger adapter
 
+**Connector (连接器)**:
+A bidirectional bridge that polls or watches state from external platforms (e.g. GitHub, GitLab, Sentry, TAPD) to ingest Events into the Kernel and writes execution results back upon completion.
+_Avoid_: Adapter, bridge, sync engine, integration service
+
 **Agent Plugin (Agent 插件)**:
 An execution adapter (e.g. DeepSeek Harness Agent, Claude Code, Codex) that receives dispatched work from the Kernel and returns results.
 _Avoid_: Runner, worker node, AI tool
