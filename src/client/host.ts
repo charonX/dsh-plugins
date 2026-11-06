@@ -93,16 +93,33 @@ function field(source: unknown, key: string): unknown {
 }
 
 /**
+ * Read a service through the context's inject-free accessor.
+ *
+ * Property access (`ctx.someService`) is guarded by the cordis inject rules and
+ * throws on a fiber that did not declare the dependency. This plugin keeps its
+ * dependency list minimal and degrades per surface, so it reads services the
+ * supported way instead.
+ * @param ctx - browser-side plugin context.
+ * @param name - service name.
+ * @returns the service, or undefined when this composition does not provide it.
+ */
+function service(ctx: Context, name: string): unknown {
+  const read = (ctx as unknown as { get?: (name: string) => unknown }).get
+  return typeof read === 'function' ? read.call(ctx, name) : undefined
+}
+
+/**
  * Build the client face over the services this composition provides.
  * @param ctx - browser-side plugin context.
  * @returns the operations the surfaces call.
  */
 export function createHostFace(ctx: Context): HostFace {
   const remote = (): { listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> } | undefined =>
-    field(field(ctx, 'remote'), 'llm') as { listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> } | undefined
+    field(service(ctx, 'remote'), 'llm') as
+      { listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> } | undefined
 
   const formFor = (namespace: string): ConfigFormLike | undefined => {
-    const forms = field(ctx, 'configForms') as { get?: (ns: string) => ConfigFormLike } | undefined
+    const forms = service(ctx, 'configForms') as { get?: (ns: string) => ConfigFormLike } | undefined
     return forms?.get?.(namespace)
   }
 
