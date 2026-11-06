@@ -355,12 +355,14 @@ export const groupStyle = {
   marginBottom: 14,
 } as const
 
-/** Group heading row. */
+/** Group heading row: one line, separated from the models below by a rule. */
 export const groupHeaderStyle = {
   display: 'flex',
-  alignItems: 'baseline',
+  alignItems: 'center',
   gap: 8,
   flexWrap: 'wrap' as const,
+  paddingBottom: 10,
+  borderBottom: `0.5px solid ${COLORS.border}`,
 } as const
 
 /** Group title. */
@@ -381,14 +383,81 @@ export const pageTitleStyle = {
   color: COLORS.text,
 } as const
 
+/** Models container: indented under the route header with a containment rail. */
+export const modelListStyle = {
+  display: 'flex',
+  flexDirection: 'column' as const,
+  marginTop: 10,
+  paddingLeft: 12,
+  borderLeft: `2px solid ${COLORS.border}`,
+} as const
+
 /** One model row inside a group. */
 export const modelRowStyle = {
   display: 'flex',
   flexDirection: 'column' as const,
   gap: 8,
-  padding: '10px 0',
+  padding: '8px 0',
   borderTop: `0.5px solid ${COLORS.border}`,
 } as const
+
+/** First model row carries no rule: the header already ends with one. */
+export const firstModelRowStyle = {
+  ...modelRowStyle,
+  borderTop: 'none',
+} as const
+
+/** The override editor, further indented so it clearly belongs to its model. */
+export const overridePanelStyle = {
+  display: 'flex',
+  flexDirection: 'column' as const,
+  gap: 0,
+  marginTop: 4,
+  paddingLeft: 12,
+  borderLeft: `2px solid ${COLORS.borderStrong}`,
+} as const
+
+/** Row meta text (capacity, levels). */
+export const metaStyle = {
+  fontSize: 12,
+  color: COLORS.tertiary,
+} as const
+
+/** Model name in a row. */
+export const modelNameStyle = {
+  fontSize: 13,
+  fontWeight: 500,
+  color: COLORS.text,
+} as const
+
+/** Fixed-width row action so buttons line up down the list. */
+export const rowActionStyle = {
+  ...quietButtonStyleBase(),
+  minWidth: 88,
+  height: 28,
+  padding: '0 10px',
+  borderRadius: COLORS.radiusSm,
+  fontSize: 12,
+  lineHeight: '18px',
+  marginLeft: 'auto',
+  flex: 'none',
+} as const
+
+/** Base geometry shared by the row action (declared before use above). */
+function quietButtonStyleBase() {
+  return {
+    boxSizing: 'border-box' as const,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    border: `0.5px solid ${COLORS.borderInput}`,
+    background: 'transparent',
+    color: COLORS.text,
+    font: 'inherit',
+    cursor: 'pointer',
+  }
+}
 
 /** Row summary line. */
 export const modelSummaryStyle = {

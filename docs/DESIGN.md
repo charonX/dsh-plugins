@@ -117,7 +117,11 @@
 在每张目录卡片内渲染（keyed 座位按 `settingsNs` 分发，含手写路由）。
 
 - 字段：`thinkingFormat`（12 选一，含"自动"）、`supportsDeveloperRole`、`supportsReasoningEffort`、
-  `supportsThinkingTokenBudget`、`maxTokensField`、`chatTemplateKwargs`（JSON 文本域）。
+  `supportsThinkingTokenBudget`、`maxTokensField`、`chatTemplateKwargs`。
+- `chatTemplateKwargs` 不让人从零写：pi-ai 的 `$var` 是有定义的词汇表
+  （`thinking.enabled` / `thinking.effort` / `thinking.budget`，`omitWhenOff` 表示关闭时不发该键），
+  所以先给四个已知形状（`enable_thinking`、`thinking`、`enable_thinking+preserve_thinking`、
+  `thinking_budget`）的下拉预设，选「自定义」才落到 JSON 文本域。
 - "自动" = `unset` 该字段 → 回到 `detectCompat()`。这是所有推测的唯一撤销方式，必须显眼。
 - 字段来源只按"用户层是否存在该键"判定，显示为**已显式设置 / 自动**。不引入"预设写的 / 手写的"
   标记：两者都在用户层，发明标记会污染用户配置，也无法在配置被复制到另一台机器后保持真实。
@@ -193,8 +197,9 @@ Esc、点遮罩、关闭按钮都能关；`role="dialog" aria-modal aria-labelle
 左栏 `settings.section` 新增一页，数据来自**同一个设置文档**（`providers.<route>.models[]`），
 因此行集就是实际参与调度的模型，不另建事实源：
 
-- 每条路由一组：名称、路由 id、端点、模型数；
-- 每个模型一行：名称、id、ctx/out、档位、已覆盖标记；
+- 每条路由一组：卡片头部（名称、路由 id（与名称相同时不重复）、模型数、端点右对齐），
+  头部下用一条分隔线 + **缩进竖线**把模型行框成子级，展开的编辑器再缩进一层；
+- 每个模型一行：名称、id、ctx/out、档位、已覆盖标记、右对齐等宽的「编辑覆盖」；
 - 展开后写 `models[i].compat`（当前只有模型级能力：思考预算，以及需要时的方言覆盖）；
 - 全部字段清空时**整块** `unset models[i].compat`，不留空对象；
 - 只读/未提供命名空间时说明原因，不渲染假按钮。

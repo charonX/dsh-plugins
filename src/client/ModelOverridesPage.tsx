@@ -20,18 +20,22 @@ import {
   badgeStyle,
   codeStyle,
   errorStyle,
-  fieldStyle,
+  firstModelRowStyle,
   groupHeaderStyle,
   groupStyle,
   groupTitleStyle,
   hintStyle,
-  labelStyle,
+  metaStyle,
+  modelListStyle,
+  modelNameStyle,
   modelRowStyle,
   modelSummaryStyle,
   noticeStyle,
+  overridePanelStyle,
   pageTitleStyle,
   primaryButtonStyle,
   quietButtonStyle,
+  rowActionStyle,
 } from './tokens.ts'
 
 /** Props of {@link ModelOverridesPage}. */
@@ -93,13 +97,22 @@ function RouteGroup({ t, route, disabled, onSave }: RouteGroupProps): ReactNode 
     <div style={groupStyle}>
       <div style={groupHeaderStyle}>
         <h3 style={groupTitleStyle}>{route.name}</h3>
-        <span style={codeStyle}>{route.routeId}</span>
-        {route.baseURL === undefined ? null : <span style={codeStyle}>{route.baseURL}</span>}
+        {route.routeId === route.name ? null : <span style={codeStyle}>{route.routeId}</span>}
         <span style={badgeStyle}>{t('modelsCount', { count: route.models.length })}</span>
+        {route.baseURL === undefined ? null : <span style={{ ...codeStyle, marginLeft: 'auto' }}>{route.baseURL}</span>}
       </div>
-      {route.models.map(model => (
-        <ModelRow key={model.path.join('\u0000')} t={t} model={model} disabled={disabled} onSave={onSave} />
-      ))}
+      <div style={modelListStyle}>
+        {route.models.map((model, position) => (
+          <ModelRow
+            key={model.path.join('\u0000')}
+            t={t}
+            model={model}
+            first={position === 0}
+            disabled={disabled}
+            onSave={onSave}
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -108,6 +121,8 @@ function RouteGroup({ t, route, disabled, onSave }: RouteGroupProps): ReactNode 
 interface ModelRowProps {
   t: Translate
   model: ModelEntryView
+  /** Whether this is the first row of its group (no leading rule). */
+  first: boolean
   disabled: boolean
   onSave(path: readonly string[], ops: PathOp[]): Promise<CompatSaveResult>
 }
@@ -117,7 +132,7 @@ interface ModelRowProps {
  * @param props - model, write state, and the writer.
  * @returns the row.
  */
-function ModelRow({ t, model, disabled, onSave }: ModelRowProps): ReactNode {
+function ModelRow({ t, model, first, disabled, onSave }: ModelRowProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<CompatDraft>(() => compatDraftOf(model.storedCompat))
   const [busy, setBusy] = useState(false)
@@ -152,13 +167,13 @@ function ModelRow({ t, model, disabled, onSave }: ModelRowProps): ReactNode {
   }
 
   return (
-    <div style={modelRowStyle}>
+    <div style={first ? firstModelRowStyle : modelRowStyle}>
       <div style={modelSummaryStyle}>
-        <strong style={{ fontSize: 13, fontWeight: 500 }}>{model.name}</strong>
-        <span style={codeStyle}>{model.id}</span>
-        {model.contextWindow === undefined ? null : <span style={codeStyle}>ctx {model.contextWindow}</span>}
-        {model.maxTokens === undefined ? null : <span style={codeStyle}>out {model.maxTokens}</span>}
-        <span style={codeStyle}>
+        <span style={modelNameStyle}>{model.name}</span>
+        {model.id === model.name ? null : <span style={codeStyle}>{model.id}</span>}
+        {model.contextWindow === undefined ? null : <span style={metaStyle}>ctx {model.contextWindow}</span>}
+        {model.maxTokens === undefined ? null : <span style={metaStyle}>out {model.maxTokens}</span>}
+        <span style={metaStyle}>
           {t('modelsEfforts')}
           {' '}
           {model.levels === undefined ? t('modelsNone') : model.levels.join(' / ')}
@@ -168,7 +183,7 @@ function ModelRow({ t, model, disabled, onSave }: ModelRowProps): ReactNode {
           : <span style={badgeStyle}>{t('modelsOverridden', { count: overridden.length })}</span>}
         <button
           type="button"
-          style={{ ...quietButtonStyle, marginLeft: 'auto' }}
+          style={rowActionStyle}
           disabled={disabled}
           onClick={() => setOpen(current => !current)}
           aria-expanded={open}
@@ -179,7 +194,7 @@ function ModelRow({ t, model, disabled, onSave }: ModelRowProps): ReactNode {
       </div>
       {open
         ? (
-          <div id={routeKey} style={fieldStyle}>
+          <div id={routeKey} style={overridePanelStyle}>
             <CompatFields
               t={t}
               idPrefix={routeKey}

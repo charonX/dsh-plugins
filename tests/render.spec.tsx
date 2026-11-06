@@ -136,6 +136,14 @@ describe('CompatEditor', () => {
     expect(html).toContain('max_completion_tokens')
   })
 
+  it('offers known chat_template_kwargs shapes instead of a blank JSON box', () => {
+    const html = render()
+    expect(html).toContain('compatKwargsPreset')
+    expect(html).toContain('enable_thinking')
+    expect(html).toContain('thinking_budget')
+    expect(html).toContain('compatKwargsHint')
+  })
+
   it('shows the stored value as the current selection', () => {
     expect(render({ thinkingFormat: 'zai' })).toContain('value="zai"')
   })
@@ -194,6 +202,36 @@ describe('ModelOverridesPage', () => {
 
   it('marks a model that already carries an override', () => {
     expect(render()).toContain('modelsOverridden[count=1]')
+  })
+
+  it('gives every model row the same action, so the list reads as one level', () => {
+    const html = render()
+    expect(html.match(/modelOverrideEdit/g) ?? []).toHaveLength(2)
+  })
+
+  it('does not repeat the route id when it equals the display name', () => {
+    const html = renderToStaticMarkup(
+      <ModelOverridesPage
+        t={t}
+        routes={[{
+          routeId: 'gw-x',
+          name: 'gw-x',
+          baseURL: 'https://example.test/v1',
+          models: [{
+            index: 0,
+            id: 'model-a',
+            name: 'Model A',
+            path: ['providers', 'gw-x', 'models', '0'],
+          }],
+        }]}
+        available
+        writable
+        onSave={async () => ({ kind: 'saved' })}
+      />,
+    )
+    // Only the heading carries the id as text; the row's aria-controls also
+    // mentions it, which is an attribute rather than a visible duplicate.
+    expect(html.match(/>gw-x</g) ?? []).toHaveLength(1)
   })
 
   it('explains an empty page instead of rendering nothing', () => {
