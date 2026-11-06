@@ -96,12 +96,13 @@
     "access": "public"
   },
   "author": "charonX",
-  "homepage": "https://github.com/charonX/dsh-skills-manager#readme",
+  "homepage": "https://github.com/charonX/dsh-plugins/tree/main/plugins/skills-manager#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/charonX/dsh-skills-manager.git"
+    "url": "git+https://github.com/charonX/dsh-plugins.git",
+    "directory": "plugins/skills-manager"
   },
   "bugs": {
-    "url": "https://github.com/charonX/dsh-skills-manager/issues"
+    "url": "https://github.com/charonX/dsh-plugins/issues"
   }
 }

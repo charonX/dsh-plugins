@@ -79,5 +79,10 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.11"
   },
-  "author": "charonX"
+  "author": "charonX",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/charonX/dsh-plugins.git",
+    "directory": "plugins/autoloop"
+  }
 }
