@@ -22,8 +22,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Preset } from '../shared/preset.ts'
 import { modelRoutesOf, type ModelRouteView } from './model-view.ts'
 import { presetConflict, presetOps, type PathOp } from './ops.ts'
-import type { CompatSaveResult } from './CompatEditor.tsx'
-import type { PresetApplyResult } from './PresetPanel.tsx'
+import type { CompatSaveResult, PresetApplyResult } from './results.ts'
 
 /** One served settings namespace, as the describe mirror holds it. */
 export interface NamespaceView {
@@ -80,6 +79,11 @@ export interface DirectorySnapshot {
   readonly routePrefix: readonly string[]
   /** Whether that namespace's document accepts writes. */
   readonly writable: boolean
+  /**
+   * Whether the provider directory answered too, so route-id conflicts are
+   * checked against shipped catalog routes as well as stored profiles.
+   */
+  readonly complete: boolean
 }
 
 /** The model page's view of the loaded profiles. */
@@ -208,26 +212,28 @@ export function createHostFace(ctx: Context): HostFace {
     const stored = field(namespaceViewOf(held, providerNamespaceOf(held?.namespaces ?? []))?.value, 'providers')
     const routeIds = new Set<string>(typeof stored === 'object' && stored !== null ? Object.keys(stored) : [])
     let piAiNamespace = providerNamespaceOf(held?.namespaces ?? [])
+    let complete = false
     const remote = service<{ llm?: { listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> } }>(ctx, 'remote')?.llm
-    if (piAiNamespace === undefined) {
-      try {
-        const answer = await remote?.listConfigurableProviders?.()
-        if (answer?.ok === true) {
-          const rows = answer.value ?? []
-          for (const row of rows) routeIds.add(row.provider)
-          piAiNamespace = rows.find(row => (row.settingsPath ?? [])[0] === ROUTE_PREFIX[0])?.settingsNs
-        }
-      } catch (failure) {
-        // The directory only feeds the preset conflict check; a failed read
-        // must not blank the pages.
-        console.warn('model-studio: provider directory read failed', failure)
+    try {
+      const answer = await remote?.listConfigurableProviders?.()
+      if (answer?.ok === true) {
+        const rows = answer.value ?? []
+        for (const row of rows) routeIds.add(row.provider)
+        piAiNamespace ??= rows.find(row => (row.settingsPath ?? [])[0] === ROUTE_PREFIX[0])?.settingsNs
+        complete = true
       }
+    } catch (failure) {
+      // The directory only feeds the preset conflict check; a failed read must
+      // not blank the page, but the caller should stop offering writes that
+      // could overwrite a shipped route.
+      console.warn('model-studio: provider directory read failed', failure)
     }
     return {
       routeIds,
       piAiNamespace,
       routePrefix: ROUTE_PREFIX,
       writable: held?.writable === true,
+      complete,
     }
   }
 

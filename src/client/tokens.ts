@@ -28,25 +28,6 @@ export const COLORS = {
   radiusLg: 'var(--dsw-radius-lg, 12px)',
 } as const
 
-/** Separator + ownership label row shared by both extension areas. */
-export const frameStyle = {
-  marginTop: 12,
-  paddingTop: 10,
-  borderTop: `0.5px solid ${COLORS.border}`,
-} as const
-
-/** Collapsed disclosure header. */
-export const summaryStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  cursor: 'pointer',
-  listStyle: 'none',
-  fontSize: 13,
-  fontWeight: 500,
-  color: COLORS.text,
-} as const
-
 /** The `扩展 · <owner>` marker that keeps plugin content distinguishable. */
 export const badgeStyle = {
   fontSize: 11,
@@ -57,17 +38,6 @@ export const badgeStyle = {
   borderRadius: COLORS.radiusSm,
   padding: '1px 6px',
 } as const
-
-/** Body container: recessed inside a provider card, raised on the settings page. */
-export function bodyStyle(surface: 'raised' | 'recessed') {
-  return {
-    marginTop: 10,
-    padding: 10,
-    background: surface === 'raised' ? COLORS.layer2 : COLORS.layer1,
-    border: `0.5px solid ${COLORS.border}`,
-    borderRadius: COLORS.radiusMd,
-  } as const
-}
 
 /** Supporting copy line. */
 export const hintStyle = {
@@ -187,11 +157,6 @@ export const addButtonStyle = {
   borderRadius: COLORS.radiusLg,
   background: 'transparent',
   color: COLORS.text,
-} as const
-
-/** Row that holds the trigger; matches the page's own add-action row. */
-export const addActionsStyle = {
-  display: 'flex',
 } as const
 
 /** Full-viewport layer, matching the page's dialog shell. */

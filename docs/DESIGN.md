@@ -14,13 +14,12 @@
 仅用于让 bundle 的 patch 行成立。插件不注册 HTTP 路由、不读凭据、不改任何服务方法、
 不写 Host 侧状态。
 
-它补的是官方「设置 → 模型」页的两处官方缺口：
+**不再向官方「设置 → 模型」页注入任何内容**（早期版本在 footer 加了预设入口、在供应商卡片里加了兼容块，
+都已撤掉，官方页面保持原样）。插件只有一个座位：
 
 | 座位 | 组件 | 作用 |
 |---|---|---|
-| `settings.models.footer`（list） | `PresetPanel` | 与官方"添加模型提供商"同尺寸的入口按钮；点开是插件自己的弹窗，从数据快照写入一条完整路由（端点 / 协议 / 密钥变量 / 代表模型 / 兼容块） |
-| `settings.models.provider-card`（keyed，key = `settingsNs`） | `CompatEditor` | 逐字段编辑**路由级**兼容块（网关怎么说），或清除回到自动探测 |
-| `settings.section`（左栏一页） | `ModelOverridesPage` | 列出「模型」页已加载的每条路由与模型，逐模型写 `models[i].compat`（模型级覆盖） |
+| `settings.section`（左栏一页「模型覆盖」） | `ModelOverridesPage` | 一页容纳三件事：从数据快照添加一条路由；每条路由的**供应商级**兼容块；每个模型的**模型级**覆盖 |
 
 官方已经具备、本插件**不碰**的：供应商增删、模型列表、`/models` 探测、API key 输入、
 `reasoningEfforts` 档位编辑、上下文 / 最大输出 / 输入模态、模型选择器。
@@ -154,10 +153,9 @@ src/data/presets.generated.ts
 src/shared/preset.ts    # 生成物类型（两端共用）
 ```
 
-- **座位注册**：footer 按 list 注册（`id: 'model-studio.presets'`，`order: 40`）。
-  provider-card 是 keyed 槽，key 必须是确切的 `settingsNs`，所以整个注册挂在
-  `ctx.inject(['remote.llm'], …)` 里等 llm Remote 就绪，再用
-  `listConfigurableProviders()` 解析命名空间；读不到时退回 `'llm-pi-ai'`。
+- **座位注册**：只注册 `settings.section`（`id: 'model-studio'`，`order: 70`），整个注册挂在
+  `ctx.inject(['remote.llm'], …)` 里等 llm Remote 就绪；命名空间从 settings describe 镜像里
+  按"值带 `providers` 字典"识别，不硬编码条目 id。
 - **数据源**：两个页面都从 **settings describe 镜像**（`ctx.configForms.describe()`）读，
   那是官方模型页用的同一份答案，含每个命名空间的脱敏值、revision 与 writable；因此页面里的行
   就是实际参与调度的配置，不需要每次读都走一次 Remote。`llm/listConfigurableProviders` 只在
@@ -172,11 +170,6 @@ src/shared/preset.ts    # 生成物类型（两端共用）
 
 官方页面里插进来的东西必须自证身份，否则用户无从区分。
 
-**footer（预设入口）**——不再是一个"看不明白点哪"的常驻面板，而是与官方 `addButton`
-同几何的一个控件：`flex: 1 1 0`、`min-width: 180px`、`height: 44px`、`border: 1px dashed
---dsw-alias-border-l3`、`border-radius: --dsw-radius-lg`、字号 14/22。归属标记
-`扩展 · model-studio` 以 `--dsw-alias-label-tertiary` 的小徽标形式留在按钮内，不额外占一行。
-
 **弹窗**——`StudioDialog` 复刻官方 `Modal` 的几何（该 primitives 包不是可安装的客户端模块，
 不能直接 import）：根层 `position: fixed; inset: 0; z-index: 1000; padding: max(24px,
 --dsh-frame-overlay-top) 24px`；遮罩 `--dsw-alias-bg-mask-1` + `--dsw-mask-blur`；
@@ -184,21 +177,19 @@ src/shared/preset.ts    # 生成物类型（两端共用）
 头部 padding `22px 14px 12px 24px`、标题 16/24/500、关闭按钮 28×28，正文/尾部 padding `0 24px`。
 Esc、点遮罩、关闭按钮都能关；`role="dialog" aria-modal aria-labelledby`。
 
-**卡片内（兼容块）**——沿用官方"自定义设置"的 `<details>/<summary>` 折叠，**默认折叠**，
-顶部 0.5px `--dsw-alias-border-l2` 分隔线，标签固定为 `扩展 · model-studio`，
-`title`/`aria-label` 给出完整句："此区域由插件 model-studio 提供，非官方功能"。
-
 按钮几何与官方一致：36px 行高、`padding: 0 14px`、`--dsw-radius-md`、字号 14/22；
 主按钮用 `--dsw-alias-button-primary-fill`，次按钮用 `--dsw-alias-border-l3` 描边。
 深浅色跟随：只用 token（`tokens.ts` 里的 fallback 只在宿主改名时兜底）。
 
 ## 8.5 模型页（模型级覆盖）
 
-左栏 `settings.section` 新增一页，数据来自**同一个设置文档**（`providers.<route>.models[]`），
+左栏 `settings.section` 一页承载全部编辑能力，数据来自**同一个设置文档**（`providers.<route>`），
 因此行集就是实际参与调度的模型，不另建事实源：
 
+- 页首：标题 + 右侧「从预设添加提供商」按钮（弹窗），以及数据快照说明；
 - 每条路由一组：卡片头部（名称、路由 id（与名称相同时不重复）、模型数、端点右对齐），
-  头部下用一条分隔线 + **缩进竖线**把模型行框成子级，展开的编辑器再缩进一层；
+  头部下先放「编辑供应商级兼容」的展开区（供应商级字段），再用一条分隔线 + **缩进竖线**
+  把模型行框成子级，展开的编辑器再缩进一层；
 - 每个模型一行：名称、id、ctx/out、档位、已覆盖标记、右对齐等宽的「编辑覆盖」；
 - 展开后写 `models[i].compat`（当前只有模型级能力：思考预算，以及需要时的方言覆盖）；
 - 全部字段清空时**整块** `unset models[i].compat`，不留空对象；

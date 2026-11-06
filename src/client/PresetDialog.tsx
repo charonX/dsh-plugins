@@ -1,28 +1,22 @@
 /**
- * Footer extension area: write one complete route from a snapshot preset.
+ * The preset catalogue as a dialog.
  *
- * The area is a single trigger that sits where the page's own "add provider"
- * control sits, so it reads as one more way to add a provider instead of a
- * panel with no obvious action. The catalogue itself lives in a dialog on the
- * page's own mask and elevation.
+ * The catalogue is no longer injected into the official Models page: this
+ * dialog opens from the model-studio settings page, which owns adding a route
+ * from a snapshot preset. The dialog is deliberately dumb about the Host — it
+ * receives the catalogue, the route ids the page already knows, and one async
+ * writer — so the render stays testable without a browser.
  *
- * The panel is deliberately dumb about the Host: it receives the catalogue, the
- * route ids the page already knows, and one async writer. Everything it decides
- * (search, conflict refusal, status copy) is derived from those props, which is
- * what makes the render testable without a browser.
- *
- * @module dsh-model-studio/client/PresetPanel
+ * @module dsh-model-studio/client/PresetDialog
  */
 
 import { useMemo, useState, type ReactNode } from 'react'
 import type { Preset, PresetCatalog } from '../shared/preset.ts'
 import { compatSummary } from './ops.ts'
+import type { PresetApplyResult } from './results.ts'
 import { StudioDialog } from './StudioDialog.tsx'
 import type { Translate } from './locales.ts'
 import {
-  addActionsStyle,
-  addButtonStyle,
-  badgeStyle,
   errorStyle,
   hintStyle,
   inputStyle,
@@ -38,27 +32,22 @@ import {
   valueStyle,
 } from './tokens.ts'
 
-/** What one apply attempt answered. */
-export type PresetApplyResult =
-  | { readonly kind: 'written' }
-  | { readonly kind: 'exists' }
-  | { readonly kind: 'readonly' }
-  | { readonly kind: 'refused'; readonly message: string }
-
-/** Props of {@link PresetPanel} and {@link PresetDialog}. */
-export interface PresetPanelProps {
+/** Props of {@link PresetDialog}. */
+export interface PresetDialogProps {
   /** Localizer bound to this plugin's namespace. */
   t: Translate
   /** Snapshot catalogue. */
   catalog: PresetCatalog
-  /** Route ids the page already knows (shipped catalog routes and stored profiles). */
+  /** Route ids the page already knows (stored profiles). */
   knownRouteIds: ReadonlySet<string>
   /** Whether the owning settings document accepts writes. */
   writable: boolean
-  /** Set when the provider directory could not be read, so conflicts cannot be checked. */
+  /** Set when the provider directory could not be read, so conflicts are unknown. */
   unavailable?: boolean
   /** Writer supplied by the seat; performs the settings mutation. */
   onApply(preset: Preset): Promise<PresetApplyResult>
+  /** Close the dialog without writing. */
+  onClose(): void
 }
 
 /** Rows rendered before the dialog asks the user to narrow the search. */
@@ -77,43 +66,7 @@ function matches(preset: Preset, query: string): boolean {
 }
 
 /**
- * Footer extension area: the trigger plus its dialog.
- * @param props - catalogue, known routes, and the writer.
- * @returns the trigger row, and the dialog while it is open.
- */
-export function PresetPanel(props: PresetPanelProps): ReactNode {
-  const [open, setOpen] = useState(false)
-  const disabled = props.unavailable === true
-  return (
-    <>
-      <div style={addActionsStyle}>
-        <button
-          type="button"
-          style={{ ...addButtonStyle, opacity: disabled ? 0.4 : 1, cursor: disabled ? 'default' : 'pointer' }}
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-        >
-          {props.t('presetsTrigger')}
-          <span style={badgeStyle}>
-            {props.t('extension')}
-            {' · '}
-            {props.t('extensionOwner')}
-          </span>
-        </button>
-      </div>
-      {open ? <PresetDialog {...props} onClose={() => setOpen(false)} /> : null}
-    </>
-  )
-}
-
-/** {@link PresetDialog} props: the panel's, plus dismissal. */
-export interface PresetDialogProps extends PresetPanelProps {
-  /** Close the dialog without writing. */
-  onClose(): void
-}
-
-/**
- * The preset catalogue as a dialog.
+ * Render the preset catalogue.
  * @param props - catalogue, known routes, writer, and dismissal.
  * @returns the dialog layer.
  */

@@ -12,11 +12,12 @@ vocabulary is [GLOSSARY.md](GLOSSARY.md).
 
 ## Status
 
-Repository skeleton with a green baseline (typecheck, tests, build), plus a settled design.
-Scope for the first version: a snapshot-driven provider preset panel and a per-route
-endpoint-compatibility editor — both inside the official Models page. Probing and dialect
-memory are deliberately out of scope for now; [ADR-0001](docs/adr/0001-no-probe-snapshot-derived-compat.md)
-records why and what would bring them back.
+One settings page (Settings → Model overrides) and nothing injected into the official
+Models page: add a provider from the snapshot preset catalogue, edit a route's
+gateway-level compatibility, and override compatibility per model. Probing and dialect
+memory are deliberately out of scope for now;
+[ADR-0001](docs/adr/0001-no-probe-snapshot-derived-compat.md) records why and what would
+bring them back.
 
 ## Development
 

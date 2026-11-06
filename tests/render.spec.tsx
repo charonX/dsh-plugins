@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ExtensionFrame } from '../src/client/ExtensionFrame.tsx'
-import { PresetDialog, PresetPanel } from '../src/client/PresetPanel.tsx'
-import { CompatEditor } from '../src/client/CompatEditor.tsx'
+import { StudioDialog } from '../src/client/StudioDialog.tsx'
+import { PresetDialog } from '../src/client/PresetDialog.tsx'
 import { ModelOverridesPage } from '../src/client/ModelOverridesPage.tsx'
 import type { Translate } from '../src/client/locales.ts'
+import type { ModelRouteView } from '../src/client/model-view.ts'
 import type { PresetCatalog } from '../src/shared/preset.ts'
 
 /** Localizer that renders keys and params verbatim, so assertions can name them. */
@@ -29,48 +29,47 @@ const catalog: PresetCatalog = {
   ],
 }
 
-describe('ExtensionFrame', () => {
-  it('marks the area as plugin-contributed', () => {
+const routes: readonly ModelRouteView[] = [
+  {
+    routeId: 'siliconflow',
+    name: 'SiliconFlow',
+    path: ['providers', 'siliconflow'],
+    baseURL: 'https://api.siliconflow.cn/v1',
+    storedCompat: { thinkingFormat: 'qwen' },
+    models: [
+      {
+        index: 0,
+        id: 'Qwen/Qwen3-8B',
+        name: 'Qwen3 8B',
+        path: ['providers', 'siliconflow', 'models', '0'],
+        contextWindow: 32768,
+        maxTokens: 8192,
+        levels: ['off', 'high'],
+      },
+      {
+        index: 1,
+        id: 'deepseek-ai/DeepSeek-OCR',
+        name: 'DeepSeek OCR',
+        path: ['providers', 'siliconflow', 'models', '1'],
+        storedCompat: { supportsThinkingTokenBudget: true },
+      },
+    ],
+  },
+]
+
+describe('StudioDialog', () => {
+  it('is a labelled modal that marks its owner', () => {
     const html = renderToStaticMarkup(
-      <ExtensionFrame t={t} title="Endpoint compatibility" surface="recessed"><p>body</p></ExtensionFrame>,
+      <StudioDialog t={t} title="Title" onClose={() => {}} footer={<p>footer</p>}>
+        <p>body</p>
+      </StudioDialog>,
     )
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('aria-modal="true"')
     expect(html).toContain('extension')
     expect(html).toContain('extensionOwner')
-    expect(html).toContain('extensionHint')
+    expect(html).toContain('footer')
     expect(html).toContain('body')
-  })
-
-  it('starts collapsed unless asked otherwise', () => {
-    const closed = renderToStaticMarkup(<ExtensionFrame t={t} title="x" surface="raised"><p>b</p></ExtensionFrame>)
-    const opened = renderToStaticMarkup(<ExtensionFrame t={t} title="x" surface="raised" defaultOpen><p>b</p></ExtensionFrame>)
-    expect(closed).not.toContain('open=""')
-    expect(opened).toContain('open=""')
-  })
-})
-
-describe('PresetPanel', () => {
-  const render = (props: { writable?: boolean; unavailable?: boolean } = {}) => renderToStaticMarkup(
-    <PresetPanel
-      t={t}
-      catalog={catalog}
-      knownRouteIds={new Set()}
-      writable={props.writable ?? true}
-      unavailable={props.unavailable}
-      onApply={async () => ({ kind: 'written' })}
-    />,
-  )
-
-  it('renders one trigger labelled like the page\'s own add control', () => {
-    const html = render()
-    expect(html).toContain('presetsTrigger')
-    expect(html).toContain('extension')
-    // The catalogue stays closed until the trigger is used.
-    expect(html).not.toContain('type="search"')
-    expect(html).not.toContain('presetsSnapshot')
-  })
-
-  it('disables the trigger when the directory cannot be read', () => {
-    expect(render({ unavailable: true })).toContain('disabled=""')
   })
 })
 
@@ -86,13 +85,6 @@ describe('PresetDialog', () => {
       onClose={() => {}}
     />,
   )
-
-  it('is a labelled modal with the page-matching shell', () => {
-    const html = render()
-    expect(html).toContain('role="dialog"')
-    expect(html).toContain('aria-modal="true"')
-    expect(html).toContain('close')
-  })
 
   it('states where the data came from and what was excluded', () => {
     const html = render()
@@ -115,89 +107,35 @@ describe('PresetDialog', () => {
   })
 })
 
-describe('CompatEditor', () => {
-  const render = (stored: unknown = undefined, writable = true, available = true) => renderToStaticMarkup(
-    <CompatEditor
-      t={t}
-      routeId="siliconflow"
-      routeName="SiliconFlow"
-      compatPath={['providers', 'siliconflow', 'compat']}
-      stored={stored}
-      available={available}
-      writable={writable}
-      onSave={async () => ({ kind: 'saved' })}
-    />,
-  )
-
-  it('offers auto plus every adapter format', () => {
-    const html = render()
-    expect(html).toContain('compatAuto')
-    expect(html).toContain('qwen-chat-template')
-    expect(html).toContain('max_completion_tokens')
-  })
-
-  it('offers known chat_template_kwargs shapes instead of a blank JSON box', () => {
-    const html = render()
-    expect(html).toContain('compatKwargsPreset')
-    expect(html).toContain('enable_thinking')
-    expect(html).toContain('thinking_budget')
-    expect(html).toContain('compatKwargsHint')
-  })
-
-  it('shows the stored value as the current selection', () => {
-    expect(render({ thinkingFormat: 'zai' })).toContain('value="zai"')
-  })
-
-  it('disables editing when the namespace is unavailable or read-only', () => {
-    expect(render(undefined, true, false)).toContain('compatUnavailable')
-    expect(render(undefined, false, true)).toContain('disabled=""')
-  })
-})
-
 describe('ModelOverridesPage', () => {
-  const routes = [
-    {
-      routeId: 'siliconflow',
-      name: 'SiliconFlow',
-      baseURL: 'https://api.siliconflow.cn/v1',
-      models: [
-        {
-          index: 0,
-          id: 'Qwen/Qwen3-8B',
-          name: 'Qwen3 8B',
-          path: ['providers', 'siliconflow', 'models', '0'],
-          contextWindow: 32768,
-          maxTokens: 8192,
-          levels: ['off', 'high'],
-        },
-        {
-          index: 1,
-          id: 'deepseek-ai/DeepSeek-OCR',
-          name: 'DeepSeek OCR',
-          path: ['providers', 'siliconflow', 'models', '1'],
-          storedCompat: { supportsThinkingTokenBudget: true },
-        },
-      ],
-    },
-  ] as const
-
-  const render = (extra: { available?: boolean; writable?: boolean } = {}) => renderToStaticMarkup(
+  const render = (extra: { available?: boolean; writable?: boolean; routes?: readonly ModelRouteView[] } = {}) => renderToStaticMarkup(
     <ModelOverridesPage
       t={t}
-      routes={routes}
+      routes={extra.routes ?? routes}
       available={extra.available ?? true}
       writable={extra.writable ?? true}
-      onSave={async () => ({ kind: 'saved' })}
+      catalog={catalog}
+      knownRouteIds={new Set(['siliconflow'])}
+      onSaveModel={async () => ({ kind: 'saved' })}
+      onSaveRoute={async () => ({ kind: 'saved' })}
+      onApplyPreset={async () => ({ kind: 'written' })}
     />,
   )
+
+  it('offers the preset entry from its own page', () => {
+    expect(render()).toContain('presetsTrigger')
+  })
 
   it('lists the loaded routes and their models', () => {
     const html = render()
-    expect(html).toContain('modelsTitle')
     expect(html).toContain('SiliconFlow')
     expect(html).toContain('Qwen/Qwen3-8B')
     expect(html).toContain('deepseek-ai/DeepSeek-OCR')
     expect(html).toContain('modelsCount[count=2]')
+  })
+
+  it('exposes a gateway-level editor per route', () => {
+    expect(render()).toContain('routeCompatEdit')
   })
 
   it('marks a model that already carries an override', () => {
@@ -205,40 +143,31 @@ describe('ModelOverridesPage', () => {
   })
 
   it('gives every model row the same action, so the list reads as one level', () => {
-    const html = render()
-    expect(html.match(/modelOverrideEdit/g) ?? []).toHaveLength(2)
+    expect((render().match(/modelOverrideEdit/g) ?? [])).toHaveLength(2)
   })
 
   it('does not repeat the route id when it equals the display name', () => {
-    const html = renderToStaticMarkup(
-      <ModelOverridesPage
-        t={t}
-        routes={[{
-          routeId: 'gw-x',
-          name: 'gw-x',
-          baseURL: 'https://example.test/v1',
-          models: [{
-            index: 0,
-            id: 'model-a',
-            name: 'Model A',
-            path: ['providers', 'gw-x', 'models', '0'],
-          }],
-        }]}
-        available
-        writable
-        onSave={async () => ({ kind: 'saved' })}
-      />,
-    )
+    const html = render({
+      routes: [{
+        routeId: 'gw-x',
+        name: 'gw-x',
+        path: ['providers', 'gw-x'],
+        baseURL: 'https://example.test/v1',
+        models: [{
+          index: 0,
+          id: 'model-a',
+          name: 'Model A',
+          path: ['providers', 'gw-x', 'models', '0'],
+        }],
+      }],
+    })
     // Only the heading carries the id as text; the row's aria-controls also
     // mentions it, which is an attribute rather than a visible duplicate.
     expect(html.match(/>gw-x</g) ?? []).toHaveLength(1)
   })
 
   it('explains an empty page instead of rendering nothing', () => {
-    const html = renderToStaticMarkup(
-      <ModelOverridesPage t={t} routes={[]} available writable onSave={async () => ({ kind: 'saved' })} />,
-    )
-    expect(html).toContain('modelsEmpty')
+    expect(render({ routes: [] })).toContain('modelsEmpty')
   })
 
   it('states why writes are unavailable', () => {

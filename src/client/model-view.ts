@@ -35,8 +35,12 @@ export interface ModelRouteView {
   readonly routeId: string
   /** Display name. */
   readonly name: string
+  /** Path from the namespace root to this route. */
+  readonly path: readonly string[]
   /** Endpoint, when declared. */
   readonly baseURL?: string
+  /** Stored gateway-level compat block, when one exists. */
+  readonly storedCompat?: unknown
   /** Declared models in configuration order. */
   readonly models: readonly ModelEntryView[]
 }
@@ -97,7 +101,9 @@ export function modelRoutesOf(value: unknown, routePrefix: readonly string[]): M
       name: typeof profile['displayName'] === 'string' && profile['displayName'].length > 0
         ? profile['displayName']
         : routeId,
+      path: [...routePrefix, routeId],
       ...typeof profile['baseURL'] === 'string' ? { baseURL: profile['baseURL'] } : {},
+      ...profile['compat'] === undefined ? {} : { storedCompat: profile['compat'] },
       models: entries,
     })
   }
