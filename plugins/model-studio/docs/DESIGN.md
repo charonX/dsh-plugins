@@ -1,0 +1,226 @@
+# dsh-model-studio — 实现设计
+
+本文是 [SPEC.md](./SPEC.md) 的实现层补充，不是它的替代品：SPEC 记录"为什么/能不能"，
+本文记录"这一版做成什么样、边界在哪、错了怎么收场"。与 SPEC 冲突时以本文为准，
+并把差异记在 [adr/0001](./adr/0001-no-probe-snapshot-derived-compat.md) 里。
+
+术语见仓库根目录 [GLOSSARY.md](../GLOSSARY.md)（路由 / 网关 / 供应商 / 方言 / 兼容块 …）。
+
+---
+
+## 1. 形态
+
+一个**纯客户端插件**：只有 `src/client/` 会运行，`src/index.ts`（Host 半）保持空入口，
+仅用于让 bundle 的 patch 行成立。插件不注册 HTTP 路由、不读凭据、不改任何服务方法、
+不写 Host 侧状态。
+
+**不再向官方「设置 → 模型」页注入任何内容**（早期版本在 footer 加了预设入口、在供应商卡片里加了兼容块，
+都已撤掉，官方页面保持原样）。插件只有一个座位：
+
+| 座位 | 组件 | 作用 |
+|---|---|---|
+| `settings.section`（左栏一页「模型覆盖」） | `ModelOverridesPage` | 一页容纳三件事：从数据快照添加一条路由；每条路由的**供应商级**兼容块；每个模型的**模型级**覆盖 |
+
+官方已经具备、本插件**不碰**的：供应商增删、模型列表、`/models` 探测、API key 输入、
+`reasoningEfforts` 档位编辑、上下文 / 最大输出 / 输入模态、模型选择器。
+
+## 2. 不在这一版范围内
+
+- **不实现探测**（SPEC §5.2）与**不实现记忆**（SPEC §5.3）。理由与回退路径见 ADR-0001。
+- **不实现 M4**（每模型默认思考档位、批量套用）：它改的是会话默认行为，等前两块稳定后单独设计。
+- 不新建独立设置页；插件没有自己的配置项，因此没有 `Config` schema、没有 settings 命名空间。
+
+## 3. 事实基线（实现依赖的、已核对的上游行为）
+
+| 事实 | 位置 |
+|---|---|
+| 兜底方言：`detectCompat()` 从 provider / baseURL 猜，猜不到就 `openai`；`openai` 的 `off` 什么都不发 | `pi-ai/dist/api/openai-completions.js` `detectCompat()` / `getCompat()` |
+| 未命中 `isNonStandard` 的路由，`supportsDeveloperRole` 默认 `true`；一旦模型声明推理，系统消息改发 `developer` 角色 | 同上 |
+| 兼容块的字段受协议 gate 限制，`thinkingFormat` 只对 `openai-completions` 生效 | `llm-pi-ai/src/catalog.ts` `resolveModelCompat()` / `compatGate()` |
+| 路由级 `compat` 对不接受的模型"跳过"，但"任何协议都不提供的字段"会被拒 | 同上 |
+| 兼容块的生效位置是 settings 文档 `providers.<路由>.compat`，改动热生效 | `llm-pi-ai/src/config.ts`（`providers` 为 `Volatile`） |
+| 已装目录开箱即可配置 42 个供应商，官方添加流程可预填端点与凭据变量 | `llm-pi-ai/src/provider-data.generated.ts` |
+| 客户端可读目录与命名空间：`ctx.remote.llm.listProviders()` / `listConfigurableProviders()`、`ctx.configForms.*` | `ui-settings-models/src/client/store.ts`、`ui-settings/src/client/config-form.ts` |
+
+## 4. 数据管线
+
+### 4.1 生成
+
+`scripts/sync-models-dev.ts`（`node` 直接跑 `.ts`）：
+
+1. 拉 `https://models.dev/api.json`（MIT）。仅供**构建期**使用，运行时不联网。
+2. 过滤供应商：只保留 OpenAI 兼容端点 —— `npm` 为 `@ai-sdk/openai-compatible`（181 个）
+   或 `@ai-sdk/openai` 且 `api` 形如 `…/v1`（4 个）。Anthropic 系（5 个）与拿不到 `api`
+   的多租户/网关（14 个）**不生成**：协议不确定时写预设等于用猜测改配置。
+3. 每供应商挑代表模型：按 `(tool_call, reasoning, last_updated)` 降序，取前 3；
+   再按主导形状收敛（见 4.2 R6），允许少于 3 个。
+4. 用 `src/dialect.ts` 的纯函数把形状折成 `compat` 与 `reasoningEfforts`（见 4.2）。
+5. 写一个生成物并入库：`src/data/presets.generated.ts`（供应商 + 代表模型 + 预计算 compat）。
+   来源、许可、快照时间、收录与排除数量都写在生成物头部的常量里，不额外维护旁挂文件。
+
+生成物文件头固定写出：来源、许可（MIT）、快照日期、生成命令。
+实测：199 个供应商、每个 ≤3 模型 → 生成物约 150KB；客户端产物 268KB（gzip 31KB）。
+数量每次重算并在生成物头部注明，本文件里的数字只是采样参考。
+
+### 4.2 预计算规则（全部在构建期完成，客户端只搬运结果）
+
+- **R1** 网关能力写路由级（`thinkingFormat`、`supportsDeveloperRole`），**模型能力写模型级**：
+  唯一会写进 `models[i].compat` 的是 `supportsThinkingTokenBudget`，因为「这个模型收不收思考
+  预算」是逐模型文档的事实，写在路由上会把该字段发给不收预算的模型（实测 13 个带预算的预设有
+  8 个是同路由混合能力）。
+- **R2** 仅当形状含 `toggle` 或 `budget_tokens` 时写 `thinkingFormat`，且只在 switch 家族里取首个
+  （`switchFormatOf()`，典型是 `qwen`）——即使同一模型也文档了 effort 档位，也只有 switch 家族
+  给 `off` 一个线上拼写。`effort` 型**不写**：兜底 `openai` 已经会发 `reasoning_effort`，写死反而
+  可能把 `together` / `openrouter` 覆盖成 `openai`。
+- **R3** baseURL 命中 `detectCompat()` 已知分支的供应商（`*.deepseek.com`、`api.z.ai`、
+  `open.bigmodel.cn`、`api.together.*`、`openrouter.ai`、`api.ant-ling.com`、`api.x.ai` 等）**不写**
+  `thinkingFormat`，交给上游探测。反例：`zhipuai` 在快照里的形状是 `toggle`，写 `qwen` 会把它已有的
+  `zai` 判型顶掉。这份 host 表是脚本里的一处常量，注释指向 pi-ai 的 `detectCompat()`，上游新增分支时同步。
+- **R4** 只要写了任一模型的 `reasoningEfforts`，同一份预设里写 `supportsDeveloperRole: false`
+  （SPEC §3.4 的坑：声明推理会打开 `developer` 角色）。只对**本插件新建**的路由生效。
+- **R5** 形状含 `budget_tokens` 的**模型**追加 `models[i].compat.supportsThinkingTokenBudget: true`
+  （`thinkingTokenBudgetField` 的别名），不额外发明字段；路由级不写该项。
+- **R6** 代表模型必须与供应商主导形状一致：主导形状为 toggle/budget 时，不挑 effort-only 模型，
+  避免路由级方言把该模型的档位语义改掉。没有一致模型的供应商，只挑"无推理"模型（此时不写 R4）。
+- **R7** `reasoningEfforts` 一律以 `off: null` 开头（`off` 的线上拼写由 `thinkingFormat` 决定，
+  不由档位名决定）。
+
+## 5. 预设写入契约
+
+选择供应商 → 预览要写入的内容 → 一次原子 `mutate`。
+
+```jsonc
+// 目标：llm-pi-ai 命名空间（settingsNs 由目录提供，不硬编码）
+"providers.<presetId>": {
+  "displayName": "<name>",
+  "api": "openai-completions",
+  "baseURL": "<api>",
+  "apiKeyEnv": "<env>",                       // 只写引用名，密钥由官方卡片写入
+  "models": [{ "id", "name", "contextWindow", "maxTokens", "input", "reasoningEfforts" }],
+  "compat": { "thinkingFormat"?: "…", "supportsThinkingTokenBudget"?: true, "supportsDeveloperRole": false }
+}
+```
+
+硬约束：
+
+- **不覆盖**：`providers.<presetId>` 已在用户层、或该 id 已出现在 `listConfigurableProviders()`
+  的目录里 → 拒绝并在面板内说明（覆盖一条内置路由的默认值是最坏的失败方式）。
+- **单次写**：一个 `mutate(ops, snapshot.revision)`，不写两轮；冲突（`expectedRevision` 不匹配）
+  按官方语义提示重载，不重试。
+- **只读降级**：`snapshot.writable === false` 时面板仍可浏览，按钮禁用并说明原因。
+- **不做幂等修复**：写失败即整体失败，不尝试部分写入后的补写。
+- **数据集不在 UI 里猜**：面板只展示快照时间与"仅收录 OpenAI 兼容端点"的说明，不做偏好排序以外的加工。
+
+## 6. 兼容块编辑器契约
+
+在每张目录卡片内渲染（keyed 座位按 `settingsNs` 分发，含手写路由）。
+
+- 字段：`thinkingFormat`（12 选一，含"自动"）、`supportsDeveloperRole`、`supportsReasoningEffort`、
+  `supportsThinkingTokenBudget`、`maxTokensField`、`chatTemplateKwargs`。
+- `chatTemplateKwargs` 不让人从零写：pi-ai 的 `$var` 是有定义的词汇表
+  （`thinking.enabled` / `thinking.effort` / `thinking.budget`，`omitWhenOff` 表示关闭时不发该键），
+  所以先给四个已知形状（`enable_thinking`、`thinking`、`enable_thinking+preserve_thinking`、
+  `thinking_budget`）的下拉预设，选「自定义」才落到 JSON 文本域。
+- "自动" = `unset` 该字段 → 回到 `detectCompat()`。这是所有推测的唯一撤销方式，必须显眼。
+- 字段来源只按"用户层是否存在该键"判定，显示为**已显式设置 / 自动**。不引入"预设写的 / 手写的"
+  标记：两者都在用户层，发明标记会污染用户配置，也无法在配置被复制到另一台机器后保持真实。
+- **作用域写清楚**：编辑器只改路由级字段，并明确告诉用户"这些字段对该供应商下所有模型生效；
+  单个模型的档位与能力在模型行里编辑"。模型级 `models[i].compat` 目前只由预设写入（预算能力），
+  编辑器不提供模型级覆盖——那需要一个模型行 UI，官方没有对应座位。
+- 写入沿用官方卡片的路径：`ctx.configForms.get(ns)` → `mutate(ops, revision)`，逐字段 `set`/`unset`。
+- 协议不接受的字段不渲染（按 `namespace.schema` 与该路由的 `api` 判断），避免保存时被
+  `assertServiceable()` 拒。
+
+## 7. 客户端结构
+
+```
+src/client/
+├─ index.tsx            # 注册 locale；两个座位的注册与各自的 ctx→props 适配
+├─ host.ts              # 唯一的服务访问层：目录、表单快照、写入（组件不接触 ctx）
+├─ PresetPanel.tsx      # footer：与官方添加按钮同尺寸的入口 + 弹窗（搜索 / 列表 / 预览 / 写入）
+├─ StudioDialog.tsx     # 弹窗外壳：复刻官方 Modal 的遮罩、圆角、投影、头尾几何
+├─ CompatEditor.tsx     # 卡片内：路由级字段编辑 / 清除
+├─ CompatFields.tsx     # 两处共用的字段控件（官方 input/select 几何）
+├─ ModelOverridesPage.tsx # 左栏页：已加载模型 + 逐模型覆盖
+├─ model-view.ts        # 设置文档值 → 页面视图（纯函数）
+├─ ExtensionFrame.tsx   # 两个座位共用的"扩展区"外壳（见 §8）
+├─ ops.ts               # 预设 / 兼容块 → path ops 的纯函数（唯一写入契约）
+├─ tokens.ts            # 官方 token 的内联样式片段
+└─ locales.ts           # zh / en
+src/preset-pick.ts      # 构建期：快照条目 → 预设（R1–R7 全部在这里）
+scripts/sync-models-dev.ts
+src/data/presets.generated.ts
+src/shared/preset.ts    # 生成物类型（两端共用）
+```
+
+- **座位注册**：只注册 `settings.section`（`id: 'model-studio'`，`order: 70`），整个注册挂在
+  `ctx.inject(['remote.llm'], …)` 里等 llm Remote 就绪；命名空间从 settings describe 镜像里
+  按"值带 `providers` 字典"识别，不硬编码条目 id。
+- **数据源**：两个页面都从 **settings describe 镜像**（`ctx.configForms.describe()`）读，
+  那是官方模型页用的同一份答案，含每个命名空间的脱敏值、revision 与 writable；因此页面里的行
+  就是实际参与调度的配置，不需要每次读都走一次 Remote。`llm/listConfigurableProviders` 只在
+  "预设路由 id 是否已存在" 时读，读失败只降级这一项检查。
+- **注入面**：`inject` 只声明 `slots` / `locale`；其余服务用 `ctx.get()`（cordis 的无 inject
+  读取）动态感知，缺失时对应座位降级而不是让插件不激活。
+- **不碰 React 之外的宿主实现**：按钮等用 `@deepseek-ai/dsh-client-ui-primitives`，
+  不复制宿主组件，不自建样式文件（本仓库 `tsdown` 无 CSS modules 管线，样式一律 inline +
+  `var(--dsw-alias-*)`）。
+
+## 8. 扩展区视觉规范
+
+官方页面里插进来的东西必须自证身份，否则用户无从区分。
+
+**弹窗**——`StudioDialog` 复刻官方 `Modal` 的几何（该 primitives 包不是可安装的客户端模块，
+不能直接 import）：根层 `position: fixed; inset: 0; z-index: 1000; padding: max(24px,
+--dsh-frame-overlay-top) 24px`；遮罩 `--dsw-alias-bg-mask-1` + `--dsw-mask-blur`；
+卡片 `--dsw-alias-bg-layer-2`、`--dsw-radius-panel`、`--dsw-elevation-prominent`，
+头部 padding `22px 14px 12px 24px`、标题 16/24/500、关闭按钮 28×28，正文/尾部 padding `0 24px`。
+Esc、点遮罩、关闭按钮都能关；`role="dialog" aria-modal aria-labelledby`。
+
+按钮几何与官方一致：36px 行高、`padding: 0 14px`、`--dsw-radius-md`、字号 14/22；
+主按钮用 `--dsw-alias-button-primary-fill`，次按钮用 `--dsw-alias-border-l3` 描边。
+深浅色跟随：只用 token（`tokens.ts` 里的 fallback 只在宿主改名时兜底）。
+
+## 8.5 模型页（模型级覆盖）
+
+左栏 `settings.section` 一页承载全部编辑能力，数据来自**同一个设置文档**（`providers.<route>`），
+因此行集就是实际参与调度的模型，不另建事实源：
+
+- 页首：标题 + 右侧「从预设添加提供商」按钮（弹窗），以及数据快照说明；
+- 每条路由一组：卡片头部（名称、路由 id（与名称相同时不重复）、模型数、端点右对齐），
+  头部下先放「编辑供应商级兼容」的展开区（供应商级字段），再用一条分隔线 + **缩进竖线**
+  把模型行框成子级，展开的编辑器再缩进一层；
+- 每个模型一行：名称、id、ctx/out、档位、已覆盖标记、右对齐等宽的「编辑覆盖」；
+- 展开后写 `models[i].compat`（当前只有模型级能力：思考预算，以及需要时的方言覆盖）；
+- 全部字段清空时**整块** `unset models[i].compat`，不留空对象；
+- 只读/未提供命名空间时说明原因，不渲染假按钮。
+
+「档位编辑」和「添加模型」仍然由官方模型行负责：两处都做会变成两份事实源，
+而官方那套已经带校验。若将来要做「从快照补全模型元数据」，需要的不只是 id，
+得把每个供应商的完整模型表发到客户端（当前生成物只留 ≤3 个代表模型）。
+
+## 9. 测试与门禁
+
+- 纯函数必测：形状→兼容块（`dialect.ts`，已有 14 条）、代表模型挑选、预设 → ops（R1–R7、
+  不覆盖判定）、兼容块字段 → ops（set/unset 成对）。
+- 组件冒烟：用 `react-dom/server` 的 `renderToStaticMarkup` 断言"给定快照 → 渲染出的标签/禁用态"
+  （不引入 jsdom）；交互（点了写什么 op）由纯函数测试覆盖。
+- 每次改动：`pnpm typecheck`、`pnpm test`、`pnpm run build`；
+  跨仓库门禁 `../check-plugins-against-harness.sh` 必须 `dsh-model-studio PASS`。
+- 生成物：`pnpm run sync:models-dev` 后必须重跑 typecheck/build，并在 PR 说明里贴快照日期与
+  供应商数量变化。
+
+## 10. 失败面与已知局限
+
+| 情况 | 结果 | 为什么可接受 |
+|---|---|---|
+| 快照滞后 / 网关升级 | 写进去的方言可能是错的，表现为请求 400 或思考关不掉 | 值可撤销（编辑器一键清除回到自动探测），且不覆盖已有配置 |
+| 形状不唯一（同一供应商内模型形状混杂） | 只写主导形状的代表模型；其余模型可能语义不符 | R6 限制了代表模型的挑选范围，用户在官方页新增模型时可自选 |
+| 供应商不在快照 / 非 OpenAI 兼容 | 面板里看不到 | 仍走官方"自定义添加"，再用本插件编辑器手填兼容块 |
+| 用户改了 `llm-pi-ai` 条目 id | keyed 座位注册不上 | 动态读取目录；远端不可用时退回默认 id，最坏情况只是没有编辑器 |
+| settings 只读 / profile 被锁定 | 只能看不能写 | 与官方页面同一失败面 |
+
+## 11. 下一迭代（不在本版）
+
+- 探测与记忆（SPEC §5.2 / §5.3）：需要重新定"临时写配置"的收敛规则，ADR-0001 记录了回退路径。
+- M4：每模型默认思考档位、按快照建议 `reasoningEfforts` 与容量、整路由批量套用。
