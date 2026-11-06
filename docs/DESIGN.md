@@ -19,7 +19,8 @@
 | 座位 | 组件 | 作用 |
 |---|---|---|
 | `settings.models.footer`（list） | `PresetPanel` | 与官方"添加模型提供商"同尺寸的入口按钮；点开是插件自己的弹窗，从数据快照写入一条完整路由（端点 / 协议 / 密钥变量 / 代表模型 / 兼容块） |
-| `settings.models.provider-card`（keyed，key = `settingsNs`） | `CompatEditor` | 逐字段编辑该路由的兼容块，或清除某一字段回到自动探测 |
+| `settings.models.provider-card`（keyed，key = `settingsNs`） | `CompatEditor` | 逐字段编辑**路由级**兼容块（网关怎么说），或清除回到自动探测 |
+| `settings.section`（左栏一页） | `ModelOverridesPage` | 列出「模型」页已加载的每条路由与模型，逐模型写 `models[i].compat`（模型级覆盖） |
 
 官方已经具备、本插件**不碰**的：供应商增删、模型列表、`/models` 探测、API key 输入、
 `reasoningEfforts` 档位编辑、上下文 / 最大输出 / 输入模态、模型选择器。
@@ -135,7 +136,10 @@ src/client/
 ├─ host.ts              # 唯一的服务访问层：目录、表单快照、写入（组件不接触 ctx）
 ├─ PresetPanel.tsx      # footer：与官方添加按钮同尺寸的入口 + 弹窗（搜索 / 列表 / 预览 / 写入）
 ├─ StudioDialog.tsx     # 弹窗外壳：复刻官方 Modal 的遮罩、圆角、投影、头尾几何
-├─ CompatEditor.tsx     # 卡片内：字段编辑 / 清除
+├─ CompatEditor.tsx     # 卡片内：路由级字段编辑 / 清除
+├─ CompatFields.tsx     # 两处共用的字段控件（官方 input/select 几何）
+├─ ModelOverridesPage.tsx # 左栏页：已加载模型 + 逐模型覆盖
+├─ model-view.ts        # 设置文档值 → 页面视图（纯函数）
 ├─ ExtensionFrame.tsx   # 两个座位共用的"扩展区"外壳（见 §8）
 ├─ ops.ts               # 预设 / 兼容块 → path ops 的纯函数（唯一写入契约）
 ├─ tokens.ts            # 官方 token 的内联样式片段
@@ -179,6 +183,21 @@ Esc、点遮罩、关闭按钮都能关；`role="dialog" aria-modal aria-labelle
 按钮几何与官方一致：36px 行高、`padding: 0 14px`、`--dsw-radius-md`、字号 14/22；
 主按钮用 `--dsw-alias-button-primary-fill`，次按钮用 `--dsw-alias-border-l3` 描边。
 深浅色跟随：只用 token（`tokens.ts` 里的 fallback 只在宿主改名时兜底）。
+
+## 8.5 模型页（模型级覆盖）
+
+左栏 `settings.section` 新增一页，数据来自**同一个设置文档**（`providers.<route>.models[]`），
+因此行集就是实际参与调度的模型，不另建事实源：
+
+- 每条路由一组：名称、路由 id、端点、模型数；
+- 每个模型一行：名称、id、ctx/out、档位、已覆盖标记；
+- 展开后写 `models[i].compat`（当前只有模型级能力：思考预算，以及需要时的方言覆盖）；
+- 全部字段清空时**整块** `unset models[i].compat`，不留空对象；
+- 只读/未提供命名空间时说明原因，不渲染假按钮。
+
+「档位编辑」和「添加模型」仍然由官方模型行负责：两处都做会变成两份事实源，
+而官方那套已经带校验。若将来要做「从快照补全模型元数据」，需要的不只是 id，
+得把每个供应商的完整模型表发到客户端（当前生成物只留 ≤3 个代表模型）。
 
 ## 9. 测试与门禁
 

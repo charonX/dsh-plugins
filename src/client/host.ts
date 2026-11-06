@@ -12,6 +12,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Preset } from '../shared/preset.ts'
+import { modelRoutesOf, type ModelRouteView } from './model-view.ts'
 import { presetConflict, presetOps, type PathOp } from './ops.ts'
 import type { CompatSaveResult } from './CompatEditor.tsx'
 import type { PresetApplyResult } from './PresetPanel.tsx'
@@ -54,6 +55,20 @@ export interface DirectorySnapshot {
   readonly writable: boolean
 }
 
+/** The model page's view of the loaded profiles. */
+export interface ModelPageSnapshot {
+  /** Whether the provider namespace is served. */
+  readonly available: boolean
+  /** Whether the document accepts writes. */
+  readonly writable: boolean
+  /** Revision the next write must be fenced with. */
+  readonly revision: number | undefined
+  /** Namespace the routes belong to. */
+  readonly namespace: string | undefined
+  /** Loaded routes with their declared models. */
+  readonly routes: readonly ModelRouteView[]
+}
+
 /** One route's stored compatibility, as the editor sees it. */
 export interface CompatSnapshot {
   /** Whether the namespace is served (its form values are readable). */
@@ -72,6 +87,8 @@ export interface HostFace {
   readDirectory(): Promise<DirectorySnapshot>
   /** Write one preset as a new route. */
   applyPreset(preset: Preset): Promise<PresetApplyResult>
+  /** Read every loaded route and its models. */
+  readModels(): Promise<ModelPageSnapshot>
   /** Read one route's stored compatibility. */
   readCompat(namespace: string, routePath: readonly string[]): CompatSnapshot
   /** Write compatibility operations for one route. */
@@ -156,6 +173,20 @@ export function createHostFace(ctx: Context): HostFace {
     return written ? { kind: 'written' } : { kind: 'refused', message: 'the settings write was refused' }
   }
 
+  const readModels = async (): Promise<ModelPageSnapshot> => {
+    const directory = await readDirectory()
+    const namespace = directory.piAiNamespace
+    const form = namespace === undefined ? undefined : formFor(namespace)
+    const snapshot = form?.getSnapshot()
+    return {
+      available: snapshot?.status === 'ready',
+      writable: snapshot?.writable === true,
+      revision: snapshot?.revision,
+      namespace,
+      routes: modelRoutesOf(snapshot?.value, directory.routePrefix),
+    }
+  }
+
   const readCompat = (namespace: string, routePath: readonly string[]): CompatSnapshot => {
     const form = formFor(namespace)
     if (form === undefined) return { available: false, writable: false, stored: undefined, revision: undefined }
@@ -188,5 +219,5 @@ export function createHostFace(ctx: Context): HostFace {
     return form?.subscribe?.(listener) ?? (() => {})
   }
 
-  return { readDirectory, applyPreset, readCompat, writeCompat, watchCompat }
+  return { readDirectory, applyPreset, readModels, readCompat, writeCompat, watchCompat }
 }

@@ -19,8 +19,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-models/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { PRESETS } from '../data/presets.generated.ts'
 import { CompatEditor, type CompatSaveResult } from './CompatEditor.tsx'
-import { createHostFace, type CompatSnapshot, type DirectorySnapshot, type HostFace } from './host.ts'
+import {
+  createHostFace, type CompatSnapshot, type DirectorySnapshot, type HostFace, type ModelPageSnapshot,
+} from './host.ts'
 import { en, zh, type MessageKey, type Translate } from './locales.ts'
+import { ModelOverridesPage } from './ModelOverridesPage.tsx'
 import { PresetPanel } from './PresetPanel.tsx'
 import type { PathOp } from './ops.ts'
 
@@ -69,6 +72,15 @@ export function apply(ctx: Context): void {
       locale: LOCALE_NAMESPACE,
       inject: () => face,
     }, PresetSeat))
+
+    scoped.slots.inject('settings.section', () => scoped.slots.register({
+      name: 'settings.section',
+      id: 'model-studio',
+      order: 70,
+      label: () => t('navModels'),
+      locale: LOCALE_NAMESPACE,
+      inject: () => face,
+    }, ModelsSeat))
 
     // The card seat is keyed by the settings namespace that owns the profiles.
     // That identity only exists once the llm Remote is attached, so the keys
@@ -145,6 +157,53 @@ function PresetSeat({ t, host }: PropsRuntime<'settings.models.footer'> & SeatFa
       writable={directory?.writable === true}
       unavailable={unavailable || directory === undefined}
       onApply={preset => host.applyPreset(preset)}
+    />
+  )
+}
+
+/**
+ * Settings-section seat: per-model overrides over the loaded profiles.
+ * @param props - slot props plus the injected face.
+ * @returns the page body.
+ */
+function ModelsSeat({ t, host }: PropsRuntime<'settings.section'> & SeatFace): ReactNode {
+  const [snapshot, setSnapshot] = useState<ModelPageSnapshot | undefined>(undefined)
+
+  useEffect(() => {
+    let live = true
+    void host.readModels().then(
+      (next) => { if (live) setSnapshot(next) },
+      () => {
+        if (!live) return
+        setSnapshot({ available: false, writable: false, revision: undefined, namespace: undefined, routes: [] })
+      },
+    )
+    return () => { live = false }
+  }, [host])
+
+  // Re-read whenever the provider namespace changes (another window, the
+  // official card, or this page's own write), so rows never go stale.
+  const namespace = snapshot?.namespace
+  useEffect(() => {
+    if (namespace === undefined) return
+    const refresh = (): void => { void host.readModels().then(setSnapshot) }
+    return host.watchCompat(namespace, refresh)
+  }, [host, namespace])
+
+  const save = async (path: readonly string[], ops: PathOp[]): Promise<CompatSaveResult> => {
+    if (snapshot?.namespace === undefined) return { kind: 'refused', message: 'the provider namespace is unavailable' }
+    const result = await host.writeCompat(snapshot.namespace, ops, snapshot.revision)
+    setSnapshot(await host.readModels())
+    return result
+  }
+
+  return (
+    <ModelOverridesPage
+      t={t}
+      routes={snapshot?.routes ?? []}
+      available={snapshot?.available ?? false}
+      writable={snapshot?.writable ?? false}
+      onSave={save}
     />
   )
 }

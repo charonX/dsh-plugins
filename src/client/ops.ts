@@ -181,6 +181,22 @@ export function compatOps(compatPath: readonly string[], draft: CompatDraft): Co
 }
 
 /**
+ * Operations for one model's compatibility override.
+ *
+ * Model-level fields live at `models[i].compat`, and clearing the last one
+ * removes the whole block instead of leaving an empty object behind.
+ * @param modelPath - path to the model entry, e.g. `['providers','sf','models','0']`.
+ * @param draft - editor values.
+ * @returns operations to write, or the validation error.
+ */
+export function modelCompatOps(modelPath: readonly string[], draft: CompatDraft): CompatParse {
+  const parsed = compatOps([...modelPath, 'compat'], draft)
+  if (parsed.ops === undefined) return parsed
+  const allCleared = parsed.ops.every(op => op.op === 'unset')
+  return allCleared ? { ops: [{ op: 'unset', path: [...modelPath, 'compat'] }] } : parsed
+}
+
+/**
  * Summary line for a preset's compatibility, for the preview panel.
  * @param preset - preset being previewed.
  * @returns field names the preset will write, in stable order.

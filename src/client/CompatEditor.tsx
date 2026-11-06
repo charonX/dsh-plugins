@@ -1,6 +1,8 @@
 /**
  * Provider-card extension area: edit one route's endpoint compatibility.
  *
+ * Only gateway-level switches live here. Per-model capabilities are edited on
+ * the model page, which writes `models[i].compat` instead of the route block.
  * Every field can be left on "auto", which deletes the key and hands the
  * decision back to pi-ai's own detection — that is the only way to undo a
  * snapshot-derived guess, so it is offered per field and for the whole block.
@@ -9,25 +11,18 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
-import { THINKING_FORMATS } from '../dialect.ts'
+import { CompatFields } from './CompatFields.tsx'
 import { ExtensionFrame } from './ExtensionFrame.tsx'
 import type { Translate } from './locales.ts'
-import { COMPAT_SWITCHES, EMPTY_DRAFT, compatDraftOf, compatOps, type CompatDraft, type PathOp } from './ops.ts'
+import { EMPTY_DRAFT, compatDraftOf, compatOps, type CompatDraft, type PathOp } from './ops.ts'
 import {
   actionsStyle,
   errorStyle,
-  fieldStyle,
   hintStyle,
-  inputStyle,
-  labelStyle,
   noticeStyle,
   primaryButtonStyle,
   quietButtonStyle,
-  selectStyle,
 } from './tokens.ts'
-
-/** Output field spellings pi-ai accepts. */
-const MAX_TOKENS_FIELDS: readonly string[] = ['max_tokens', 'max_completion_tokens']
 
 /** What one save attempt answered. */
 export type CompatSaveResult =
@@ -95,72 +90,19 @@ export function CompatEditor(props: CompatEditorProps): ReactNode {
     }
   }
 
-  const field = <K extends keyof CompatDraft>(key: K, value: string): void => {
-    setDraft(current => ({ ...current, [key]: value }))
-  }
-
   return (
     <ExtensionFrame t={t} title={`${t('compatTitle')} — ${routeName}`} surface="recessed">
       {available ? null : <p style={errorStyle}>{t('compatUnavailable')}</p>}
       <p style={hintStyle}>{t('compatHint')}</p>
       <p style={hintStyle}>{t('compatScope')}</p>
 
-      <div style={fieldStyle}>
-        <label style={labelStyle} htmlFor={`${routeId}-thinkingFormat`}>{t('compatFieldFormat')}</label>
-        <select
-          id={`${routeId}-thinkingFormat`}
-          style={selectStyle}
-          value={draft.thinkingFormat}
-          disabled={disabled}
-          onChange={event => field('thinkingFormat', event.target.value)}
-        >
-          <option value="">{t('compatAuto')}</option>
-          {THINKING_FORMATS.map(format => <option key={format} value={format}>{format}</option>)}
-        </select>
-      </div>
-
-      <div style={fieldStyle}>
-        <label style={labelStyle} htmlFor={`${routeId}-maxTokensField`}>{t('compatFieldMaxTokens')}</label>
-        <select
-          id={`${routeId}-maxTokensField`}
-          style={selectStyle}
-          value={draft.maxTokensField}
-          disabled={disabled}
-          onChange={event => field('maxTokensField', event.target.value)}
-        >
-          <option value="">{t('compatAuto')}</option>
-          {MAX_TOKENS_FIELDS.map(name => <option key={name} value={name}>{name}</option>)}
-        </select>
-      </div>
-
-      {COMPAT_SWITCHES.map((key) => (
-        <div style={fieldStyle} key={key}>
-          <label style={labelStyle} htmlFor={`${routeId}-${key}`}>{switchLabel(t, key)}</label>
-          <select
-            id={`${routeId}-${key}`}
-            style={selectStyle}
-            value={draft[key]}
-            disabled={disabled}
-            onChange={event => field(key, event.target.value)}
-          >
-            <option value="">{t('compatAuto')}</option>
-            <option value="true">{t('compatEnabled')}</option>
-            <option value="false">{t('compatDisabled')}</option>
-          </select>
-        </div>
-      ))}
-
-      <div style={fieldStyle}>
-        <label style={labelStyle} htmlFor={`${routeId}-kwargs`}>{t('compatFieldKwargs')}</label>
-        <textarea
-          id={`${routeId}-kwargs`}
-          style={{ ...inputStyle, minHeight: 64, fontFamily: 'monospace' }}
-          value={draft.chatTemplateKwargs}
-          disabled={disabled}
-          spellCheck={false}
-          onChange={event => field('chatTemplateKwargs', event.target.value)}
-        />
-      </div>
+      <CompatFields
+        t={t}
+        idPrefix={routeId}
+        draft={draft}
+        disabled={disabled}
+        onChange={(field, value) => setDraft(current => ({ ...current, [field]: value }))}
+      />
 
       <div style={actionsStyle}>
         <button type="button" style={primaryButtonStyle} disabled={disabled} onClick={() => { void save(draft, false) }}>
@@ -178,20 +120,6 @@ export function CompatEditor(props: CompatEditorProps): ReactNode {
       {status === undefined ? null : <p style={status.kind === 'error' ? errorStyle : noticeStyle}>{status.text}</p>}
     </ExtensionFrame>
   )
-}
-
-/**
- * Localized label for one boolean compat field.
- * @param t - localizer.
- * @param key - field name.
- * @returns the field label.
- */
-function switchLabel(t: Translate, key: (typeof COMPAT_SWITCHES)[number]): string {
-  switch (key) {
-    case 'supportsDeveloperRole': return t('compatFieldDeveloperRole')
-    case 'supportsReasoningEffort': return t('compatFieldReasoningEffort')
-    case 'supportsThinkingTokenBudget': return t('compatFieldThinkingBudget')
-  }
 }
 
 /**

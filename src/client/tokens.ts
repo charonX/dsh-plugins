@@ -89,36 +89,53 @@ export const noticeStyle = {
   color: COLORS.secondary,
 } as const
 
-/** Text input and textarea. */
+/**
+ * Text input: the Models page's own `.input` recipe (32px row, l4 border,
+ * layer-1 fill). Textareas reuse it with an explicit height.
+ */
 export const inputStyle = {
-  width: '100%',
   boxSizing: 'border-box',
-  padding: '6px 8px',
-  font: 'inherit',
-  fontSize: 13,
-  color: COLORS.text,
-  background: COLORS.layer2,
+  width: '100%',
+  height: 32,
+  padding: '0 10px',
   border: `0.5px solid ${COLORS.borderInput}`,
-  borderRadius: COLORS.radiusSm,
+  borderRadius: COLORS.radiusMd,
+  font: 'inherit',
+  fontSize: 14,
+  lineHeight: '22px',
+  background: COLORS.layer1,
+  color: COLORS.text,
 } as const
 
-/** Select control. */
+/**
+ * Select: the page's `.input` + `.selectInput` pair — the native control is
+ * hidden and the page's own chevron is painted 12px from the right edge, which
+ * is what makes a plugin select look like the page's select.
+ */
 export const selectStyle = {
   ...inputStyle,
+  appearance: 'none' as const,
+  paddingRight: 32,
   cursor: 'pointer',
+  backgroundImage:
+    "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")",
+  backgroundRepeat: 'no-repeat' as const,
+  backgroundPosition: 'right 12px center',
+  backgroundSize: '12px 12px',
 } as const
 
-/** Form row: label above control. */
+/** Form row: label above control, the page's 6px gap. */
 export const fieldStyle = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
-  marginBottom: 10,
+  gap: 6,
+  marginBottom: 14,
 } as const
 
-/** Field label. */
+/** Field label: the page's 12/18 medium secondary. */
 export const labelStyle = {
   fontSize: 12,
+  lineHeight: '18px',
   fontWeight: 500,
   color: COLORS.secondary,
 } as const
@@ -325,6 +342,66 @@ export const keyStyle = {
 
 /** Value cell of the detail table. */
 export const valueStyle = {
+  color: COLORS.secondary,
+  overflowWrap: 'anywhere' as const,
+} as const
+
+/** One route group on the model page. */
+export const groupStyle = {
+  border: `0.5px solid ${COLORS.border}`,
+  borderRadius: COLORS.radiusLg,
+  background: COLORS.layer1,
+  padding: '12px 14px',
+  marginBottom: 14,
+} as const
+
+/** Group heading row. */
+export const groupHeaderStyle = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 8,
+  flexWrap: 'wrap' as const,
+} as const
+
+/** Group title. */
+export const groupTitleStyle = {
+  margin: 0,
+  fontSize: 14,
+  lineHeight: '22px',
+  fontWeight: 500,
+  color: COLORS.text,
+} as const
+
+/** Page heading. */
+export const pageTitleStyle = {
+  margin: 0,
+  fontSize: 16,
+  lineHeight: '24px',
+  fontWeight: 500,
+  color: COLORS.text,
+} as const
+
+/** One model row inside a group. */
+export const modelRowStyle = {
+  display: 'flex',
+  flexDirection: 'column' as const,
+  gap: 8,
+  padding: '10px 0',
+  borderTop: `0.5px solid ${COLORS.border}`,
+} as const
+
+/** Row summary line. */
+export const modelSummaryStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexWrap: 'wrap' as const,
+} as const
+
+/** Monospaced identifier. */
+export const codeStyle = {
+  fontFamily: 'monospace',
+  fontSize: 12,
   color: COLORS.secondary,
   overflowWrap: 'anywhere' as const,
 } as const

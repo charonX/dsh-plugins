@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ExtensionFrame } from '../src/client/ExtensionFrame.tsx'
 import { PresetDialog, PresetPanel } from '../src/client/PresetPanel.tsx'
 import { CompatEditor } from '../src/client/CompatEditor.tsx'
+import { ModelOverridesPage } from '../src/client/ModelOverridesPage.tsx'
 import type { Translate } from '../src/client/locales.ts'
 import type { PresetCatalog } from '../src/shared/preset.ts'
 
@@ -142,5 +143,68 @@ describe('CompatEditor', () => {
   it('disables editing when the namespace is unavailable or read-only', () => {
     expect(render(undefined, true, false)).toContain('compatUnavailable')
     expect(render(undefined, false, true)).toContain('disabled=""')
+  })
+})
+
+describe('ModelOverridesPage', () => {
+  const routes = [
+    {
+      routeId: 'siliconflow',
+      name: 'SiliconFlow',
+      baseURL: 'https://api.siliconflow.cn/v1',
+      models: [
+        {
+          index: 0,
+          id: 'Qwen/Qwen3-8B',
+          name: 'Qwen3 8B',
+          path: ['providers', 'siliconflow', 'models', '0'],
+          contextWindow: 32768,
+          maxTokens: 8192,
+          levels: ['off', 'high'],
+        },
+        {
+          index: 1,
+          id: 'deepseek-ai/DeepSeek-OCR',
+          name: 'DeepSeek OCR',
+          path: ['providers', 'siliconflow', 'models', '1'],
+          storedCompat: { supportsThinkingTokenBudget: true },
+        },
+      ],
+    },
+  ] as const
+
+  const render = (extra: { available?: boolean; writable?: boolean } = {}) => renderToStaticMarkup(
+    <ModelOverridesPage
+      t={t}
+      routes={routes}
+      available={extra.available ?? true}
+      writable={extra.writable ?? true}
+      onSave={async () => ({ kind: 'saved' })}
+    />,
+  )
+
+  it('lists the loaded routes and their models', () => {
+    const html = render()
+    expect(html).toContain('modelsTitle')
+    expect(html).toContain('SiliconFlow')
+    expect(html).toContain('Qwen/Qwen3-8B')
+    expect(html).toContain('deepseek-ai/DeepSeek-OCR')
+    expect(html).toContain('modelsCount[count=2]')
+  })
+
+  it('marks a model that already carries an override', () => {
+    expect(render()).toContain('modelsOverridden[count=1]')
+  })
+
+  it('explains an empty page instead of rendering nothing', () => {
+    const html = renderToStaticMarkup(
+      <ModelOverridesPage t={t} routes={[]} available writable onSave={async () => ({ kind: 'saved' })} />,
+    )
+    expect(html).toContain('modelsEmpty')
+  })
+
+  it('states why writes are unavailable', () => {
+    expect(render({ available: false })).toContain('modelsUnavailable')
+    expect(render({ writable: false })).toContain('modelsReadOnly')
   })
 })

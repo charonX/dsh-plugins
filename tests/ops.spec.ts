@@ -5,6 +5,7 @@ import {
   compatDraftOf,
   compatOps,
   compatSummary,
+  modelCompatOps,
   presetConflict,
   presetOps,
 } from '../src/client/ops.ts'
@@ -154,6 +155,31 @@ describe('compatOps', () => {
   it('refuses kwargs that are not a JSON object', () => {
     expect(compatOps(compatPath, { ...EMPTY_DRAFT, chatTemplateKwargs: '{oops' })).toEqual({ error: 'invalidKwargs' })
     expect(compatOps(compatPath, { ...EMPTY_DRAFT, chatTemplateKwargs: '[1,2]' })).toEqual({ error: 'invalidKwargs' })
+  })
+})
+
+describe('modelCompatOps', () => {
+  const modelPath = ['providers', 'siliconflow', 'models', '0'] as const
+
+  it('writes a model-level override under models[i].compat', () => {
+    const parsed = modelCompatOps(modelPath, { ...EMPTY_DRAFT, supportsThinkingTokenBudget: 'true' })
+    expect(parsed.ops).toContainEqual({
+      op: 'set',
+      path: [...modelPath, 'compat', 'supportsThinkingTokenBudget'],
+      value: true,
+    })
+  })
+
+  it('clears the whole compat block instead of leaving an empty object', () => {
+    expect(modelCompatOps(modelPath, EMPTY_DRAFT)).toEqual({
+      ops: [{ op: 'unset', path: [...modelPath, 'compat'] }],
+    })
+  })
+
+  it('keeps the per-field form when only some fields are cleared', () => {
+    const parsed = modelCompatOps(modelPath, { ...EMPTY_DRAFT, thinkingFormat: 'qwen' })
+    expect(parsed.ops).toContainEqual({ op: 'set', path: [...modelPath, 'compat', 'thinkingFormat'], value: 'qwen' })
+    expect(parsed.ops).toContainEqual({ op: 'unset', path: [...modelPath, 'compat', 'supportsDeveloperRole'] })
   })
 })
 
