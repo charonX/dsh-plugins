@@ -81,7 +81,7 @@ export function ModelOverridesPage(props: ModelOverridesPageProps): ReactNode {
         <button
           type="button"
           style={{ ...quietButtonStyle, marginLeft: 'auto' }}
-          disabled={disabled || presetsUnavailable}
+          disabled={disabled}
           onClick={() => setPresetOpen(true)}
         >
           {t('presetsTrigger')}

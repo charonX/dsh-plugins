@@ -175,7 +175,10 @@ function service<T>(ctx: Context, name: string): T | undefined {
  * @returns the owning namespace, when one is present and non-empty.
  */
 export function providerNamespaceOf(namespaces: readonly NamespaceView[]): string | undefined {
-  return namespaces.find(entry => typeof field(entry.value, 'providers') === 'object')?.ns
+  return namespaces.find((entry) => {
+    const providers = field(entry.value, 'providers')
+    return typeof providers === 'object' && providers !== null && !Array.isArray(providers)
+  })?.ns
 }
 
 /**
@@ -207,15 +210,35 @@ export function createHostFace(ctx: Context): HostFace {
   const namespaceViewOf = (held: DescribeView | undefined, namespace: string | undefined): NamespaceView | undefined =>
     namespace === undefined ? undefined : held?.namespaces.find(entry => entry.ns === namespace)
 
+  /**
+   * Route ids and the provider namespace.
+   *
+   * Never rejects: the directory is the Remote's provider topology, and reading
+   * it can fail (namespace not mounted, transport down). A failure only means
+   * the preset conflict check cannot see shipped catalog routes, which the
+   * caller surfaces instead of blanking the page.
+   */
   const readDirectory = async (): Promise<DirectorySnapshot> => {
-    const held = await view()
-    const stored = field(namespaceViewOf(held, providerNamespaceOf(held?.namespaces ?? []))?.value, 'providers')
-    const routeIds = new Set<string>(typeof stored === 'object' && stored !== null ? Object.keys(stored) : [])
-    let piAiNamespace = providerNamespaceOf(held?.namespaces ?? [])
-    let complete = false
-    const remote = service<{ llm?: { listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> } }>(ctx, 'remote')?.llm
+    const routeIds = new Set<string>()
+    let piAiNamespace: string | undefined
+    let writable = false
     try {
-      const answer = await remote?.listConfigurableProviders?.()
+      const held = await view()
+      writable = held?.writable === true
+      piAiNamespace = providerNamespaceOf(held?.namespaces ?? [])
+      const stored = field(namespaceViewOf(held, piAiNamespace)?.value, 'providers')
+      if (typeof stored === 'object' && stored !== null) {
+        for (const id of Object.keys(stored)) routeIds.add(id)
+      }
+    } catch (failure) {
+      console.warn('model-studio: settings mirror read failed', failure)
+    }
+    let complete = false
+    try {
+      // Read the namespace service by its service key: a dotted property walk
+      // (`ctx.remote.llm`) is guarded by the inject rules and can throw.
+      const llm = service<{ listConfigurableProviders?: () => Promise<RemoteAnswer<DirectoryRow[]>> }>(ctx, 'remote.llm')
+      const answer = await llm?.listConfigurableProviders?.()
       if (answer?.ok === true) {
         const rows = answer.value ?? []
         for (const row of rows) routeIds.add(row.provider)
@@ -223,18 +246,9 @@ export function createHostFace(ctx: Context): HostFace {
         complete = true
       }
     } catch (failure) {
-      // The directory only feeds the preset conflict check; a failed read must
-      // not blank the page, but the caller should stop offering writes that
-      // could overwrite a shipped route.
       console.warn('model-studio: provider directory read failed', failure)
     }
-    return {
-      routeIds,
-      piAiNamespace,
-      routePrefix: ROUTE_PREFIX,
-      writable: held?.writable === true,
-      complete,
-    }
+    return { routeIds, piAiNamespace, routePrefix: ROUTE_PREFIX, writable, complete }
   }
 
   const applyPreset = async (preset: Preset): Promise<PresetApplyResult> => {

@@ -92,10 +92,19 @@ function StudioSeat({ t, host }: PropsRuntime<'settings.section'> & SeatFace): R
 
   useEffect(() => {
     let live = true
-    void load().then((next) => { if (live) setState(next) })
-    const off = host.watchSettings(() => {
-      void load().then((next) => { if (live) setState(next) })
-    })
+    const refresh = (): void => {
+      load().then(
+        (next) => { if (live) setState(next) },
+        (failure: unknown) => {
+          // A read failure must still render (with an explanation) instead of
+          // leaving the page on its initial empty state.
+          console.warn('model-studio: settings page read failed', failure)
+          if (live) setState(current => ({ ...current, directoryComplete: false }))
+        },
+      )
+    }
+    refresh()
+    const off = host.watchSettings(refresh)
     return () => {
       live = false
       off()
