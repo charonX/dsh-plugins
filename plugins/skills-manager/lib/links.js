@@ -12,13 +12,13 @@
  *
  * @module dsh-skills-manager/links
  */
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { expandHomePath } from '@deepseek-ai/dsh-home-paths';
 import { AGENT_TARGETS, DEFAULT_AGENT_TARGET, findAgentTarget } from './agent-registry.js';
 import { SkillManagerError } from './errors.js';
 import { scanLibrary } from './library.js';
-import { canonicalPath, isInsideOrEqual } from './paths.js';
+import { canonicalPath, isInsideOrEqual, stripWindowsExtendedPrefix } from './paths.js';
 import { isSkillEnabled, isSourceEnabled } from './state.js';
 const STATE_VERSION = 1;
 const LINK_TYPE = process.platform === 'win32' ? 'junction' : 'dir';
@@ -388,7 +388,7 @@ export class LinkManager {
             // A dangling link into the library is ours to repair.
             const intended = resolveLinkTarget(linkPath);
             if (intended !== undefined && isInsideOrEqual(canonicalPath(this.options.libraryDir), canonicalPath(intended))) {
-                rmSync(linkPath, { force: true });
+                removeSymlink(linkPath);
                 createLink(skillDir, linkPath);
             }
             return;
@@ -398,7 +398,7 @@ export class LinkManager {
         // A library-owned link whose name is the intended skill was repointed by
         // hand; restore it. Foreign links and external directories stay untouched.
         if (isInsideOrEqual(canonicalPath(this.options.libraryDir), canonicalPath(real))) {
-            rmSync(linkPath, { force: true });
+            removeSymlink(linkPath);
             createLink(skillDir, linkPath);
         }
     }
@@ -553,12 +553,45 @@ function removeLinksInto(dir, sourceDir, skillName) {
         if (intended === undefined)
             continue;
         if (isInsideOrEqual(canonicalPath(sourceDir), canonicalPath(intended)))
-            rmSync(linkPath, { force: true });
+            removeSymlink(linkPath);
+    }
+}
+/**
+ * Remove a symlink or Windows directory junction without following it or touching
+ * the target directory. Non-symlink entries are never removed.
+ * @param linkPath - path to the symlink or junction.
+ */
+export function removeSymlink(linkPath) {
+    const existing = lstatSync(linkPath, { throwIfNoEntry: false });
+    if (existing === undefined || !existing.isSymbolicLink())
+        return;
+    try {
+        unlinkSync(linkPath);
+    }
+    catch (error) {
+        const code = error.code;
+        if (code === 'ENOENT')
+            return;
+        // On Windows, directory symlinks and junctions carry the directory attribute:
+        // unlinkSync fails with EPERM/EISDIR (and rmSync without recursive throws
+        // ERR_FS_EISDIR), whereas rmdirSync removes only the reparse point itself.
+        if (process.platform === 'win32' && (code === 'EPERM' || code === 'EISDIR')) {
+            try {
+                rmdirSync(linkPath);
+            }
+            catch (rmdirError) {
+                if (rmdirError.code !== 'ENOENT')
+                    throw rmdirError;
+            }
+            return;
+        }
+        throw error;
     }
 }
 function resolveLinkTarget(linkPath) {
     try {
-        return resolve(dirname(linkPath), readlinkSync(linkPath));
+        const rawTarget = stripWindowsExtendedPrefix(readlinkSync(linkPath));
+        return resolve(dirname(linkPath), rawTarget);
     }
     catch {
         return undefined;

@@ -30,13 +30,30 @@ export function assertDirectoryName(value, kind) {
     return value;
 }
 /**
+ * Strip the Windows extended-length path prefix (`\\?\` or `\\?\UNC\`) so lexical
+ * comparisons and `path.relative` treat `\\?\D:\...` and `D:\...` identically.
+ * @param path - filesystem path, possibly returned by Windows junction/realpath APIs.
+ * @returns the path without extended-length prefix.
+ */
+export function stripWindowsExtendedPrefix(path) {
+    if (path.startsWith('\\\\?\\UNC\\')) {
+        return `\\\\${path.slice('\\\\?\\UNC\\'.length)}`;
+    }
+    if (/^\\\\\?\\[A-Za-z]:[\\/]/u.test(path)) {
+        return path.slice('\\\\?\\'.length);
+    }
+    return path;
+}
+/**
  * Whether `child` is `parent` or lies below it.
  * @param parent - absolute candidate ancestor.
  * @param child - absolute candidate descendant.
  * @returns whether the descendant relationship holds by lexical path resolution.
  */
 export function isInsideOrEqual(parent, child) {
-    const rel = relative(resolve(parent), resolve(child));
+    const cleanParent = stripWindowsExtendedPrefix(parent);
+    const cleanChild = stripWindowsExtendedPrefix(child);
+    const rel = relative(resolve(cleanParent), resolve(cleanChild));
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 /**
@@ -45,11 +62,12 @@ export function isInsideOrEqual(parent, child) {
  * @returns the real path when it exists, otherwise the resolved absolute path.
  */
 export function canonicalPath(path) {
+    const clean = stripWindowsExtendedPrefix(path);
     try {
-        return realpathSync(path);
+        return stripWindowsExtendedPrefix(realpathSync(clean));
     }
     catch {
-        return resolve(path);
+        return resolve(clean);
     }
 }
 /**

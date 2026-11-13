@@ -2,7 +2,8 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, s
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SkillManagerError } from '../src/errors.ts'
-import { LinkManager } from '../src/links.ts'
+import { LinkManager, removeSymlink } from '../src/links.ts'
+import { stripWindowsExtendedPrefix } from '../src/paths.ts'
 import { StateStore } from '../src/state.ts'
 import { skillFields, tempTree, writeSkill, type TempTree } from './helpers.ts'
 
@@ -321,5 +322,45 @@ describe('global switch and project records', () => {
     } finally {
       tree.cleanup()
     }
+  })
+})
+
+describe('cross-platform symlink removal and Windows path prefixes', () => {
+  it('removes directory symlinks and dangling symlinks without touching targets or real directories', () => {
+    const tree = tempTree()
+    try {
+      const targetDir = tree.path('target-skill')
+      writeSkill(targetDir, skillFields('target-skill'), 'Keep me.')
+      const link = tree.path('link-to-skill')
+      symlinkSync(targetDir, link, process.platform === 'win32' ? 'junction' : 'dir')
+      removeSymlink(link)
+      expect(lstatSync(link, { throwIfNoEntry: false })).toBeUndefined()
+      expect(readFileSync(join(targetDir, 'SKILL.md'), 'utf8')).toContain('Keep me.')
+
+      // Dangling symlink
+      const dangling = tree.path('dangling-link')
+      symlinkSync(tree.path('gone'), dangling, process.platform === 'win32' ? 'junction' : 'dir')
+      removeSymlink(dangling)
+      expect(lstatSync(dangling, { throwIfNoEntry: false })).toBeUndefined()
+
+      // Real directory must stay untouched
+      const realDir = tree.path('real-dir')
+      mkdirSync(realDir, { recursive: true })
+      removeSymlink(realDir)
+      expect(existsSync(realDir)).toBe(true)
+
+      // Missing path is a no-op
+      removeSymlink(tree.path('never-existed'))
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('strips Windows extended-length prefixes consistently', () => {
+    expect(stripWindowsExtendedPrefix('\\\\?\\D:\\code\\dsh-plugins-dev\\.claude\\skills\\ask-matt'))
+      .toBe('D:\\code\\dsh-plugins-dev\\.claude\\skills\\ask-matt')
+    expect(stripWindowsExtendedPrefix('\\\\?\\UNC\\server\\share\\skills'))
+      .toBe('\\\\server\\share\\skills')
+    expect(stripWindowsExtendedPrefix('/Users/demo/skills')).toBe('/Users/demo/skills')
   })
 })

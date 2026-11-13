@@ -1859,6 +1859,45 @@ function InstallDialog({ t, existingSlugs, onClose, onInstalled }: InstallDialog
   const [log, setLog] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const handleIdentifierChange = (value: string): void => {
+    setIdentifier(value)
+    const trimmed = value.trim()
+    const isGitLike = /^(?:npx|bunx|pnpm\s+dlx)\s+skills?\s+add/iu.test(trimmed)
+      || /^(?:https?:\/\/|ssh:\/\/|git@)/iu.test(trimmed)
+      || (/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:@\S+)?$/u.test(trimmed) && !trimmed.startsWith('.') && !trimmed.startsWith('/') && !trimmed.startsWith('~'))
+    if (isGitLike && sourceType === 'local') {
+      setSourceType('git')
+    }
+  }
+
+  const gitPreview = useMemo(() => {
+    if (sourceType !== 'git') return null
+    const trimmed = identifier.trim()
+    if (trimmed === '') return null
+    const cleaned = trimmed
+      .replace(/^(?:npx|bunx|pnpm\s+dlx|yarn\s+dlx)\s+(?:skills?)\s+add\s+/u, '')
+      .replace(/(?:^|\s+)(?:-y|--yes|-g|--global)(?=\s|$)/gu, ' ')
+      .replace(/(?:^|\s+)(?:-a|--agent|--skill)\s+\S+/gu, ' ')
+      .trim()
+    if (cleaned === '') return null
+
+    const treeMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/tree\/([^/]+)(?:\/.*)?$/iu.exec(cleaned)
+    if (treeMatch) {
+      return { url: `https://github.com/${treeMatch[1]}/${treeMatch[2]}.git`, ref: treeMatch[3] }
+    }
+    const webMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?(?:@([A-Za-z0-9._/-]+))?$/iu.exec(cleaned)
+    if (webMatch) {
+      return { url: `https://github.com/${webMatch[1]}/${webMatch[2]}.git`, ref: webMatch[3] }
+    }
+    if (!cleaned.includes(':') && !cleaned.startsWith('/') && !cleaned.startsWith('~') && !cleaned.startsWith('.')) {
+      const shorthandMatch = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:@([A-Za-z0-9._/-]+))?$/u.exec(cleaned)
+      if (shorthandMatch) {
+        return { url: `https://github.com/${shorthandMatch[1]}/${shorthandMatch[2]}.git`, ref: shorthandMatch[3] }
+      }
+    }
+    return null
+  }, [identifier, sourceType])
+
   const submit = useCallback(async (): Promise<void> => {
     if (identifier.trim() === '' || busy) return
     setBusy(true)
@@ -1912,12 +1951,20 @@ function InstallDialog({ t, existingSlugs, onClose, onInstalled }: InstallDialog
               disabled={busy}
               autoFocus
               placeholder={sourceType === 'git' ? t('identifierGitHint') : t('identifierLocalHint')}
-              onChange={(event) => { setIdentifier(event.target.value) }}
+              onChange={(event) => { handleIdentifierChange(event.target.value) }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void submit()
               }}
             />
           </label>
+          {gitPreview !== null && gitPreview.url !== identifier.trim() && (
+            <div style={{ fontSize: 12, color: COLORS.secondary, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span>{t('gitTargetPreview', { url: gitPreview.url })}</span>
+              {gitPreview.ref !== undefined && (
+                <span style={{ color: COLORS.brand }}>({t('gitTargetBranch', { ref: gitPreview.ref })})</span>
+              )}
+            </div>
+          )}
           {sourceType === 'local' && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: COLORS.secondary, cursor: 'pointer' }}>
               <input

@@ -243,6 +243,18 @@ describe('skills manager routes', () => {
     expect(response.status).toBe(400)
     expect((await jsonBody<{ error: { code: string } }>(response)).error.code).toBe('SKILL_SOURCE_INVALID')
   })
+
+  it('accepts owner/repo shorthand and npx skill command wrappers into an install job', async () => {
+    const harness = await startServer()
+    const response = await fetch(`${harness.base}/dsh-skills-manager/api/sources/install`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourceType: 'git', identifier: 'npx skill add citrolabs/ego-lite' }),
+    })
+    expect(response.status).toBe(202)
+    const { jobId } = await jsonBody<{ jobId: string }>(response)
+    expect(jobId).not.toBe('')
+  })
 })
 
 describe('workspace options over HTTP', () => {

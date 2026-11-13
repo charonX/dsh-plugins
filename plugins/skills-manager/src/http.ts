@@ -16,6 +16,7 @@ import { SkillManagerError } from './errors.js'
 import {
   ensureGitAvailable,
   assertGitIdentifier,
+  resolveGitSource,
   installGitSource,
   installLocalSource,
   removeSourceDirectory,
@@ -297,11 +298,11 @@ async function startInstall(deps: HttpDeps, body: InstallRequestBody): Promise<J
   }
   const job = deps.jobs.create()
   if (body.sourceType === 'git') {
-    const identifier = assertGitIdentifier(body.identifier, deps.allowFileProtocol)
+    const targetSource = resolveGitSource(body.identifier, deps.allowFileProtocol)
     // Reject a missing git before the job is visible to pollers.
     await ensureGitAvailable()
     return deps.jobs.start(job, async () => {
-      await installGitSource(job, options, identifier)
+      await installGitSource(job, options, targetSource)
       deps.onLibraryChanged()
     })
   }

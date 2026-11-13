@@ -5,11 +5,14 @@ import { SkillManagerError } from '../src/errors.ts'
 import type { JobRecord } from '../src/jobs.ts'
 import {
   assertGitIdentifier,
+  cleanSkillCommandInput,
   deriveGitSlug,
   installGitSource,
   installLocalSource,
+  normalizeGitSource,
   removeSourceDirectory,
   resolveFreeSlug,
+  resolveGitSource,
   updateGitSource,
 } from '../src/installer.ts'
 import { skillFields, tempTree, writeSkill } from './helpers.ts'
@@ -46,7 +49,66 @@ function initRepo(cwd: string): void {
   git(cwd, ['init', '-b', 'main'])
 }
 
-describe('assertGitIdentifier', () => {
+describe('cleanSkillCommandInput', () => {
+  it('strips npx/bunx skill(s) add and common cli flags', () => {
+    expect(cleanSkillCommandInput('npx skill add citrolabs/ego-lite')).toBe('citrolabs/ego-lite')
+    expect(cleanSkillCommandInput('npx skills add citrolabs/ego-lite -y')).toBe('citrolabs/ego-lite')
+    expect(cleanSkillCommandInput('bunx skills add citrolabs/ego-lite --global')).toBe('citrolabs/ego-lite')
+    expect(cleanSkillCommandInput('pnpm dlx skills add citrolabs/ego-lite -a claude-code')).toBe('citrolabs/ego-lite')
+    expect(cleanSkillCommandInput('  citrolabs/ego-lite  ')).toBe('citrolabs/ego-lite')
+  })
+})
+
+describe('normalizeGitSource', () => {
+  it('resolves github owner/repo shorthand to a cloneable https url', () => {
+    expect(normalizeGitSource('citrolabs/ego-lite')).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: undefined,
+    })
+    expect(normalizeGitSource('citrolabs/ego-lite@main')).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: 'main',
+    })
+    expect(normalizeGitSource('citrolabs/ego-lite@v1.2.0')).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: 'v1.2.0',
+    })
+  })
+
+  it('resolves github web urls with or without tree/branch', () => {
+    expect(normalizeGitSource('https://github.com/citrolabs/ego-lite')).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: undefined,
+    })
+    expect(normalizeGitSource('https://github.com/citrolabs/ego-lite/tree/main/skills/ego-browser')).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: 'main',
+    })
+  })
+
+  it('preserves raw git transports', () => {
+    expect(normalizeGitSource('git@github.com:citrolabs/ego-lite.git')).toEqual({
+      url: 'git@github.com:citrolabs/ego-lite.git',
+    })
+    expect(normalizeGitSource('https://gitlab.com/group/project.git')).toEqual({
+      url: 'https://gitlab.com/group/project.git',
+    })
+  })
+})
+
+describe('resolveGitSource and assertGitIdentifier', () => {
+  it('accepts owner/repo shorthand and npx command wrappers', () => {
+    expect(resolveGitSource('citrolabs/ego-lite', false)).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: undefined,
+    })
+    expect(resolveGitSource('npx skill add citrolabs/ego-lite@main', false)).toEqual({
+      url: 'https://github.com/citrolabs/ego-lite.git',
+      ref: 'main',
+    })
+    expect(assertGitIdentifier('citrolabs/ego-lite', false)).toBe('https://github.com/citrolabs/ego-lite.git')
+  })
+
   it('accepts https, ssh, scp-like, and optionally file transports', () => {
     expect(assertGitIdentifier('https://example.com/o/r.git', false)).toBe('https://example.com/o/r.git')
     expect(assertGitIdentifier('ssh://git@example.com/o/r.git', false)).toBe('ssh://git@example.com/o/r.git')
@@ -60,6 +122,11 @@ describe('assertGitIdentifier', () => {
     }
     expect(() => assertGitIdentifier('file:///tmp/repo', false)).toThrow(/disabled by configuration/)
   })
+
+  it('rejects invalid git ref characters', () => {
+    expect(() => resolveGitSource('citrolabs/ego-lite@-evil', false)).toThrow(SkillManagerError)
+    expect(() => resolveGitSource('citrolabs/ego-lite@bad;ref', false)).toThrow(SkillManagerError)
+  })
 })
 
 describe('slugs', () => {
@@ -67,6 +134,8 @@ describe('slugs', () => {
     expect(deriveGitSlug('https://github.com/mattpocock/skills.git')).toBe('mattpocock-skills')
     expect(deriveGitSlug('git@github.com:Owner/My Repo.git')).toBe('Owner-My-Repo')
     expect(deriveGitSlug('https://example.com/repo')).toBe('example.com-repo')
+    expect(deriveGitSlug('citrolabs/ego-lite')).toBe('citrolabs-ego-lite')
+    expect(deriveGitSlug('npx skill add citrolabs/ego-lite@main')).toBe('citrolabs-ego-lite')
   })
 
   it('appends a numeric suffix while a directory exists', () => {
@@ -169,6 +238,30 @@ describe('git sources', () => {
       const localSlug = await installLocalSource(newJob(), options, tree.path('local'), false)
       await expect(updateGitSource(newJob(), options, tree.path('library', localSlug)))
         .rejects.toMatchObject({ code: 'SKILL_UPDATE_UNSUPPORTED' })
+    } finally {
+      tree.cleanup()
+    }
+  })
+
+  it('clones a specific branch or tag when specified via ref', async () => {
+    const tree = tempTree()
+    try {
+      initRepo(tree.path('remote'))
+      writeSkill(tree.path('remote', 'skills', 'alpha'), skillFields('alpha'))
+      commitAll(tree.path('remote'), 'first')
+      git(tree.path('remote'), ['branch', 'feat-skill'])
+      git(tree.path('remote'), ['checkout', 'feat-skill'])
+      writeSkill(tree.path('remote', 'skills', 'beta'), skillFields('beta'))
+      commitAll(tree.path('remote'), 'second on branch')
+
+      const options = { libraryDir: tree.path('library'), allowFileProtocol: true }
+      const job = newJob()
+      const slug = await installGitSource(job, options, {
+        url: `file://${tree.path('remote')}`,
+        ref: 'feat-skill',
+      })
+      expect(slug).toBe('remote')
+      expect(existsSync(tree.path('library', slug, 'skills', 'beta', 'SKILL.md'))).toBe(true)
     } finally {
       tree.cleanup()
     }

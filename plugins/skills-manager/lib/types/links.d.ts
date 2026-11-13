@@ -124,3 +124,9 @@ export declare class LinkManager {
  * @returns agent conventions with DSH first.
  */
 export declare function listAgentTargets(): readonly AgentTarget[];
+/**
+ * Remove a symlink or Windows directory junction without following it or touching
+ * the target directory. Non-symlink entries are never removed.
+ * @param linkPath - path to the symlink or junction.
+ */
+export declare function removeSymlink(linkPath: string): void;

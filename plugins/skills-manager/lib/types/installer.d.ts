@@ -14,11 +14,43 @@ export interface InstallerOptions {
     /** Whether a `file://` git identifier is accepted. */
     readonly allowFileProtocol: boolean;
 }
+/** Normalized git target details. */
+export interface GitSourceTarget {
+    /** The validated git transport or URL to clone from. */
+    readonly url: string;
+    /** Optional branch, tag, or commit ref. */
+    readonly ref?: string;
+}
+/**
+ * Strips command runners like `npx skill add`, `npx skills add`, `bunx skills add`,
+ * as well as common CLI flags so that pasting a terminal command works cleanly.
+ *
+ * @param input - raw user input string.
+ * @returns sanitized input string.
+ */
+export declare function cleanSkillCommandInput(input: string): string;
+/**
+ * Normalize an identifier (which may be a GitHub shorthand like `citrolabs/ego-lite`,
+ * a GitHub browser URL with branch/tree, or a raw git transport) into a cloneable target.
+ *
+ * @param input - user-supplied clone source, command, or shorthand.
+ * @returns normalized target with cloneable url and optional ref.
+ */
+export declare function normalizeGitSource(input: string): GitSourceTarget;
+/**
+ * Validate a git identifier or shorthand, resolving it to a cloneable target.
+ *
+ * @param identifier - user-supplied clone source, command, or shorthand.
+ * @param allowFile - whether `file://` identifiers are allowed.
+ * @returns the validated and normalized target.
+ * @throws {SkillManagerError} when the source or ref is invalid or forbidden.
+ */
+export declare function resolveGitSource(identifier: string, allowFile: boolean): GitSourceTarget;
 /**
  * Validate a git identifier before any command runs.
- * @param identifier - user-supplied clone source.
+ * @param identifier - user-supplied clone source, command, or shorthand.
  * @param allowFile - whether `file://` identifiers are allowed.
- * @returns the trimmed identifier.
+ * @returns the resolved, cloneable git URL.
  * @throws {SkillManagerError} when the transport is not on the allow list.
  */
 export declare function assertGitIdentifier(identifier: string, allowFile: boolean): string;
@@ -29,10 +61,10 @@ export declare function assertGitIdentifier(identifier: string, allowFile: boole
 export declare function ensureGitAvailable(): Promise<void>;
 /**
  * Derive a stable directory name from a git identifier (`owner-repo`).
- * @param identifier - validated git identifier.
+ * @param identifier - validated git identifier, shorthand, or target object.
  * @returns the sanitized slug.
  */
-export declare function deriveGitSlug(identifier: string): string;
+export declare function deriveGitSlug(identifier: string | GitSourceTarget): string;
 /**
  * Pick a free slug by appending a numeric suffix.
  * @param libraryDir - absolute library root.
@@ -44,11 +76,11 @@ export declare function resolveFreeSlug(libraryDir: string, base: string): strin
  * Clone a git source into the library and validate its contents.
  * @param job - job receiving live command output.
  * @param options - library and protocol configuration.
- * @param identifier - validated git identifier.
+ * @param identifier - validated git identifier, shorthand, or target.
  * @returns the created source slug.
  * @throws {SkillManagerError} when git fails or the clone holds no skill.
  */
-export declare function installGitSource(job: JobRecord, options: InstallerOptions, identifier: string): Promise<string>;
+export declare function installGitSource(job: JobRecord, options: InstallerOptions, identifier: string | GitSourceTarget): Promise<string>;
 /**
  * Copy a local directory into the library and validate its contents.
  * @param job - job receiving progress output.

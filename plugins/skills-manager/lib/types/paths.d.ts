@@ -15,6 +15,13 @@
  */
 export declare function assertDirectoryName(value: unknown, kind: string): string;
 /**
+ * Strip the Windows extended-length path prefix (`\\?\` or `\\?\UNC\`) so lexical
+ * comparisons and `path.relative` treat `\\?\D:\...` and `D:\...` identically.
+ * @param path - filesystem path, possibly returned by Windows junction/realpath APIs.
+ * @returns the path without extended-length prefix.
+ */
+export declare function stripWindowsExtendedPrefix(path: string): string;
+/**
  * Whether `child` is `parent` or lies below it.
  * @param parent - absolute candidate ancestor.
  * @param child - absolute candidate descendant.

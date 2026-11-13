@@ -34,26 +34,120 @@ const NETWORK_GIT_IDENTIFIER = /^(?:https:\/\/\S+|ssh:\/\/\S+|[A-Za-z0-9._-]+@[A
 /** Bytes of command output kept per job. */
 const MAX_LOG_CHARS = 256 * 1024
 
+/** Normalized git target details. */
+export interface GitSourceTarget {
+  /** The validated git transport or URL to clone from. */
+  readonly url: string
+  /** Optional branch, tag, or commit ref. */
+  readonly ref?: string
+}
+
 /**
- * Validate a git identifier before any command runs.
- * @param identifier - user-supplied clone source.
- * @param allowFile - whether `file://` identifiers are allowed.
- * @returns the trimmed identifier.
- * @throws {SkillManagerError} when the transport is not on the allow list.
+ * Strips command runners like `npx skill add`, `npx skills add`, `bunx skills add`,
+ * as well as common CLI flags so that pasting a terminal command works cleanly.
+ *
+ * @param input - raw user input string.
+ * @returns sanitized input string.
  */
-export function assertGitIdentifier(identifier: string, allowFile: boolean): string {
-  const trimmed = identifier.trim()
-  if (trimmed === '' || trimmed.startsWith('-') || !ALLOWED_GIT_IDENTIFIER.test(trimmed)) {
+export function cleanSkillCommandInput(input: string): string {
+  let cleaned = input.trim()
+  cleaned = cleaned.replace(/^(?:npx|bunx|pnpm\s+dlx|yarn\s+dlx)\s+(?:skills?)\s+add\s+/u, '')
+  cleaned = cleaned.replace(/(?:^|\s+)(?:-y|--yes|-g|--global)(?=\s|$)/gu, ' ')
+  cleaned = cleaned.replace(/(?:^|\s+)(?:-a|--agent|--skill)\s+\S+/gu, ' ')
+  return cleaned.trim()
+}
+
+/**
+ * Normalize an identifier (which may be a GitHub shorthand like `citrolabs/ego-lite`,
+ * a GitHub browser URL with branch/tree, or a raw git transport) into a cloneable target.
+ *
+ * @param input - user-supplied clone source, command, or shorthand.
+ * @returns normalized target with cloneable url and optional ref.
+ */
+export function normalizeGitSource(input: string): GitSourceTarget {
+  const cleaned = cleanSkillCommandInput(input)
+  if (cleaned === '') {
+    return { url: '' }
+  }
+
+  // 1. GitHub web URL with tree: https://github.com/owner/repo/tree/branch/...
+  const treeMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/tree\/([^/]+)(?:\/.*)?$/iu.exec(cleaned)
+  if (treeMatch) {
+    const [, owner, repo, ref] = treeMatch
+    return {
+      url: `https://github.com/${owner}/${repo}.git`,
+      ref,
+    }
+  }
+
+  // 2. GitHub web URL without tree: https://github.com/owner/repo or https://github.com/owner/repo.git or https://github.com/owner/repo@ref
+  const webMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?(?:@([A-Za-z0-9._/-]+))?$/iu.exec(cleaned)
+  if (webMatch) {
+    const [, owner, repo, ref] = webMatch
+    return {
+      url: `https://github.com/${owner}/${repo}.git`,
+      ref,
+    }
+  }
+
+  // 3. GitHub shorthand: owner/repo or owner/repo@ref
+  // Exclude scp syntax (user@host:path), URLs (proto://...), or local paths (/..., ~..., ....)
+  if (!cleaned.includes(':') && !cleaned.startsWith('/') && !cleaned.startsWith('~') && !cleaned.startsWith('.')) {
+    const shorthandMatch = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:@([A-Za-z0-9._/-]+))?$/u.exec(cleaned)
+    if (shorthandMatch) {
+      const [, owner, repo, ref] = shorthandMatch
+      return {
+        url: `https://github.com/${owner}/${repo}.git`,
+        ref,
+      }
+    }
+  }
+
+  // 4. Raw git URL or transport
+  return { url: cleaned }
+}
+
+/**
+ * Validate a git identifier or shorthand, resolving it to a cloneable target.
+ *
+ * @param identifier - user-supplied clone source, command, or shorthand.
+ * @param allowFile - whether `file://` identifiers are allowed.
+ * @returns the validated and normalized target.
+ * @throws {SkillManagerError} when the source or ref is invalid or forbidden.
+ */
+export function resolveGitSource(identifier: string, allowFile: boolean): GitSourceTarget {
+  const normalized = normalizeGitSource(identifier)
+  const trimmedUrl = normalized.url.trim()
+  if (trimmedUrl === '' || trimmedUrl.startsWith('-') || !ALLOWED_GIT_IDENTIFIER.test(trimmedUrl)) {
     throw new SkillManagerError(
       400,
       'SKILL_SOURCE_INVALID',
-      'Git identifier must be an https://, ssh://, file:// URL or scp-like <user>@<host>:<path>',
+      'Git identifier must be an https://, ssh://, file:// URL, owner/repo shorthand, or scp-like <user>@<host>:<path>',
     )
   }
-  if (!allowFile && !NETWORK_GIT_IDENTIFIER.test(trimmed)) {
+  if (!allowFile && !NETWORK_GIT_IDENTIFIER.test(trimmedUrl)) {
     throw new SkillManagerError(400, 'SKILL_SOURCE_INVALID', 'file:// git identifiers are disabled by configuration')
   }
-  return trimmed
+
+  if (normalized.ref !== undefined) {
+    const ref = normalized.ref.trim()
+    if (ref === '' || ref.startsWith('-') || !/^[A-Za-z0-9._/-]+$/u.test(ref)) {
+      throw new SkillManagerError(400, 'SKILL_SOURCE_INVALID', `Invalid git ref: "${normalized.ref}"`)
+    }
+  }
+
+  return normalized
+}
+
+/**
+ * Validate a git identifier before any command runs.
+ * @param identifier - user-supplied clone source, command, or shorthand.
+ * @param allowFile - whether `file://` identifiers are allowed.
+ * @returns the resolved, cloneable git URL.
+ * @throws {SkillManagerError} when the transport is not on the allow list.
+ */
+export function assertGitIdentifier(identifier: string, allowFile: boolean): string {
+  return resolveGitSource(identifier, allowFile).url
 }
 
 /**
@@ -70,16 +164,17 @@ export async function ensureGitAvailable(): Promise<void> {
 
 /**
  * Derive a stable directory name from a git identifier (`owner-repo`).
- * @param identifier - validated git identifier.
+ * @param identifier - validated git identifier, shorthand, or target object.
  * @returns the sanitized slug.
  */
-export function deriveGitSlug(identifier: string): string {
-  if (identifier.startsWith('file://')) {
-    const pathname = identifier.slice('file://'.length).replace(/[/\\]+$/u, '')
+export function deriveGitSlug(identifier: string | GitSourceTarget): string {
+  const raw = typeof identifier === 'string' ? normalizeGitSource(identifier).url : identifier.url
+  if (raw.startsWith('file://')) {
+    const pathname = raw.slice('file://'.length).replace(/[/\\]+$/u, '')
     const last = pathname.split(/[/\\]/u).filter(Boolean).pop() ?? 'skill-source'
     return sanitizeDirectoryName(last.replace(/\.git$/iu, ''))
   }
-  const trimmed = identifier.replace(/[/\\]+$/u, '').replace(/\.git$/iu, '')
+  const trimmed = raw.replace(/[/\\]+$/u, '').replace(/\.git$/iu, '')
   const segments = trimmed.split(/[/:]+/u).filter(Boolean)
   const last = segments[segments.length - 1] ?? 'skill-source'
   const owner = segments.length > 1 ? segments[segments.length - 2] : undefined
@@ -104,20 +199,23 @@ export function resolveFreeSlug(libraryDir: string, base: string): string {
  * Clone a git source into the library and validate its contents.
  * @param job - job receiving live command output.
  * @param options - library and protocol configuration.
- * @param identifier - validated git identifier.
+ * @param identifier - validated git identifier, shorthand, or target.
  * @returns the created source slug.
  * @throws {SkillManagerError} when git fails or the clone holds no skill.
  */
 export async function installGitSource(
   job: JobRecord,
   options: InstallerOptions,
-  identifier: string,
+  identifier: string | GitSourceTarget,
 ): Promise<string> {
   await ensureGitAvailable()
   mkdirSync(options.libraryDir, { recursive: true })
-  const slug = resolveFreeSlug(options.libraryDir, deriveGitSlug(identifier))
+  const targetSource = typeof identifier === 'string'
+    ? resolveGitSource(identifier, options.allowFileProtocol)
+    : identifier
+  const slug = resolveFreeSlug(options.libraryDir, deriveGitSlug(targetSource))
   const target = join(options.libraryDir, slug)
-  await clone(job, identifier, target, options.libraryDir)
+  await clone(job, targetSource.url, target, options.libraryDir, targetSource.ref)
   try {
     assertSourceContents(target)
   } catch (error) {
@@ -260,9 +358,20 @@ function assertSourceContents(target: string): void {
   )
 }
 
-async function clone(job: JobRecord, identifier: string, target: string, libraryDir: string): Promise<void> {
+async function clone(
+  job: JobRecord,
+  identifier: string,
+  target: string,
+  libraryDir: string,
+  ref?: string,
+): Promise<void> {
+  const args = ['clone', '--depth', '1', '--progress']
+  if (ref !== undefined && ref.trim() !== '') {
+    args.push('--branch', ref.trim())
+  }
+  args.push('--', identifier, target)
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['clone', '--depth', '1', '--progress', '--', identifier, target], {
+    const child = spawn('git', args, {
       cwd: libraryDir,
       stdio: ['ignore', 'pipe', 'pipe'],
     })

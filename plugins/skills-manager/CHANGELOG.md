@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- Support installing skills via GitHub `owner/repo` shorthand (with optional `@branch`/`@tag`), GitHub browser URLs (including `/tree/...`), and pasted `npx skill(s) add` CLI commands in both the backend installer and the Add Skill Source dialog.
+- Fix Windows link removal (`Path is a directory: \\?\...` `ERR_FS_EISDIR`) by removing NTFS directory junctions and directory symlinks with `unlinkSync` + `rmdirSync` fallback instead of non-recursive `rmSync`, and strip Windows `\\?\` extended-length prefixes in path containment comparisons.
+
 ## 0.1.3
 
 - Global skill scanning now resolves the agent roots against the platform home directory: on Windows `%USERPROFILE%` replaces a POSIX `HOME` inherited from Git Bash, and an unset or blank home no longer makes the roots current-directory-relative, which made every non-DSH root report as missing.

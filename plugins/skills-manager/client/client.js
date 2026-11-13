@@ -2528,6 +2528,36 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = (0, react.useState)(false);
 			const [log, setLog] = (0, react.useState)(null);
 			const [error, setError] = (0, react.useState)(null);
+			const handleIdentifierChange = (value) => {
+				setIdentifier(value);
+				const trimmed = value.trim();
+				if ((/^(?:npx|bunx|pnpm\s+dlx)\s+skills?\s+add/iu.test(trimmed) || /^(?:https?:\/\/|ssh:\/\/|git@)/iu.test(trimmed) || /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:@\S+)?$/u.test(trimmed) && !trimmed.startsWith(".") && !trimmed.startsWith("/") && !trimmed.startsWith("~")) && sourceType === "local") setSourceType("git");
+			};
+			const gitPreview = (0, react.useMemo)(() => {
+				if (sourceType !== "git") return null;
+				const trimmed = identifier.trim();
+				if (trimmed === "") return null;
+				const cleaned = trimmed.replace(/^(?:npx|bunx|pnpm\s+dlx|yarn\s+dlx)\s+(?:skills?)\s+add\s+/u, "").replace(/(?:^|\s+)(?:-y|--yes|-g|--global)(?=\s|$)/gu, " ").replace(/(?:^|\s+)(?:-a|--agent|--skill)\s+\S+/gu, " ").trim();
+				if (cleaned === "") return null;
+				const treeMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/tree\/([^/]+)(?:\/.*)?$/iu.exec(cleaned);
+				if (treeMatch) return {
+					url: `https://github.com/${treeMatch[1]}/${treeMatch[2]}.git`,
+					ref: treeMatch[3]
+				};
+				const webMatch = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?(?:@([A-Za-z0-9._/-]+))?$/iu.exec(cleaned);
+				if (webMatch) return {
+					url: `https://github.com/${webMatch[1]}/${webMatch[2]}.git`,
+					ref: webMatch[3]
+				};
+				if (!cleaned.includes(":") && !cleaned.startsWith("/") && !cleaned.startsWith("~") && !cleaned.startsWith(".")) {
+					const shorthandMatch = /^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?:@([A-Za-z0-9._/-]+))?$/u.exec(cleaned);
+					if (shorthandMatch) return {
+						url: `https://github.com/${shorthandMatch[1]}/${shorthandMatch[2]}.git`,
+						ref: shorthandMatch[3]
+					};
+				}
+				return null;
+			}, [identifier, sourceType]);
 			const submit = (0, react.useCallback)(async () => {
 				if (identifier.trim() === "" || busy) return;
 				setBusy(true);
@@ -2620,11 +2650,28 @@ window.__ModuleLoader__.load({
 										autoFocus: true,
 										placeholder: sourceType === "git" ? t("identifierGitHint") : t("identifierLocalHint"),
 										onChange: (event) => {
-											setIdentifier(event.target.value);
+											handleIdentifierChange(event.target.value);
 										},
 										onKeyDown: (event) => {
 											if (event.key === "Enter") submit();
 										}
+									})]
+								}),
+								gitPreview !== null && gitPreview.url !== identifier.trim() && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+									style: {
+										fontSize: 12,
+										color: COLORS.secondary,
+										display: "flex",
+										alignItems: "center",
+										gap: 6
+									},
+									children: [/* @__PURE__ */ (0, react_jsx_runtime.jsx)("span", { children: t("gitTargetPreview", { url: gitPreview.url }) }), gitPreview.ref !== void 0 && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("span", {
+										style: { color: COLORS.brand },
+										children: [
+											"(",
+											t("gitTargetBranch", { ref: gitPreview.ref }),
+											")"
+										]
 									})]
 								}),
 								sourceType === "local" && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("label", {
@@ -2837,8 +2884,10 @@ window.__ModuleLoader__.load({
 			installTitle: "Add a skill source",
 			sourceTypeGit: "Git repository",
 			sourceTypeLocal: "Local folder",
-			identifierGit: "Repository address",
-			identifierGitHint: "https://, ssh://, or git@host:owner/repo",
+			identifierGit: "Repository address or command",
+			identifierGitHint: "e.g. citrolabs/ego-lite, npx skills add ..., or https://github.com/...",
+			gitTargetPreview: "Will clone from {url}",
+			gitTargetBranch: "branch/tag: {ref}",
 			identifierLocal: "Folder path",
 			identifierLocalHint: "An absolute path or ~/… that contains a SKILL.md",
 			forceLocal: "Replace an existing source with the same name",
@@ -2959,8 +3008,10 @@ window.__ModuleLoader__.load({
 			installTitle: "添加技能来源",
 			sourceTypeGit: "Git 仓库",
 			sourceTypeLocal: "本地目录",
-			identifierGit: "仓库地址",
-			identifierGitHint: "https://、ssh:// 或 git@host:owner/repo",
+			identifierGit: "仓库地址或安装命令",
+			identifierGitHint: "例如 citrolabs/ego-lite、npx skills add ... 或 https://github.com/...",
+			gitTargetPreview: "将克隆仓库：{url}",
+			gitTargetBranch: "分支/标签：{ref}",
 			identifierLocal: "目录路径",
 			identifierLocalHint: "包含 SKILL.md 的绝对路径或 ~/… 路径",
 			forceLocal: "覆盖同名的已有来源",
