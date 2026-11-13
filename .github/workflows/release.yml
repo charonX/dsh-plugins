@@ -1,0 +1,144 @@
+name: Release Plugin
+
+on:
+  push:
+    tags:
+      - '*-v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: Plugin directory under plugins/ (e.g. skills-manager)
+        required: true
+        type: choice
+        options:
+          - autoloop
+          - immersive-translate
+          - media-station
+          - model-studio
+          - skills-manager
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve plugin and version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            PLUGIN="${{ inputs.plugin }}"
+            VERSION=$(node -p "require('./plugins/${PLUGIN}/package.json').version")
+            TAG="${PLUGIN}-v${VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            PLUGIN="${TAG%-v*}"
+            VERSION="${TAG##*-v}"
+          fi
+
+          PKG_DIR="plugins/${PLUGIN}"
+          if [ ! -f "${PKG_DIR}/package.json" ]; then
+            echo "::error::Plugin directory ${PKG_DIR} does not exist"
+            exit 1
+          fi
+
+          PKG_NAME=$(node -p "require('./${PKG_DIR}/package.json').name")
+          PKG_VERSION=$(node -p "require('./${PKG_DIR}/package.json').version")
+          if [ "${VERSION}" != "${PKG_VERSION}" ]; then
+            echo "::error::Tag version (${VERSION}) does not match ${PKG_DIR}/package.json (${PKG_VERSION})"
+            exit 1
+          fi
+
+          echo "plugin=${PLUGIN}" >> "$GITHUB_OUTPUT"
+          echo "pkg_dir=${PKG_DIR}" >> "$GITHUB_OUTPUT"
+          echo "pkg_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Ensure npm supports OIDC Trusted Publishing
+        run: |
+          echo "Node: $(node -v)"
+          echo "npm: $(npm -v)"
+          npm install -g npm@latest
+          echo "Updated npm: $(npm -v)"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run checks and build
+        working-directory: ${{ steps.meta.outputs.pkg_dir }}
+        run: |
+          pnpm run typecheck
+          pnpm run test
+          pnpm run build
+          if node -e "const p=require('./package.json'); process.exit(p.scripts?.['smoke:client'] ? 0 : 1)"; then
+            pnpm run smoke:client
+          fi
+
+      - name: Publish to npm (OIDC Trusted Publishing)
+        working-directory: ${{ steps.meta.outputs.pkg_dir }}
+        run: npm publish --provenance --access public
+
+      - name: Pack tarball for GitHub Release
+        id: pack
+        working-directory: ${{ steps.meta.outputs.pkg_dir }}
+        run: |
+          TARBALL=$(npm pack --quiet)
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHANGELOG="${{ steps.meta.outputs.pkg_dir }}/CHANGELOG.md"
+          VERSION="${{ steps.meta.outputs.version }}"
+          NOTES_FILE="$(pwd)/release-notes.md"
+          if [ -f "${CHANGELOG}" ]; then
+            node -e '
+              const fs = require("node:fs");
+              const text = fs.readFileSync(process.argv[1], "utf8");
+              const version = process.argv[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const match = text.match(new RegExp(`^##\\s+v?${version}\\b[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+|$)`, "m"));
+              if (match && match[1].trim()) {
+                fs.writeFileSync(process.argv[3], match[1].trim() + "\n");
+              }
+            ' "${CHANGELOG}" "${VERSION}" "${NOTES_FILE}"
+          fi
+          if [ -s "${NOTES_FILE}" ]; then
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          TITLE="${{ steps.meta.outputs.pkg_name }}@${{ steps.meta.outputs.version }}"
+          TARBALL_PATH="${{ steps.meta.outputs.pkg_dir }}/${{ steps.pack.outputs.tarball }}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${TARBALL_PATH}" --clobber
+          elif [ "${{ steps.notes.outputs.has_notes }}" = "true" ]; then
+            gh release create "${TAG}" "${TARBALL_PATH}" --title "${TITLE}" --notes-file release-notes.md
+          else
+            gh release create "${TAG}" "${TARBALL_PATH}" --title "${TITLE}" --generate-notes
+          fi
