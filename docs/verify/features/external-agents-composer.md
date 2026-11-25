@@ -24,3 +24,4 @@
 
 - 若某外部 CLI 在本机未安装或未认证登录，对应 Agent 应优雅降级/显示不可用状态，不应拖垮整页渲染。
 - Headless 会话路由按 `ext-*` 自动分发，验证时注意核对最终发起进程对应的 CLI adapter。
+- 外部 Agent（尤其 `ext-agy` / Claude Code）在工具调用未结束前输出思考或文本流时会触发切 step，务必确保 `step/end` 前已闭合所有 `pendingToolCalls` 且每个并行/后台恢复工具均已通过 `assistant/message` 声明，避免冷加载 `SessionFormatError`（由 `tests/turn-driver.spec.ts` `assertV4ToolStepLifecycle` 门禁守护）。
