@@ -1,0 +1,225 @@
+/* Mappings page on the DSH alias tokens. The tabbed ManagerPage owns the
+   outer layout; `.page` only spaces content. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 4px clamp(24px, 4vw, 48px) 24px;
+}
+
+.empty {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.emptyInline {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-card-fill);
+}
+
+.row[data-valid='false'] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 50%, transparent);
+}
+
+.external {
+  font-family: var(--dsw-font-mono, monospace);
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.arrow {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.project {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Danger pill, mirroring the Tag primitive's tone recipe. */
+.badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  white-space: nowrap;
+}
+
+/* Ghost text action. */
+.action {
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.action:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.action:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* Embedded variant for the settings page: same stack, no page padding. */
+.embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.busy {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.invalid {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-card-fill);
+}
+
+.formTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The official control recipe; selects swap the native marker for the
+   shared chevron with a 28px right inset. */
+.input {
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+select.input {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2381858C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.submit {
+  box-sizing: border-box;
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.submit:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.retry {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-link);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+
+.retry:hover {
+  text-decoration: underline;
+}

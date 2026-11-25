@@ -14,10 +14,14 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import { ApiFailure, readState, savePrefs, translate } from './api.ts'
+import { AuditView } from './AuditView.tsx'
+import { CacheView } from './CacheView.tsx'
+import { DshSelect } from './DshSelect.tsx'
+import { PromptView } from './PromptView.tsx'
 import { COLORS, inputStyle, primaryButtonStyle, quietButtonStyle } from './tokens.ts'
 import { DEFAULT_SUBMIT_KEY, DEFAULT_TARGET_LANGUAGE, TARGET_LANGUAGES, languageLabel, type EngineState } from '../shared/api.ts'
 import { isTranslateShortcut } from '../shared/keys.ts'
-import type { PageTranslator } from './pageTranslator.ts'
+import { isAbortError, type PageTranslator } from './pageTranslator.ts'
 
 /** Localized `t` for the plugin namespace. */
 export type Translate = TranslateNS<'immersive-translate'>
@@ -36,6 +40,7 @@ export interface PanelProps extends TranslateProps {
 
 /** Failure text for an arbitrary throw. */
 function describe(error: unknown, t: Translate): string {
+  if (isAbortError(error)) return ''
   if (error instanceof ApiFailure) return `${error.code}: ${error.message}`
   return error instanceof Error ? error.message : t('loadFailed')
 }
@@ -47,6 +52,8 @@ function describe(error: unknown, t: Translate): string {
  */
 export function FloatingButton({ t, page }: PropsRuntime<'shell.overlay'> & PanelProps): ReactElement {
   const [open, setOpen] = useState(false)
+  const [showAuditModal, setShowAuditModal] = useState(false)
+  const [auditTab, setAuditTab] = useState<'audit' | 'cache' | 'prompt'>('audit')
   const [state, setState] = useState<EngineState | null>(null)
   const [text, setText] = useState('')
   const [result, setResult] = useState<string | null>(null)
@@ -83,7 +90,7 @@ export function FloatingButton({ t, page }: PropsRuntime<'shell.overlay'> & Pane
       setResult(answer.results[0]?.text ?? '')
       setReasoned(answer.reasoned)
     } catch (failure: unknown) {
-      if (abort.signal.aborted) return
+      if (isAbortError(failure, abort.signal)) return
       setError(describe(failure, t))
       setResult(null)
     } finally {
@@ -177,24 +184,16 @@ export function FloatingButton({ t, page }: PropsRuntime<'shell.overlay'> & Pane
               onClick={() => { void run() }}>
               {busy ? t('translating') : t('translate')}
             </button>
-            <select
-              aria-label={t('targetLanguage')}
+            <DshSelect
+              ariaLabel={t('targetLanguage')}
               value={language}
-              onChange={(event) => { pickLanguage(event.target.value) }}
-              style={{
-                ...inputStyle,
-                width: 'auto',
-                marginLeft: 'auto',
-                padding: '4px 6px',
-                fontSize: 12,
-                color: COLORS.secondary,
-                background: 'transparent',
-                cursor: 'pointer',
-              }}>
-              {TARGET_LANGUAGES.map(code => (
-                <option key={code} value={code}>{languageLabel(code)}</option>
-              ))}
-            </select>
+              options={TARGET_LANGUAGES.map(code => ({ value: code, label: languageLabel(code) }))}
+              onChange={pickLanguage}
+              variant="compact"
+              align="end"
+              side="top"
+              style={{ marginLeft: 'auto' }}
+            />
           </div>
           {error !== null && (
             <span style={{ color: COLORS.error, fontSize: 12, lineHeight: 1.5 }}>{error}</span>
@@ -212,9 +211,27 @@ export function FloatingButton({ t, page }: PropsRuntime<'shell.overlay'> & Pane
               onClick={togglePage}>
               {pageState.active ? t('pageRestore') : t('pageTranslate')}
             </button>
+            <button
+              type="button"
+              style={{
+                ...quietButtonStyle,
+                padding: '2px 8px',
+                fontSize: 12,
+                marginLeft: 'auto',
+              }}
+              onClick={() => { setShowAuditModal(true) }}>
+              {t('auditQuickEntry')}
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 18 }}>
             {pageState.running && pageState.total > 0 && (
               <span style={{ color: COLORS.tertiary, fontSize: 11 }}>
-                {t('pageProgress', { done: pageState.done, total: pageState.total })}
+                {t('pageProgress', {
+                  done: pageState.done,
+                  total: pageState.total,
+                  batch: Math.min(pageState.batchDone + 1, pageState.batchTotal),
+                  totalBatches: pageState.batchTotal,
+                })}
               </span>
             )}
             {!pageState.running && pageState.active && pageState.translated === 0 && (
@@ -266,6 +283,93 @@ export function FloatingButton({ t, page }: PropsRuntime<'shell.overlay'> & Pane
         <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>文</span>
         <span>{t('fabLabel')}</span>
       </button>
+
+      {showAuditModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.45)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 10000,
+          pointerEvents: 'auto',
+        }}>
+          <div style={{
+            width: 760,
+            maxWidth: '92vw',
+            maxHeight: '85vh',
+            overflow: 'auto',
+            background: COLORS.layer2,
+            border: `0.5px solid ${COLORS.border}`,
+            borderRadius: COLORS.radiusLg,
+            boxShadow: COLORS.overlayShadow,
+            padding: 20,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setAuditTab('audit')}
+                  style={{
+                    ...quietButtonStyle,
+                    background: auditTab === 'audit' ? COLORS.layer3 : 'transparent',
+                    fontWeight: auditTab === 'audit' ? 600 : 400,
+                    border: auditTab === 'audit' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+                  }}>
+                  {t('tabAudit')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuditTab('cache')}
+                  style={{
+                    ...quietButtonStyle,
+                    background: auditTab === 'cache' ? COLORS.layer3 : 'transparent',
+                    fontWeight: auditTab === 'cache' ? 600 : 400,
+                    border: auditTab === 'cache' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+                  }}>
+                  {t('tabCache')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuditTab('prompt')}
+                  style={{
+                    ...quietButtonStyle,
+                    background: auditTab === 'prompt' ? COLORS.layer3 : 'transparent',
+                    fontWeight: auditTab === 'prompt' ? 600 : 400,
+                    border: auditTab === 'prompt' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+                  }}>
+                  {t('tabPrompt')}
+                </button>
+              </div>
+              <button
+                type="button"
+                style={{ ...quietButtonStyle, padding: '4px 10px', fontSize: 12 }}
+                onClick={() => setShowAuditModal(false)}>
+                {t('closeModal')}
+              </button>
+            </div>
+            {auditTab === 'audit' && <AuditView t={t} />}
+            {auditTab === 'cache' && <CacheView t={t} />}
+            {auditTab === 'prompt' && state !== null && (
+              <PromptView
+                t={t}
+                targetLanguage={language}
+                customPrompt={state.prefs.customPrompt}
+                onSaved={(updated) => {
+                  setState(curr => curr === null ? curr : { ...curr, prefs: updated })
+                }}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

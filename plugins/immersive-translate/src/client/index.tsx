@@ -47,7 +47,7 @@ export function apply(ctx: Context): void {
 
   // One translator per page: closing the panel must not throw the page's
   // translations away, and the plugin's disposer is the only thing that does.
-  const page = new PageTranslator()
+  const page = new PageTranslator(t)
   ctx.effect(() => () => { page.restore() }, 'immersive-translate: page translation teardown')
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({

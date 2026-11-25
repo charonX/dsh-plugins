@@ -11,11 +11,13 @@ on:
         required: true
         type: choice
         options:
-          - autoloop
+          - dsh-manager
+          - external-agents
           - immersive-translate
           - media-station
           - model-studio
           - skills-manager
+          - system-dashboard
 
 permissions:
   contents: write

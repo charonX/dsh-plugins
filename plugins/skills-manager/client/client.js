@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
+		let _deepseek_ai_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 		let react_jsx_runtime = require("react/jsx-runtime");
 		// src/shared/api.ts
 		/** Default HTTP prefix owned by this plugin. */
@@ -2133,23 +2134,11 @@ window.__ModuleLoader__.load({
 														display: "inline-flex",
 														alignItems: "center",
 														justifyContent: "center",
-														color: "var(--dsw-alias-label-caption, #81858c)",
+														color: COLORS.tertiary,
 														transform: pickerOpen ? "rotate(180deg)" : "none",
 														transition: "transform 140ms ease"
 													},
-													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("svg", {
-														width: "12",
-														height: "12",
-														viewBox: "0 0 12 12",
-														fill: "none",
-														children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)("path", {
-															d: "M3 4.5L6 7.5L9 4.5",
-															stroke: "currentColor",
-															strokeWidth: "1.5",
-															strokeLinecap: "round",
-															strokeLinejoin: "round"
-														})
-													})
+													children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconChevronDownOutlineRegular, { size: 12 })
 												})
 											]
 										}), pickerOpen && /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
@@ -2162,9 +2151,9 @@ window.__ModuleLoader__.load({
 												zIndex: 1100,
 												boxSizing: "border-box",
 												border: `0.5px solid ${COLORS.border}`,
-												borderRadius: "var(--dsw-radius-lg, 10px)",
-												background: COLORS.bgLayer2,
-												boxShadow: "var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,0.18))",
+												borderRadius: "var(--dsw-radius-lg, 12px)",
+												background: "var(--dsw-alias-bg-layer-3, #ffffff)",
+												boxShadow: "var(--dsw-elevation-prominent)",
 												maxHeight: 260,
 												overflowY: "auto",
 												padding: 4
@@ -2195,8 +2184,8 @@ window.__ModuleLoader__.load({
 															boxSizing: "border-box",
 															fontSize: 13,
 															cursor: "pointer",
-															borderRadius: "var(--dsw-radius-md, 6px)",
-															background: isChecked ? "rgba(37, 99, 235, 0.05)" : "transparent"
+															borderRadius: "var(--dsw-radius-md, 8px)",
+															background: isChecked ? "color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent)" : "transparent"
 														},
 														children: [
 															/* @__PURE__ */ (0, react_jsx_runtime.jsx)("input", {

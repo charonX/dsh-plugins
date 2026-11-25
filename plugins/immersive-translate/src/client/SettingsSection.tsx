@@ -11,8 +11,12 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { ApiFailure, readState, savePrefs } from './api.ts'
+import { AuditView } from './AuditView.tsx'
+import { CacheView } from './CacheView.tsx'
+import { DshSelect } from './DshSelect.tsx'
+import { PromptView } from './PromptView.tsx'
 import type { TranslateProps } from './FloatingButton.tsx'
-import { COLORS, inputStyle, primaryButtonStyle } from './tokens.ts'
+import { COLORS, primaryButtonStyle, quietButtonStyle } from './tokens.ts'
 import { SUBMIT_KEYS, TARGET_LANGUAGES, languageLabel, submitKeyOf, type EngineState, type SubmitKey } from '../shared/api.ts'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'failed'
@@ -28,6 +32,7 @@ function describe(error: unknown, fallback: string): string {
  * @returns the section body.
  */
 export function SettingsSection({ t }: PropsRuntime<'settings.section'> & TranslateProps): ReactElement {
+  const [activeTab, setActiveTab] = useState<'preferences' | 'prompt' | 'audit' | 'cache'>('preferences')
   const [state, setState] = useState<EngineState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<SaveStatus>('idle')
@@ -98,81 +103,146 @@ export function SettingsSection({ t }: PropsRuntime<'settings.section'> & Transl
         <p style={{ margin: 0, color: COLORS.secondary, fontSize: 13 }}>{t('settingsSubtitle')}</p>
       </header>
 
-      {state === null && error === null && <span style={{ color: COLORS.tertiary }}>{t('loading')}</span>}
-      {error !== null && <span style={{ color: COLORS.error }}>{error}</span>}
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 8, borderBottom: `0.5px solid ${COLORS.border}`, paddingBottom: 8 }}>
+        <button
+          type="button"
+          onClick={() => setActiveTab('preferences')}
+          style={{
+            ...quietButtonStyle,
+            background: activeTab === 'preferences' ? COLORS.layer3 : 'transparent',
+            fontWeight: activeTab === 'preferences' ? 600 : 400,
+            border: activeTab === 'preferences' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+          }}>
+          {t('tabPreferences')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('prompt')}
+          style={{
+            ...quietButtonStyle,
+            background: activeTab === 'prompt' ? COLORS.layer3 : 'transparent',
+            fontWeight: activeTab === 'prompt' ? 600 : 400,
+            border: activeTab === 'prompt' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+          }}>
+          {t('tabPrompt')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('audit')}
+          style={{
+            ...quietButtonStyle,
+            background: activeTab === 'audit' ? COLORS.layer3 : 'transparent',
+            fontWeight: activeTab === 'audit' ? 600 : 400,
+            border: activeTab === 'audit' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+          }}>
+          {t('tabAudit')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('cache')}
+          style={{
+            ...quietButtonStyle,
+            background: activeTab === 'cache' ? COLORS.layer3 : 'transparent',
+            fontWeight: activeTab === 'cache' ? 600 : 400,
+            border: activeTab === 'cache' ? `0.5px solid ${COLORS.borderStrong}` : 'none',
+          }}>
+          {t('tabCache')}
+        </button>
+      </div>
 
-      {state !== null && (
+      {activeTab === 'prompt' && state !== null && (
+        <PromptView
+          t={t}
+          targetLanguage={language}
+          customPrompt={state.prefs.customPrompt}
+          onSaved={(updated) => {
+            setState(curr => curr === null ? curr : { ...curr, prefs: updated })
+          }}
+        />
+      )}
+      {activeTab === 'audit' && <AuditView t={t} />}
+      {activeTab === 'cache' && <CacheView t={t} />}
+
+      {activeTab === 'preferences' && (
         <>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={{ color: COLORS.secondary }}>{t('targetLanguage')}</span>
-            <select
-              value={language}
-              onChange={(event) => { setLanguage(event.target.value); setStatus('idle') }}
-              style={{ ...inputStyle, width: 220 }}>
-              {TARGET_LANGUAGES.map(code => <option key={code} value={code}>{languageLabel(code)}</option>)}
-            </select>
-          </label>
+          {state === null && error === null && <span style={{ color: COLORS.tertiary }}>{t('loading')}</span>}
+          {error !== null && <span style={{ color: COLORS.error }}>{error}</span>}
 
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={{ color: COLORS.secondary }}>{t('submitKey')}</span>
-            <select
-              value={submitKey}
-              onChange={(event) => { setSubmitKey(submitKeyOf(event.target.value) ?? 'enter'); setStatus('idle') }}
-              style={{ ...inputStyle, width: 260 }}>
-              {SUBMIT_KEYS.map(mode => (
-                <option key={mode} value={mode}>
-                  {mode === 'mod-enter' ? t('submitKeyMod') : t('submitKeyEnter')}
-                </option>
-              ))}
-            </select>
-            <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('submitKeyHint')}</span>
-          </label>
+          {state !== null && (
+            <>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ color: COLORS.secondary }}>{t('targetLanguage')}</span>
+                <DshSelect
+                  ariaLabel={t('targetLanguage')}
+                  value={language}
+                  options={TARGET_LANGUAGES.map(code => ({ value: code, label: languageLabel(code) }))}
+                  onChange={(next) => { setLanguage(next); setStatus('idle') }}
+                  style={{ width: 220 }}
+                />
+              </label>
 
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={follow}
-              onChange={(event) => { setFollow(event.target.checked); setStatus('idle') }}
-              style={{ marginTop: 2 }}
-            />
-            <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <span>{t('followDefaultModel')}</span>
-              <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('followDefaultHint')}</span>
-            </span>
-          </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ color: COLORS.secondary }}>{t('submitKey')}</span>
+                <DshSelect
+                  ariaLabel={t('submitKey')}
+                  value={submitKey}
+                  options={SUBMIT_KEYS.map(mode => ({
+                    value: mode,
+                    label: mode === 'mod-enter' ? t('submitKeyMod') : t('submitKeyEnter'),
+                  }))}
+                  onChange={(next) => { setSubmitKey(submitKeyOf(next) ?? 'enter'); setStatus('idle') }}
+                  style={{ width: 260 }}
+                />
+                <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('submitKeyHint')}</span>
+              </label>
 
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: follow ? 0.5 : 1 }}>
-            <span style={{ color: COLORS.secondary }}>{t('model')}</span>
-            <select
-              value={route}
-              disabled={follow || options.length === 0}
-              onChange={(event) => { setRoute(event.target.value); setStatus('idle') }}
-              style={{ ...inputStyle, width: '100%', maxWidth: 420 }}>
-              {options.length === 0 && <option value="">{t('modelUnavailable')}</option>}
-              {options.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('modelHint')}</span>
-          </label>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={follow}
+                  onChange={(event) => { setFollow(event.target.checked); setStatus('idle') }}
+                  style={{ marginTop: 2 }}
+                />
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span>{t('followDefaultModel')}</span>
+                  <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('followDefaultHint')}</span>
+                </span>
+              </label>
 
-          {effective !== null && (
-            <span style={{ color: COLORS.tertiary, fontSize: 12 }}>
-              {`${t('engine')}: ${effective.provider} / ${effective.model}`}
-            </span>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: follow ? 0.5 : 1 }}>
+                <span style={{ color: COLORS.secondary }}>{t('model')}</span>
+                <DshSelect
+                  ariaLabel={t('model')}
+                  value={route}
+                  disabled={follow || options.length === 0}
+                  placeholder={t('modelUnavailable')}
+                  options={options.length === 0 ? [{ value: '', label: t('modelUnavailable') }] : options}
+                  onChange={(next) => { setRoute(next); setStatus('idle') }}
+                  style={{ width: '100%', maxWidth: 420 }}
+                />
+                <span style={{ color: COLORS.tertiary, fontSize: 12 }}>{t('modelHint')}</span>
+              </label>
+
+              {effective !== null && (
+                <span style={{ color: COLORS.tertiary, fontSize: 12 }}>
+                  {`${t('engine')}: ${effective.provider} / ${effective.model}`}
+                </span>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button
+                  type="button"
+                  style={primaryButtonStyle}
+                  disabled={status === 'saving'}
+                  onClick={() => { void save() }}>
+                  {status === 'saving' ? t('saving') : t('save')}
+                </button>
+                {status === 'saved' && <span style={{ color: COLORS.secondary, fontSize: 12 }}>{t('saved')}</span>}
+                {status === 'failed' && <span style={{ color: COLORS.error, fontSize: 12 }}>{t('saveFailed')}</span>}
+              </div>
+            </>
           )}
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button
-              type="button"
-              style={primaryButtonStyle}
-              disabled={status === 'saving'}
-              onClick={() => { void save() }}>
-              {status === 'saving' ? t('saving') : t('save')}
-            </button>
-            {status === 'saved' && <span style={{ color: COLORS.secondary, fontSize: 12 }}>{t('saved')}</span>}
-            {status === 'failed' && <span style={{ color: COLORS.error, fontSize: 12 }}>{t('saveFailed')}</span>}
-          </div>
         </>
       )}
     </section>

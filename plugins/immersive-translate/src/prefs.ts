@@ -14,6 +14,7 @@ import { submitKeyOf, type TranslatePrefs } from './shared/api.js'
 /** Minimal logger shape the plugin needs from `ctx.logger`. */
 export interface Logger {
   warn: (message: string) => void
+  info?: (message: string) => void
 }
 
 /** Durable preference store; reads are synchronous from an in-memory copy. */
@@ -92,12 +93,14 @@ export function normalize(value: unknown, defaults: TranslatePrefs): TranslatePr
   const submitKey = submitKeyOf(source.submitKey) ?? defaults.submitKey
   const provider = nonEmpty(source.provider)
   const model = nonEmpty(source.model)
+  const customPrompt = nonEmpty(source.customPrompt)
   return {
     targetLanguage,
     followDefaultModel,
     submitKey,
     ...provider === undefined ? {} : { provider },
     ...model === undefined ? {} : { model },
+    ...customPrompt === undefined ? {} : { customPrompt },
   }
 }
 

@@ -1,0 +1,9 @@
+- insert:
+    - id: dsh-manager
+      name: '@charonx/dsh-manager'
+      config:
+        steward:
+          provider: mock
+          model: steward-test
+          tickMs: 3600000
+          evalTimeoutMs: 200

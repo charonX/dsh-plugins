@@ -1,0 +1,10 @@
+# dsh bundle patch: inserts the system-dashboard plugin into a profile's layer stack.
+- insert:
+    - id: system-dashboard
+      name: '@charonx/dsh-system-dashboard'
+      config:
+        enabled: true
+        systemSampleIntervalMs: 2000
+        wifiMonitorEnabled: true
+        wifiAutoRecover: true
+        wifiCheckIntervalMs: 5000

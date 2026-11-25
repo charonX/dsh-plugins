@@ -2,6 +2,13 @@
 
 本目录是 **DeepSeek Harness 插件开发工作区（dsh-plugins Monorepo）**。本仓库管理全部自建插件（位于 `plugins/`），并通过 pnpm workspace 统一管理依赖与构建；上游 `deepseek-harness` 保持源码独立检出，不纳入插件 Monorepo 版本追踪。
 
+## Git Flow 与交付收口（强制规则，详见 [docs/git-flow.md](docs/git-flow.md)）
+
+- **`main` 仅接受 GitHub PR**：`main` 分支受 GitHub 分支保护。严禁任何本地或自动化直接 `git push origin main` 或执行 `local_merge_branch(targetBranch: "main")`。
+- **`test` 为集成验收分支**：开发分支 / worktree 完成并跑通 `./check-plugins-against-harness.sh <plugin>` 后，经人工确认本地合入 **`test`**（`local_merge_branch(targetBranch: "test")`）；严禁直接合入 `main`。
+- **特性分支命名以 `feat-` 开头**：格式为 `feat-<plugin>-<feature-summary>`（英文小写短横线，体现具体功能，例如 `feat-dsh-manager-watchdog-heartbeat`）。
+- **人工发起 PR 入 `main`**：`test` 分支实测通过后，由人工推送并向 `main` 发起 GitHub PR，在 GitHub 上审核合并。
+
 ## 目录与仓库角色
 
 ```
@@ -14,11 +21,13 @@ dsh/
 ├── dev.sh               # 工作区插件开发启动器（扫描 plugins/* → 构建 → 官方 HMR 热重载）
 ├── deepseek-harness/    # 上游 harness 源码 checkout（独立 .git，分支 master，remote origin）
 └── plugins/             # 自建插件集中目录（Monorepo 包）
-    ├── autoloop/            # 确定性自动化中台与调度大屏（见其 README.md）
+    ├── dsh-manager/         # 外部 Trigger 收集与工单管理看板（见其 README.md）
+    ├── external-agents/     # 外部 Agent CLI 适配器
     ├── immersive-translate/ # Agent 驱动的沉浸式双语翻译（见其 docs/DESIGN.md）
     ├── media-station/       # 自媒体工作站插件（见其 README.md）
     ├── model-studio/        # 模型层工作室（供应商预设 / compat 编辑 / 方言探测，见其 docs/SPEC.md）
-    └── skills-manager/      # 技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
+    ├── skills-manager/      # 技能库管理（Host + Web Client 半，见其 docs/DESIGN.md）
+    └── system-dashboard/    # 系统监控大屏
 ```
 
 | 仓库 / 目录 | 角色 | 改动方式 |
@@ -171,7 +180,7 @@ pnpm run test:docs      # 文档快速门禁，doc-sync 为完整门禁
 
 1. 动手前先确认改哪个仓库：读该仓库相关 README / AGENTS / docs，`git status` 确认工作树干净后再改。
 2. 最小改动。不做未被要求的重构、格式化、依赖升级；跨仓库改动先说明理由并确认。
-3. 每个仓库独立提交，不把插件改动混进 harness 提交，反之亦然；不 `git push`、不建 PR、不改 git 配置，除非明确要求。
+3. 每个仓库独立提交，不把插件改动混进 harness 提交，反之亦然；遵循 `docs/git-flow.md`——严禁直接合入或推送到 `main`，开发分支/worktree 验证后经人工确认合并到 `test`，最终由人工向 `main` 发起 GitHub PR 并合并。
 4. 收工前按改动面跑窄检查（类型 + 相关测试 + 该仓库的门禁），报告**实际执行过的命令**与结果，不臆测通过：
    - harness：`pnpm run typecheck`、定向 `pnpm vitest run <path>`、文档改动加 `pnpm run test:docs`
    - 插件仓库：`pnpm typecheck`、`pnpm test`（初次搭建后需先补上这两个脚本）

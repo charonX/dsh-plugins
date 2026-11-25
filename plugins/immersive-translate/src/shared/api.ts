@@ -80,6 +80,8 @@ export interface TranslatePrefs {
   readonly provider?: string
   /** Explicit provider-owned model id, used only when `followDefaultModel` is false. */
   readonly model?: string
+  /** Custom prompt instruction template, if overridden by the user. */
+  readonly customPrompt?: string
 }
 
 /** One selectable model as the settings selector needs it. */
@@ -153,3 +155,98 @@ export interface ApiErrorBody {
     readonly message: string
   }
 }
+
+/** Individual item audit within a batch request. */
+export interface RequestAuditItem {
+  readonly id: string
+  readonly source: string
+  readonly translation: string
+  readonly fromCache: boolean
+}
+
+/** Cache outcome of a whole request. */
+export type RequestCacheStatus = 'full_cache' | 'partial_cache' | 'model_only' | 'error'
+
+/** One audited translation request. */
+export interface RequestAuditRecord {
+  /** Unique request trace id. */
+  readonly id: string
+  /** Epoch milliseconds when the request arrived. */
+  readonly timestamp: number
+  /** Destination language tag. */
+  readonly targetLanguage: string
+  /** Provider route that handled any uncached items. */
+  readonly provider: string
+  /** Provider-owned model id. */
+  readonly model: string
+  /** Total text units in the request. */
+  readonly totalItems: number
+  /** Number of text units resolved from cache. */
+  readonly cachedItems: number
+  /** Number of text units sent to the LLM. */
+  readonly modelItems: number
+  /** Cache outcome categorization. */
+  readonly status: RequestCacheStatus
+  /** Total wall-clock duration of the request, in milliseconds. */
+  readonly durationMs: number
+  /** Duration spent calling the LLM runtime, in milliseconds. */
+  readonly aiDurationMs: number
+  /** Request attempts (2 when source text echo forced retry). */
+  readonly attempts: number
+  /** Whether reasoning effort was active. */
+  readonly reasoned: boolean
+  /** Error message if the request failed. */
+  readonly error?: string
+  /** Detailed item records. */
+  readonly items: readonly RequestAuditItem[]
+}
+
+/** Aggregated statistics across recorded requests. */
+export interface AuditSummary {
+  /** Total recorded translation requests. */
+  readonly totalRequests: number
+  /** Total individual text units processed across all requests. */
+  readonly totalItems: number
+  /** Total text units served from cache. */
+  readonly totalCachedItems: number
+  /** Total text units sent to LLM models. */
+  readonly totalModelItems: number
+  /** Overall cache hit rate between 0 and 1. */
+  readonly overallHitRate: number
+  /** Total request duration across all requests in milliseconds. */
+  readonly totalDurationMs: number
+  /** Total duration spent in model calls in milliseconds. */
+  readonly totalAiDurationMs: number
+  /** Estimated time saved by cache hits in milliseconds. */
+  readonly estimatedSavedMs: number
+}
+
+/** Response from `GET /api/audit`. */
+export interface AuditListResponse {
+  readonly records: readonly RequestAuditRecord[]
+  readonly total: number
+  readonly summary: AuditSummary
+}
+
+/** One cached translation entry. */
+export interface CachedItemEntry {
+  readonly key: string
+  readonly targetLanguage: string
+  readonly sourceText: string
+  readonly translation: string
+  readonly updatedAt: number
+}
+
+/** Cache statistics by language. */
+export interface CacheStats {
+  readonly totalCount: number
+  readonly byLanguage: Record<string, number>
+}
+
+/** Response from `GET /api/cache`. */
+export interface CacheListResponse {
+  readonly items: readonly CachedItemEntry[]
+  readonly total: number
+  readonly stats: CacheStats
+}
+

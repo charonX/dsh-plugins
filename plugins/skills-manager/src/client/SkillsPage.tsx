@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement, ReactNode } from 'react'
+import { IconChevronDownOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   AgentTargetView,
@@ -1541,14 +1542,12 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: 'var(--dsw-alias-label-caption, #81858c)',
+                    color: COLORS.tertiary,
                     transform: pickerOpen ? 'rotate(180deg)' : 'none',
                     transition: 'transform 140ms ease',
                   }}
                 >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                  <IconChevronDownOutlineRegular size={12} />
                 </div>
               </div>
 
@@ -1563,9 +1562,9 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                     zIndex: 1100,
                     boxSizing: 'border-box',
                     border: `0.5px solid ${COLORS.border}`,
-                    borderRadius: 'var(--dsw-radius-lg, 10px)',
-                    background: COLORS.bgLayer2,
-                    boxShadow: 'var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,0.18))',
+                    borderRadius: 'var(--dsw-radius-lg, 12px)',
+                    background: 'var(--dsw-alias-bg-layer-3, #ffffff)',
+                    boxShadow: 'var(--dsw-elevation-prominent)',
                     maxHeight: 260,
                     overflowY: 'auto',
                     padding: 4,
@@ -1593,8 +1592,8 @@ function LinkDialog({ t, source, skillName, agents, workspaces, onClose, onLinke
                           boxSizing: 'border-box',
                           fontSize: 13,
                           cursor: 'pointer',
-                          borderRadius: 'var(--dsw-radius-md, 6px)',
-                          background: isChecked ? 'rgba(37, 99, 235, 0.05)' : 'transparent',
+                          borderRadius: 'var(--dsw-radius-md, 8px)',
+                          background: isChecked ? 'color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent)' : 'transparent',
                         }}
                       >
                         <input

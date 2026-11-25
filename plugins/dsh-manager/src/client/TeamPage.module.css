@@ -1,0 +1,871 @@
+/* Team & Orchestration page: overview strip, hot-reload banner, sub-view switch,
+   Archify-inspired orchestration workbench (Topology / List), and Crew roster.
+   Strictly consumes --dsw-alias-* tokens. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 4px clamp(24px, 4vw, 48px) 32px;
+}
+
+.subViewBar {
+  display: flex;
+  align-items: center;
+}
+
+.workbenchRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.workbenchHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.workbenchActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* --- Overview strip ------------------------------------------------------- */
+
+.overviewStrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.overviewStats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.overviewNav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.anchorLink {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-sm);
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  text-decoration: none;
+  background: transparent;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.anchorLink:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* --- Archify-inspired Flow Workbench -------------------------------------- */
+
+.mindmap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.archHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.archTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.archSubtitle {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.archToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoomPercent {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.archWorkbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  overflow: hidden;
+  min-height: 300px;
+}
+
+.archWorkbench[data-sidebar-open='false'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (max-width: 960px) {
+  .archWorkbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mapViewport {
+  position: relative;
+  overflow: auto;
+  padding: 18px;
+  min-height: 280px;
+  max-height: 560px;
+  background-color: var(--dsw-alias-bg-layer-1);
+  background-image: radial-gradient(circle, var(--dsw-alias-border-l3) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.mapCanvasInner {
+  transform-origin: top left;
+  width: fit-content;
+  min-width: 100%;
+}
+
+.mapSvg {
+  display: block;
+  height: auto;
+}
+
+/* Archify-style node cards (pastel semantic fill + crisp colored border + corner pill) */
+.mapNode {
+  cursor: pointer;
+  transition: opacity 150ms ease;
+}
+
+.mapNode[data-dimmed='true'] {
+  opacity: 0.25;
+}
+
+.mapNodeCard {
+  fill: var(--dsw-alias-bg-layer-2);
+  stroke: var(--dsw-alias-border-l3);
+  stroke-width: 1.25;
+  transition: stroke 120ms ease, stroke-width 120ms ease;
+}
+
+.mapNode:hover .mapNodeCard,
+.mapNode[data-selected='true'] .mapNodeCard {
+  stroke: var(--dsw-alias-brand-primary);
+  stroke-width: 2;
+}
+
+.mapNode[data-node-kind='entry'] .mapNodeCard {
+  fill: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-brand-primary) 55%, transparent);
+}
+
+.mapNode[data-node-kind='rule'] .mapNodeCard {
+  fill: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 9%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 48%, transparent);
+}
+
+.mapNode[data-node-kind='pipeline'] .mapNodeCard {
+  fill: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-state-success-primary) 52%, transparent);
+}
+
+.mapNode[data-node-kind='stage'] .mapNodeCard {
+  fill: color-mix(in srgb, var(--dsw-alias-state-business-primary) 7%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-state-business-primary) 40%, transparent);
+}
+
+.mapNode[data-node-kind='stage'][data-skippable='true'] .mapNodeCard {
+  stroke-dasharray: 4 3;
+}
+
+.mapNodeKindText {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  fill: var(--dsw-alias-label-secondary);
+}
+
+.mapNode[data-node-kind='entry'] .mapNodeKindText {
+  fill: var(--dsw-alias-brand-primary);
+}
+
+.mapNode[data-node-kind='rule'] .mapNodeKindText {
+  fill: var(--dsw-alias-state-warn-primary);
+}
+
+.mapNode[data-node-kind='pipeline'] .mapNodeKindText {
+  fill: var(--dsw-alias-state-success-primary);
+}
+
+.mapNode[data-node-kind='stage'] .mapNodeKindText {
+  fill: var(--dsw-alias-state-business-primary);
+}
+
+.mapNodeTitle {
+  fill: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mapNodeSubtitle {
+  fill: var(--dsw-alias-label-secondary);
+  font-size: 10.5px;
+}
+
+.mapNodeBadge rect {
+  fill: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent);
+  stroke-width: 0.75;
+}
+
+.mapNodeBadge text {
+  fill: var(--dsw-alias-state-warn-primary);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.mapNodeBadge[data-badge-kind='entry'] rect {
+  fill: color-mix(in srgb, var(--dsw-alias-brand-primary) 16%, var(--dsw-alias-bg-layer-2));
+  stroke: color-mix(in srgb, var(--dsw-alias-brand-primary) 45%, transparent);
+}
+
+.mapNodeBadge[data-badge-kind='entry'] text {
+  fill: var(--dsw-alias-brand-primary);
+}
+
+/* Archify-style smooth rounded edges + pill labels */
+.mapEdge {
+  transition: opacity 150ms ease;
+}
+
+.mapEdge[data-dimmed='true'] {
+  opacity: 0.16;
+}
+
+.mapEdgePath {
+  fill: none;
+  stroke: var(--dsw-alias-border-l4);
+  stroke-width: 1.5;
+}
+
+.mapEdge[data-highlighted='true'] .mapEdgePath {
+  stroke: var(--dsw-alias-brand-primary);
+  stroke-width: 2;
+}
+
+.mapEdge[data-edge-kind='skip'] .mapEdgePath {
+  stroke-dasharray: 5 4;
+  stroke: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 65%, transparent);
+}
+
+.mapArrowFlow {
+  fill: var(--dsw-alias-border-l4);
+}
+
+.mapArrowFlowActive {
+  fill: var(--dsw-alias-brand-primary);
+}
+
+.mapArrowSkip {
+  fill: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 80%, transparent);
+}
+
+.mapEdgePillBg {
+  fill: var(--dsw-alias-bg-layer-1);
+  stroke: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent);
+  stroke-width: 0.75;
+}
+
+.mapEdgeLabel {
+  fill: var(--dsw-alias-state-warn-primary);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+/* Archify-style Right Inspector & Node Index Sidebar */
+.archSidebar {
+  display: flex;
+  flex-direction: column;
+  border-left: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-2);
+  max-height: 600px;
+  overflow: auto;
+}
+
+@media (max-width: 960px) {
+  .archSidebar {
+    border-left: none;
+    border-top: 0.5px solid var(--dsw-alias-border-l3);
+    max-height: 360px;
+  }
+}
+
+.inspectorBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.inspectorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inspectorTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.inspectorFieldLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  margin-top: 4px;
+}
+
+.inspectorText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inspectorMuted {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.inspectorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.indexBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.indexHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.indexList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.indexItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.indexItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.indexItem[data-selected='true'] {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+}
+
+.indexDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.indexDot[data-kind='entry'] {
+  background: var(--dsw-alias-brand-primary);
+}
+
+.indexDot[data-kind='rule'] {
+  background: var(--dsw-alias-state-warn-primary);
+}
+
+.indexDot[data-kind='pipeline'] {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.indexDot[data-kind='stage'] {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.indexLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.mapLegendFlow::before {
+  content: '';
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 6px;
+  border-top: 1.5px solid var(--dsw-alias-border-l4);
+  vertical-align: middle;
+}
+
+.mapLegendSkip::before {
+  content: '';
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: 6px;
+  border-top: 1.5px dashed color-mix(in srgb, var(--dsw-alias-state-warn-primary) 75%, transparent);
+  vertical-align: middle;
+}
+
+/* --- 2-Column Orchestration Grid (Rules + Pipelines) ---------------------- */
+
+.orchestrationGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .orchestrationGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.panelSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  min-width: 0;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sectionTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Crew cards use a clean responsive multi-column grid */
+.crewGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  transition: border-color 120ms ease;
+}
+
+.card:hover {
+  border-color: var(--dsw-alias-border-l4);
+}
+
+.cardHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.avatarBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--dsw-radius-sm);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
+  color: var(--dsw-alias-brand-primary);
+  font-size: 12px;
+  font-weight: 600;
+  flex: none;
+}
+
+.roleText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+/* --- Pipeline stages inside cards ----------------------------------------- */
+
+.stageList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.stageItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-2);
+  border: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.stageItemTop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.stageIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--dsw-alias-state-business-primary);
+  flex: none;
+}
+
+.stageInstruction {
+  padding-left: 24px;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.routeTarget {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* --- Forms / Modals / Empty states ---------------------------------------- */
+
+.empty {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.emptyInline {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.busy {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.memberModal {
+  min-width: 460px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  margin-bottom: 8px;
+}
+
+.fieldRow {
+  display: flex;
+  gap: 10px;
+}
+
+.fieldRow > .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.fieldHint {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fieldWarn {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--dsw-radius-md);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.formError {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: var(--dsw-radius-md);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+
+.input {
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.input:focus,
+.textArea:focus {
+  outline: none;
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.textArea {
+  box-sizing: border-box;
+  min-height: 88px;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.invalid {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+}
+
+.stageEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  margin-bottom: 8px;
+}
+
+.stageEditorHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.configErrorBanner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-state-error-primary);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.configErrorBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.configErrorTitle {
+  font-size: 13px;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.configErrorDetail {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  word-break: break-word;
+}
+
+.configErrorPath {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  word-break: break-all;
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Dsh Manager",
+    "description": "Collects external Triggers, triages them into tickets, and tracks them on a board."
+  }
+}

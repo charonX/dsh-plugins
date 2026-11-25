@@ -22,7 +22,7 @@ export default defineConfig({
     'process.env.NODE_ENV': JSON.stringify('production'),
   },
   deps: {
-    neverBundle: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'],
+    neverBundle: ['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/dsh-client-ui-primitives'],
   },
   outputOptions: {
     entryFileNames: 'client.js',

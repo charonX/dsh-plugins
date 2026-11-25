@@ -7,9 +7,10 @@
 
 import type { ReactNode } from 'react'
 import { THINKING_FORMATS } from '../dialect.ts'
+import { DshSelect } from './DshSelect.tsx'
 import type { Translate } from './locales.ts'
 import { COMPAT_SWITCHES, type CompatDraft } from './ops.ts'
-import { fieldStyle, inputStyle, labelStyle, selectStyle } from './tokens.ts'
+import { fieldStyle, inputStyle, labelStyle } from './tokens.ts'
 
 /** Output fields pi-ai accepts. */
 const MAX_TOKENS_FIELDS: readonly string[] = ['max_tokens', 'max_completion_tokens']
@@ -84,64 +85,64 @@ export function CompatFields({ t, idPrefix, draft, disabled, onChange }: CompatF
     <>
       <div style={fieldStyle}>
         <label style={labelStyle} htmlFor={`${idPrefix}-format`}>{t('compatFieldFormat')}</label>
-        <select
+        <DshSelect
           id={`${idPrefix}-format`}
-          style={selectStyle}
           value={draft.thinkingFormat}
           disabled={disabled}
-          onChange={event => onChange('thinkingFormat', event.target.value)}
-        >
-          <option value="">{t('compatAuto')}</option>
-          {THINKING_FORMATS.map(format => <option key={format} value={format}>{format}</option>)}
-        </select>
+          options={[
+            { value: '', label: t('compatAuto') },
+            ...THINKING_FORMATS.map(format => ({ value: format, label: format })),
+          ]}
+          onChange={value => onChange('thinkingFormat', value)}
+        />
       </div>
 
       <div style={fieldStyle}>
         <label style={labelStyle} htmlFor={`${idPrefix}-maxTokens`}>{t('compatFieldMaxTokens')}</label>
-        <select
+        <DshSelect
           id={`${idPrefix}-maxTokens`}
-          style={selectStyle}
           value={draft.maxTokensField}
           disabled={disabled}
-          onChange={event => onChange('maxTokensField', event.target.value)}
-        >
-          <option value="">{t('compatAuto')}</option>
-          {MAX_TOKENS_FIELDS.map(name => <option key={name} value={name}>{name}</option>)}
-        </select>
+          options={[
+            { value: '', label: t('compatAuto') },
+            ...MAX_TOKENS_FIELDS.map(name => ({ value: name, label: name })),
+          ]}
+          onChange={value => onChange('maxTokensField', value)}
+        />
       </div>
 
       {COMPAT_SWITCHES.map(key => (
         <div style={fieldStyle} key={key}>
           <label style={labelStyle} htmlFor={`${idPrefix}-${key}`}>{switchLabel(t, key)}</label>
-          <select
+          <DshSelect
             id={`${idPrefix}-${key}`}
-            style={selectStyle}
             value={draft[key]}
             disabled={disabled}
-            onChange={event => onChange(key, event.target.value)}
-          >
-            <option value="">{t('compatAuto')}</option>
-            <option value="true">{t('compatEnabled')}</option>
-            <option value="false">{t('compatDisabled')}</option>
-          </select>
+            options={[
+              { value: '', label: t('compatAuto') },
+              { value: 'true', label: t('compatEnabled') },
+              { value: 'false', label: t('compatDisabled') },
+            ]}
+            onChange={value => onChange(key, value)}
+          />
         </div>
       ))}
 
       <div style={fieldStyle}>
         <label style={labelStyle} htmlFor={`${idPrefix}-kwargs-preset`}>{t('compatKwargsPreset')}</label>
-        <select
+        <DshSelect
           id={`${idPrefix}-kwargs-preset`}
-          style={selectStyle}
           value={kwargsPresetOf(draft.chatTemplateKwargs)}
           disabled={disabled}
-          onChange={event => {
-            const preset = KWARGS_PRESETS.find(candidate => candidate.id === event.target.value)
+          options={[
+            { value: '', label: t('compatKwargsCustom') },
+            ...KWARGS_PRESETS.map(preset => ({ value: preset.id, label: preset.id })),
+          ]}
+          onChange={value => {
+            const preset = KWARGS_PRESETS.find(candidate => candidate.id === value)
             if (preset !== undefined) onChange('chatTemplateKwargs', preset.json)
           }}
-        >
-          <option value="">{t('compatKwargsCustom')}</option>
-          {KWARGS_PRESETS.map(preset => <option key={preset.id} value={preset.id}>{preset.id}</option>)}
-        </select>
+        />
         <p style={{ ...labelStyle, fontWeight: 400, color: 'var(--dsw-alias-label-tertiary, #6b7280)' }}>
           {t('compatKwargsHint')}
         </p>

@@ -6,13 +6,16 @@
  * @module dsh-immersive-translate/http
  */
 
+import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { asTranslateError, TranslateError } from './errors.js'
 import { translateBatch, type EngineLimits } from './engine.js'
 import { resolveSelection } from './models.js'
 import { PrefsStore, type Logger } from './prefs.js'
-import { appendBatchPointer, batchKey, type BatchArchive, type TranslateBatchRecord } from './records.js'
+import { appendBatchPointer, batchKey, isValidTranslation, type BatchArchive, type ItemArchive, type TranslateBatchRecord } from './records.js'
+import { promptRecipeId } from './shared/prompt.js'
+import type { AuditStore } from './audit.js'
 import type {
   EngineState,
   ProviderGroupView,
@@ -35,6 +38,10 @@ export interface HttpDeps {
   readonly prefs: PrefsStore
   /** Batch payload archive. */
   readonly archive: BatchArchive
+  /** Sentence-level item archive. */
+  readonly itemArchive: ItemArchive
+  /** Audit store recording request cache hits, latencies, and model calls. */
+  readonly auditStore: AuditStore
   /** Warning sink. */
   readonly logger: Logger
   /** Host trust list for non-loopback deployments. */
@@ -116,6 +123,54 @@ async function dispatch(
     return
   }
 
+  if (second === 'audit') {
+    if (segments.length === 2 && (method === 'GET' || method === 'HEAD')) {
+      const url = new URL(request.url ?? '/', 'http://localhost')
+      const limit = Number.parseInt(url.searchParams.get('limit') ?? '50', 10)
+      const offset = Number.parseInt(url.searchParams.get('offset') ?? '0', 10)
+      sendJson(response, 200, deps.auditStore.list(Number.isNaN(limit) ? 50 : limit, Number.isNaN(offset) ? 0 : offset))
+      return
+    }
+    if ((segments.length === 2 && method === 'DELETE') || (segments.length === 3 && segments[2] === 'clear' && method === 'POST')) {
+      deps.auditStore.clear()
+      sendJson(response, 200, { cleared: true })
+      return
+    }
+  }
+
+  if (second === 'cache') {
+    if (segments.length === 2 && (method === 'GET' || method === 'HEAD')) {
+      const url = new URL(request.url ?? '/', 'http://localhost')
+      const targetLanguage = url.searchParams.get('targetLanguage') ?? undefined
+      const search = url.searchParams.get('search') ?? undefined
+      const limit = Number.parseInt(url.searchParams.get('limit') ?? '50', 10)
+      const offset = Number.parseInt(url.searchParams.get('offset') ?? '0', 10)
+      const list = deps.itemArchive.list({
+        targetLanguage,
+        search,
+        limit: Number.isNaN(limit) ? 50 : limit,
+        offset: Number.isNaN(offset) ? 0 : offset,
+      })
+      const stats = deps.itemArchive.stats()
+      sendJson(response, 200, { items: list.items, total: list.total, stats })
+      return
+    }
+    if (segments.length === 3 && segments[2] === 'delete' && method === 'POST') {
+      const body = await readJsonBody(request)
+      const key = typeof body.key === 'string' ? body.key : ''
+      const deleted = key !== '' ? deps.itemArchive.delete(key) : false
+      sendJson(response, 200, { deleted })
+      return
+    }
+    if (segments.length === 3 && segments[2] === 'clear' && method === 'POST') {
+      const body = await readJsonBody(request)
+      const targetLanguage = typeof body.targetLanguage === 'string' ? body.targetLanguage : undefined
+      const clearedCount = deps.itemArchive.clear(targetLanguage)
+      sendJson(response, 200, { clearedCount })
+      return
+    }
+  }
+
   throw new TranslateError(404, 'NOT_FOUND', 'unknown route')
 }
 
@@ -161,54 +216,243 @@ async function translate(
   if (resolution.selection === null || resolution.source === null) {
     throw new TranslateError(409, 'NO_MODEL', 'no model is selected for translation')
   }
+  const recipe = promptRecipeId(prefs.customPrompt)
   const key = batchKey({
-    recipe: RECIPE,
+    recipe,
     targetLanguage,
     provider: resolution.selection.provider,
     model: resolution.selection.model,
     items,
   })
+
+  // 1. Check exact whole-batch replay
   const replay = deps.archive.read(key)
   if (replay !== undefined && replay.cacheable === true) {
+    // Only accept replay if all translatable items in the batch are valid translations
+    const replayValid = items.every((item) => {
+      const match = replay.results.find(r => r.id === item.id)
+      return match !== undefined && isValidTranslation(targetLanguage, item.text, match.text)
+    })
+    if (replayValid) {
+      deps.logger.info?.(`[immersive-translate] batch ${items.length} items (100% batch-cache hit) in 0ms`)
+      deps.auditStore.addRecord({
+        id: randomUUID(),
+        timestamp: Date.now(),
+        targetLanguage,
+        provider: resolution.selection.provider,
+        model: resolution.selection.model,
+        totalItems: items.length,
+        cachedItems: items.length,
+        modelItems: 0,
+        status: 'full_cache',
+        durationMs: 0,
+        aiDurationMs: 0,
+        attempts: 0,
+        reasoned: replay.reasoned,
+        items: items.map(item => ({
+          id: item.id,
+          source: item.text,
+          translation: replay.results.find(r => r.id === item.id)?.text ?? '',
+          fromCache: true,
+        })),
+      })
+      if (sessionId !== undefined) {
+        await deps.recordPointer(sessionId, {
+          targetLanguage,
+          provider: resolution.selection.provider,
+          model: resolution.selection.model,
+          recipe,
+          storeKey: key,
+          itemCount: items.length,
+          reasoned: replay.reasoned,
+          attempts: 0,
+          durationMs: 0,
+          cached: true,
+        })
+      }
+      sendJson(response, 200, {
+        results: replay.results,
+        selection: resolution.selection,
+        source: resolution.source,
+        reasoned: replay.reasoned,
+      })
+      return
+    }
+  }
+
+  // 2. Check sentence-level item archive
+  const cachedMap = new Map<string, string>()
+  const uncachedItems: TranslateItem[] = []
+  for (const item of items) {
+    const cachedText = deps.itemArchive.get(targetLanguage, item.text)
+    if (cachedText !== undefined && isValidTranslation(targetLanguage, item.text, cachedText)) {
+      cachedMap.set(item.id, cachedText)
+    } else {
+      uncachedItems.push(item)
+    }
+  }
+
+  // If every item was found in itemArchive, return immediately without calling LLM
+  if (uncachedItems.length === 0) {
+    const results: TranslateItem[] = items.map(item => ({
+      id: item.id,
+      text: cachedMap.get(item.id) ?? item.text,
+    }))
+    deps.logger.info?.(`[immersive-translate] batch ${items.length} items (100% item-cache hit) in 0ms`)
+    deps.auditStore.addRecord({
+      id: randomUUID(),
+      timestamp: Date.now(),
+      targetLanguage,
+      provider: resolution.selection.provider,
+      model: resolution.selection.model,
+      totalItems: items.length,
+      cachedItems: items.length,
+      modelItems: 0,
+      status: 'full_cache',
+      durationMs: 0,
+      aiDurationMs: 0,
+      attempts: 0,
+      reasoned: false,
+      items: items.map(item => ({
+        id: item.id,
+        source: item.text,
+        translation: cachedMap.get(item.id) ?? item.text,
+        fromCache: true,
+      })),
+    })
+    deps.archive.write(key, {
+      targetLanguage,
+      provider: resolution.selection.provider,
+      model: resolution.selection.model,
+      items,
+      results,
+      reasoned: false,
+      attempts: 0,
+      durationMs: 0,
+      cacheable: true,
+    })
     if (sessionId !== undefined) {
       await deps.recordPointer(sessionId, {
         targetLanguage,
         provider: resolution.selection.provider,
         model: resolution.selection.model,
-        recipe: RECIPE,
+        recipe,
         storeKey: key,
         itemCount: items.length,
-        reasoned: replay.reasoned,
+        reasoned: false,
         attempts: 0,
         durationMs: 0,
         cached: true,
       })
     }
     sendJson(response, 200, {
-      results: replay.results,
+      results,
       selection: resolution.selection,
       source: resolution.source,
-      reasoned: replay.reasoned,
+      reasoned: false,
     })
     return
   }
-  // Only a miss needs the engine, so a replay works even while the Host LLM
-  // service is unmounted or restarting.
+
+  // 3. Only a cache miss needs the LLM engine
   const engine = deps.llm()
   if (engine === undefined) {
     throw new TranslateError(503, 'ENGINE_UNAVAILABLE', 'the Host LLM service is not mounted')
   }
   const abort = new AbortController()
   request.on('close', () => { abort.abort() })
-  const answer = await translateBatch(
-    engine.runtime,
-    resolution.selection,
-    targetLanguage,
-    items,
-    deps.limits,
-    abort.signal,
+  const batchStarted = performance.now()
+  let answer: Awaited<ReturnType<typeof translateBatch>>
+  try {
+    answer = await translateBatch(
+      engine.runtime,
+      resolution.selection,
+      targetLanguage,
+      uncachedItems,
+      deps.limits,
+      abort.signal,
+      prefs.customPrompt,
+    )
+  } catch (err) {
+    const errorMs = Math.round(performance.now() - batchStarted)
+    deps.auditStore.addRecord({
+      id: randomUUID(),
+      timestamp: Date.now(),
+      targetLanguage,
+      provider: resolution.selection.provider,
+      model: resolution.selection.model,
+      totalItems: items.length,
+      cachedItems: cachedMap.size,
+      modelItems: uncachedItems.length,
+      status: 'error',
+      durationMs: errorMs,
+      aiDurationMs: errorMs,
+      attempts: 1,
+      reasoned: false,
+      error: err instanceof Error ? err.message : String(err),
+      items: items.map(item => ({
+        id: item.id,
+        source: item.text,
+        translation: cachedMap.get(item.id) ?? '',
+        fromCache: cachedMap.has(item.id),
+      })),
+    })
+    throw err
+  }
+  const totalBatchMs = Math.round(performance.now() - batchStarted)
+
+  // Save newly translated items into itemArchive (only if valid translation)
+  const newEntries: { text: string; translation: string }[] = []
+  const answerMap = new Map(answer.items.map(r => [r.id, r.text]))
+  for (const uncached of uncachedItems) {
+    const trans = answerMap.get(uncached.id)
+    if (trans !== undefined && isValidTranslation(targetLanguage, uncached.text, trans)) {
+      newEntries.push({ text: uncached.text, translation: trans })
+    }
+  }
+  deps.itemArchive.setMany(targetLanguage, newEntries)
+
+  // Combine cached results and new results in request order
+  const results: TranslateItem[] = items.map(item => {
+    if (cachedMap.has(item.id)) {
+      return { id: item.id, text: cachedMap.get(item.id)! }
+    }
+    return { id: item.id, text: answerMap.get(item.id) ?? item.text }
+  })
+
+  deps.logger.info?.(
+    `[immersive-translate] batch ${items.length} items (${cachedMap.size} cached, ${uncachedItems.length} sent to ${resolution.selection.model}) in ${totalBatchMs}ms (AI: ${answer.durationMs}ms, attempts: ${answer.attempts})`
   )
-  const results = answer.items
+
+  deps.auditStore.addRecord({
+    id: randomUUID(),
+    timestamp: Date.now(),
+    targetLanguage,
+    provider: resolution.selection.provider,
+    model: resolution.selection.model,
+    totalItems: items.length,
+    cachedItems: cachedMap.size,
+    modelItems: uncachedItems.length,
+    status: cachedMap.size > 0 ? 'partial_cache' : 'model_only',
+    durationMs: totalBatchMs,
+    aiDurationMs: answer.durationMs,
+    attempts: answer.attempts,
+    reasoned: answer.reasoned,
+    items: items.map(item => ({
+      id: item.id,
+      source: item.text,
+      translation: cachedMap.get(item.id) ?? answerMap.get(item.id) ?? item.text,
+      fromCache: cachedMap.has(item.id),
+    })),
+  })
+
+  // Only mark the entire batch cacheable if all items were successfully translated
+  const allResultsValid = items.every((item) => {
+    const res = results.find(r => r.id === item.id)?.text
+    return res !== undefined && isValidTranslation(targetLanguage, item.text, res)
+  })
+  const isBatchCacheable = answer.cacheable && allResultsValid
+
   const archived = deps.archive.write(key, {
     targetLanguage,
     provider: resolution.selection.provider,
@@ -217,20 +461,20 @@ async function translate(
     results,
     reasoned: answer.reasoned,
     attempts: answer.attempts,
-    durationMs: answer.durationMs,
-    cacheable: answer.cacheable,
+    durationMs: totalBatchMs,
+    cacheable: isBatchCacheable,
   })
   if (sessionId !== undefined && archived) {
     await deps.recordPointer(sessionId, {
       targetLanguage,
       provider: resolution.selection.provider,
       model: resolution.selection.model,
-      recipe: RECIPE,
+      recipe,
       storeKey: key,
       itemCount: items.length,
       reasoned: answer.reasoned,
       attempts: answer.attempts,
-      durationMs: answer.durationMs,
+      durationMs: totalBatchMs,
       cached: false,
     })
   }
@@ -241,9 +485,6 @@ async function translate(
     reasoned: answer.reasoned,
   })
 }
-
-/** Semantic identity of the prompt and controls; bump on any prompt change. */
-const RECIPE = 'immersive-translate/batch-v2'
 
 function readItems(value: unknown, limits: EngineLimits): TranslateItem[] {
   if (!Array.isArray(value)) throw new TranslateError(400, 'BAD_REQUEST', 'items must be an array')

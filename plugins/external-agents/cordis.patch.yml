@@ -1,0 +1,3 @@
+- insert:
+    - id: external-agents
+      name: '@charonx/dsh-external-agents'

@@ -107,7 +107,12 @@ describe('instruction', () => {
   })
 
   it('falls back to the tag when the language has no label', () => {
-    expect(instruction('eo')).toContain('Translate the "text" of every input item into eo.')
+    expect(instruction('eo')).toContain('into eo')
+  })
+
+  it('supports custom prompt template override', () => {
+    const custom = 'Translate {target} with markers {startMarker} and {endMarker}'
+    expect(instruction('zh-CN', false, 'n1', custom)).toContain('Translate 简体中文 (zh-CN) with markers ___DSH_TRANSLATE_n1_{index}_BEGIN___ and ___DSH_TRANSLATE_n1_{index}_END___')
   })
 
   it('carries the retry wording only on demand', () => {
@@ -180,6 +185,38 @@ describe('parseBatchOutput', () => {
   it('refuses a non-array answer', () => {
     expect(() => parseBatchOutput('{"text":"甲"}', ['a'])).toThrow(TranslateError)
   })
+
+  it('extracts translations from top-level keys and unclosed Chinese quotes', () => {
+    const raw = '{"items":[{"id":"b1","text":"第一"}],"b2":"第二，“引用”"}'
+    expect(parseBatchOutput(raw, ['b1', 'b2'])).toEqual([
+      { id: 'b1', text: '第一' },
+      { id: 'b2', text: '第二，“引用”' },
+    ])
+  })
+
+  it('tolerates unescaped fullwidth closing quotes before braces', () => {
+    const raw = '{"items":[{"id":"b1","text":"这是带中文引号的测试场景。”}]}'
+    expect(parseBatchOutput(raw, ['b1'])).toEqual([
+      { id: 'b1', text: '这是带中文引号的测试场景。”' },
+    ])
+  })
+
+  it('tolerates escaped closing quotes before braces (e.g. \\"})', () => {
+    const raw = '{"items":[{"id":"b74","text":"survive.\\"},{"id":"b75","text":"other"}]}'
+    expect(parseBatchOutput(raw, ['b74', 'b75'])).toEqual([
+      { id: 'b74', text: 'survive.' },
+      { id: 'b75', text: 'other' },
+    ])
+  })
+
+  it('recovers items via block fallback when JSON has unescaped internal quotes', () => {
+    const broken = '{"items":[{"id":"b1","text":"normal text"},{"id":"b2","text":"bad " quote"},{"id":"b3","text":"third text"}]}'
+    // b1 and b3 can be extracted by fallback
+    expect(parseBatchOutput(broken, ['b1', 'b3'])).toEqual([
+      { id: 'b1', text: 'normal text' },
+      { id: 'b3', text: 'third text' },
+    ])
+  })
 })
 
 describe('translateBatch', () => {
@@ -202,7 +239,105 @@ describe('translateBatch', () => {
     const messages = captures.options?.messages as readonly { role: string; content: readonly { text: string }[] }[]
     expect(messages[0]?.role).toBe('user')
     expect(messages[0]?.content[0]?.text).toContain('translation engine')
+    expect(messages[0]?.content[0]?.text).toContain('___DSH_TRANSLATE_')
     expect(captures.options?.system).toBeUndefined()
+  })
+
+  it('translates items formatted with slot protocol markers', async () => {
+    const captures: Captures = {}
+    const fakeSlotLlm: LlmRuntime = {
+      prepareCall: async (config: Record<string, unknown>) => ({
+        config,
+        stream: (options: Record<string, unknown>) => {
+          captures.options = options
+          const messages = options.messages as readonly { content: readonly { text: string }[] }[]
+          const prompt = messages[0]?.content[0]?.text ?? ''
+          // Extract nonce from prompt: ___DSH_TRANSLATE_(\w+)_0_BEGIN___
+          const nonceMatch = /___DSH_TRANSLATE_([a-z0-9_-]+)_0_BEGIN___/iu.exec(prompt)
+          const nonce = nonceMatch?.[1] ?? 'slots'
+          const responseText = [
+            `___DSH_TRANSLATE_${nonce}_0_BEGIN___`,
+            '你好，世界！',
+            `___DSH_TRANSLATE_${nonce}_0_END___`,
+            '',
+            `___DSH_TRANSLATE_${nonce}_1_BEGIN___`,
+            '计算机编程',
+            `___DSH_TRANSLATE_${nonce}_1_END___`,
+          ].join('\n')
+
+          return (async function* produce() {
+            yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
+            yield { type: 'text-delta' as const, index: 0, text: responseText }
+            yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+          })()
+        },
+      }),
+    } as unknown as LlmRuntime
+
+    const results = await translateBatch(
+      fakeSlotLlm,
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'item1', text: 'Hello, world!' }, { id: 'item2', text: 'Computer programming' }],
+      limits,
+      new AbortController().signal,
+    )
+
+    expect(results.items).toEqual([
+      { id: 'item1', text: '你好，世界！' },
+      { id: 'item2', text: '计算机编程' },
+    ])
+    expect(results.attempts).toBe(1)
+    expect(results.cacheable).toBe(true)
+  })
+
+  it('recovers single-item plain text translation when model omits slot markers and JSON', async () => {
+    const fakePlainLlm: LlmRuntime = {
+      prepareCall: async (config: Record<string, unknown>) => ({
+        config,
+        stream: () => (async function* produce() {
+          yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
+          yield { type: 'text-delta' as const, index: 0, text: 'DeepSeek Harness 本地构建' }
+          yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+        })(),
+      }),
+    } as unknown as LlmRuntime
+
+    const results = await translateBatch(
+      fakePlainLlm,
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'b0', text: 'DeepSeek Harness local build' }],
+      limits,
+      new AbortController().signal,
+    )
+
+    expect(results.items).toEqual([{ id: 'b0', text: 'DeepSeek Harness 本地构建' }])
+    expect(results.attempts).toBe(1)
+  })
+
+  it('recovers multi-item line-by-line translation when model omits slot markers and JSON', async () => {
+    const fakeLinesLlm: LlmRuntime = {
+      prepareCall: async (config: Record<string, unknown>) => ({
+        config,
+        stream: () => (async function* produce() {
+          yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
+          yield { type: 'text-delta' as const, index: 0, text: '1. 保存\n2. 取消' }
+          yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+        })(),
+      }),
+    } as unknown as LlmRuntime
+
+    const results = await translateBatch(
+      fakeLinesLlm,
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'b0', text: 'Save' }, { id: 'b1', text: 'Cancel' }],
+      limits,
+      new AbortController().signal,
+    )
+
+    expect(results.items).toEqual([{ id: 'b0', text: '保存' }, { id: 'b1', text: '取消' }])
   })
 
   it('omits the effort when the route cannot turn thinking off', async () => {
@@ -337,5 +472,41 @@ describe('translateBatch', () => {
       limits,
       new AbortController().signal,
     )).rejects.toMatchObject({ code: 'MODEL_FAILED', message: 'socket closed' })
+  })
+
+  it('retries missing items when model drops items in a batch', async () => {
+    const prompts: string[] = []
+    const results = await translateBatch(
+      sequencedLlm([
+        JSON.stringify({ items: [{ id: 'b0', text: '零' }] }),
+        JSON.stringify({ items: [{ id: 'b1', text: '一' }] }),
+      ], prompts),
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'b0', text: 'zero' }, { id: 'b1', text: 'one' }],
+      limits,
+      new AbortController().signal,
+    )
+
+    expect(results.items).toEqual([{ id: 'b0', text: '零' }, { id: 'b1', text: '一' }])
+    expect(results.attempts).toBe(2)
+    expect(prompts).toHaveLength(2)
+  })
+
+  it('falls back to source text for an item that is still missing after retry', async () => {
+    const results = await translateBatch(
+      sequencedLlm([
+        JSON.stringify({ items: [{ id: 'b0', text: '零' }] }),
+        JSON.stringify({ items: [] }),
+      ]),
+      { provider: 'p', model: 'm' },
+      'zh-CN',
+      [{ id: 'b0', text: 'zero' }, { id: 'b1', text: 'one' }],
+      limits,
+      new AbortController().signal,
+    )
+
+    expect(results.items).toEqual([{ id: 'b0', text: '零' }, { id: 'b1', text: 'one' }])
+    expect(results.attempts).toBe(2)
   })
 })

@@ -1,8 +1,12 @@
 # 上游 Harness 源码仓库与本地环境（独立追踪）
 deepseek-harness/
+third-party/
 .dsh/
+.dsh-worktrees/
+.dsh-manager/
 .agents/
 .pi/
+plugins/*/pnpm-lock.yaml
 
 # 依赖与临时产物
 node_modules/

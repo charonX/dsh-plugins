@@ -1,0 +1,16 @@
+node_modules/
+lib/
+dist/
+*.tsbuildinfo
+*.log
+.DS_Store
+*.tgz
+.env
+.env.*
+!.env.example
+.scratch/
+.dsh-manager/
+coverage/
+# Temporary diag homes: they hold profiles, sessions, and credential files.
+.tmp-diag*/
+**/.tmp-diag*/

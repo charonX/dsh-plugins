@@ -13,20 +13,32 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import { AuditStore } from './audit.js'
 import { Config } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import type { EngineLimits } from './engine.js'
 import { createRequestHandler } from './http.js'
 import { listCatalog, selectionOfProjection } from './models.js'
 import { PrefsStore } from './prefs.js'
-import { appendBatchPointer, BatchArchive } from './records.js'
+import { appendBatchPointer, BatchArchive, ItemArchive, itemKey, isValidTranslation } from './records.js'
 import { DEFAULT_SUBMIT_KEY, DEFAULT_TARGET_LANGUAGE, ROUTE_PREFIX, type SelectionView, type TranslatePrefs } from './shared/api.js'
 
 export { Config } from './config.js'
 export type { Config as ImmersiveTranslateConfig } from './config.js'
-export { parseBatchOutput, preferNoThinking, stripFence, translateBatch } from './engine.js'
+export { extractBatchItems, parseBatchOutput, preferNoThinking, sanitizeModelJson, stripFence, translateBatch } from './engine.js'
 export { listCatalog, resolveSelection } from './models.js'
-export { batchKey, BatchArchive } from './records.js'
+export { batchKey, BatchArchive, itemKey, ItemArchive, isValidTranslation } from './records.js'
+export { DEFAULT_PROMPT_TEMPLATE, promptRecipeId, renderPrompt } from './shared/prompt.js'
+export { AuditStore } from './audit.js'
+export type {
+  AuditSummary,
+  CachedItemEntry,
+  CacheListResponse,
+  CacheStats,
+  RequestAuditItem,
+  RequestAuditRecord,
+  RequestCacheStatus,
+} from './shared/api.js'
 
 export const name = 'immersive-translate'
 export const inject = ['webServer']
@@ -41,8 +53,13 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
   const dataHome = join(dshHome, 'immersive-translate')
   const statePath = config.statePath === undefined ? join(dataHome, 'prefs.json') : expandHomePath(config.statePath)
   const batchDir = config.batchDir === undefined ? join(dataHome, 'batches') : expandHomePath(config.batchDir)
+  const itemsPath = join(dataHome, 'items.json')
+  const auditPath = join(dataHome, 'audit.json')
   const routePrefix = normalizePrefix(config.routePrefix ?? ROUTE_PREFIX)
-  const logger = { warn: (message: string): void => { ctx.logger.warn(message) } }
+  const logger = {
+    warn: (message: string): void => { ctx.logger.warn(message) },
+    info: (message: string): void => { ctx.logger.info(message) },
+  }
   const defaults: TranslatePrefs = {
     targetLanguage: config.targetLanguage ?? DEFAULT_TARGET_LANGUAGE,
     followDefaultModel: true,
@@ -51,6 +68,14 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
 
   const prefs = new PrefsStore(statePath, logger, defaults)
   const archive = new BatchArchive(batchDir, logger)
+  const itemArchive = new ItemArchive(itemsPath, logger)
+  const auditStore = new AuditStore(auditPath, logger)
+  if (itemArchive.size() === 0) {
+    const seeded = itemArchive.seedFromBatches(batchDir)
+    if (seeded > 0) {
+      logger.info(`[immersive-translate] seeded ${seeded} item translations from batch archive`)
+    }
+  }
   const limits: EngineLimits = {
     maxItemsPerBatch: config.maxItemsPerBatch ?? 20,
     maxCharsPerItem: config.maxCharsPerItem ?? 4000,
@@ -70,6 +95,8 @@ export function apply(ctx: Context, config: ConfigShape = {}): void {
     limits,
     prefs,
     archive,
+    itemArchive,
+    auditStore,
     logger,
     trustedHosts: () => trustedHostsOf(config),
     llm: () => {

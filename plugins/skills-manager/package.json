@@ -90,6 +90,7 @@
     "@deepseek-ai/dsh-llm": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-scope": "0.2.2-alpha.3",
     "@deepseek-ai/dsh-client-ui-layout": "0.2.2-alpha.3",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.4",
     "@deepseek-ai/dsh-client-ui-sidebar": "0.2.2-alpha.3"
   },
   "publishConfig": {

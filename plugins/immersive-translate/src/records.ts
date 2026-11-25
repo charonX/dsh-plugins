@@ -10,11 +10,15 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { appendPluginRecord, SessionId, type Session } from '@deepseek-ai/dsh-session'
-import type { TranslateItem } from './shared/api.js'
+import type { CachedItemEntry, TranslateItem } from './shared/api.js'
 import type { Logger } from './prefs.js'
+import { isValidTranslation } from './resultValidation.js'
+
+export { isValidTranslation } from './resultValidation.js'
+export type { CachedItemEntry } from './shared/api.js'
 
 /** One durable pointer written into the Session log for a translated batch. */
 export interface TranslateBatchRecord {
@@ -143,6 +147,245 @@ export class BatchArchive {
       return JSON.parse(readFileSync(join(this.dir, `${key}.json`), 'utf8')) as BatchPayload
     } catch {
       return undefined
+    }
+  }
+}
+
+/**
+ * Content key for a single text unit in a target language.
+ * Normalized to ignore superficial whitespace differences.
+ */
+export function itemKey(targetLanguage: string, text: string): string {
+  const normalized = text.trim().replace(/\s+/gu, ' ')
+  return createHash('sha256').update(JSON.stringify([targetLanguage, normalized])).digest('hex')
+}
+
+/**
+ * Persistent sentence-level archive loaded into memory for 0ms lookup.
+ * Stored at `~/.dsh/immersive-translate/items.json`.
+ */
+export class ItemArchive {
+  private readonly memory = new Map<string, CachedItemEntry>()
+
+  constructor(
+    private readonly path: string,
+    private readonly logger: Logger,
+  ) {
+    this.load()
+  }
+
+  private load(): void {
+    try {
+      if (existsSync(this.path)) {
+        const raw = readFileSync(this.path, 'utf8')
+        const parsed = JSON.parse(raw) as unknown
+        if (typeof parsed === 'object' && parsed !== null) {
+          for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+            if (typeof v === 'string') {
+              // Legacy format: string translation only
+              if (/[a-zA-Z]{3,}/u.test(v) && !/\p{Script=Han}/u.test(v)) {
+                continue
+              }
+              this.memory.set(k, {
+                key: k,
+                targetLanguage: 'zh-CN',
+                sourceText: '',
+                translation: v,
+                updatedAt: 0,
+              })
+            } else if (typeof v === 'object' && v !== null) {
+              const entry = v as Partial<CachedItemEntry>
+              if (typeof entry.translation === 'string' && entry.translation.trim() !== '') {
+                this.memory.set(k, {
+                  key: k,
+                  targetLanguage: entry.targetLanguage ?? 'zh-CN',
+                  sourceText: entry.sourceText ?? '',
+                  translation: entry.translation,
+                  updatedAt: entry.updatedAt ?? 0,
+                })
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`immersive-translate: cannot load items cache: ${messageOf(error)}`)
+    }
+  }
+
+  get(targetLanguage: string, text: string): string | undefined {
+    const key = itemKey(targetLanguage, text)
+    const entry = this.memory.get(key)
+    if (entry === undefined) return undefined
+    if (!isValidTranslation(targetLanguage, text, entry.translation)) {
+      this.memory.delete(key)
+      return undefined
+    }
+    // If sourceText wasn't stored (legacy format), backfill it in memory
+    if (entry.sourceText === '') {
+      this.memory.set(key, { ...entry, sourceText: text.trim().replace(/\s+/gu, ' ') })
+    }
+    return entry.translation
+  }
+
+  setMany(targetLanguage: string, entries: readonly { text: string; translation: string }[]): void {
+    let changed = 0
+    const now = Date.now()
+    for (const entry of entries) {
+      if (!isValidTranslation(targetLanguage, entry.text, entry.translation)) continue
+      const src = entry.text.trim().replace(/\s+/gu, ' ')
+      const dst = entry.translation.trim()
+      const key = itemKey(targetLanguage, src)
+      const existing = this.memory.get(key)
+      if (existing === undefined || existing.translation !== dst) {
+        this.memory.set(key, {
+          key,
+          targetLanguage,
+          sourceText: src,
+          translation: dst,
+          updatedAt: now,
+        })
+        changed += 1
+      }
+    }
+    if (changed > 0) {
+      this.save()
+    }
+  }
+
+  delete(key: string): boolean {
+    const deleted = this.memory.delete(key)
+    if (deleted) {
+      this.save()
+    }
+    return deleted
+  }
+
+  clear(targetLanguage?: string): number {
+    let count = 0
+    if (targetLanguage === undefined || targetLanguage === 'all') {
+      count = this.memory.size
+      this.memory.clear()
+    } else {
+      for (const [k, v] of this.memory) {
+        if (v.targetLanguage === targetLanguage) {
+          this.memory.delete(k)
+          count += 1
+        }
+      }
+    }
+    if (count > 0) {
+      this.save()
+    }
+    return count
+  }
+
+  list(filter?: {
+    targetLanguage?: string
+    search?: string
+    limit?: number
+    offset?: number
+  }): { items: CachedItemEntry[]; total: number } {
+    let entries = Array.from(this.memory.values())
+    if (filter?.targetLanguage && filter.targetLanguage !== 'all') {
+      entries = entries.filter(e => e.targetLanguage === filter.targetLanguage)
+    }
+    if (filter?.search) {
+      const q = filter.search.toLowerCase()
+      entries = entries.filter(e =>
+        e.sourceText.toLowerCase().includes(q) || e.translation.toLowerCase().includes(q)
+      )
+    }
+    entries.sort((a, b) => b.updatedAt - a.updatedAt)
+    const total = entries.length
+    const offset = Math.max(0, filter?.offset ?? 0)
+    const limit = Math.max(1, filter?.limit ?? 50)
+    const paginated = entries.slice(offset, offset + limit)
+    return { items: paginated, total }
+  }
+
+  stats(): { totalCount: number; byLanguage: Record<string, number> } {
+    const byLanguage: Record<string, number> = {}
+    for (const v of this.memory.values()) {
+      byLanguage[v.targetLanguage] = (byLanguage[v.targetLanguage] ?? 0) + 1
+    }
+    return { totalCount: this.memory.size, byLanguage }
+  }
+
+  save(): boolean {
+    try {
+      mkdirSync(dirname(this.path), { recursive: true })
+      const obj: Record<string, CachedItemEntry> = {}
+      for (const [k, v] of this.memory) {
+        obj[k] = v
+      }
+      const temporary = `${this.path}.tmp`
+      writeFileSync(temporary, JSON.stringify(obj, null, 2), 'utf8')
+      renameSync(temporary, this.path)
+      return true
+    } catch (error) {
+      this.logger.warn(`immersive-translate: cannot persist items cache: ${messageOf(error)}`)
+      return false
+    }
+  }
+
+  size(): number {
+    return this.memory.size
+  }
+
+  /**
+   * Seed item cache from existing batch archive files if cache is empty.
+   * @param batchDir - directory containing archived batch json files.
+   * @returns number of seeded items.
+   */
+  seedFromBatches(batchDir: string): number {
+    try {
+      if (!existsSync(batchDir)) return 0
+      const files = readdirSync(batchDir)
+      let count = 0
+      const now = Date.now()
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue
+        try {
+          const raw = readFileSync(join(batchDir, file), 'utf8')
+          const data = JSON.parse(raw) as Partial<BatchPayload>
+          if (typeof data.targetLanguage === 'string' && Array.isArray(data.items) && Array.isArray(data.results)) {
+            const resMap = new Map(data.results.map(r => [r.id, r.text]))
+            for (const item of data.items) {
+              const trans = resMap.get(item.id)?.trim()
+              if (trans !== undefined && isValidTranslation(data.targetLanguage, item.text, trans)) {
+                const src = item.text.trim().replace(/\s+/gu, ' ')
+                const key = itemKey(data.targetLanguage, src)
+                const existing = this.memory.get(key)
+                if (existing === undefined) {
+                  this.memory.set(key, {
+                    key,
+                    targetLanguage: data.targetLanguage,
+                    sourceText: src,
+                    translation: trans,
+                    updatedAt: now,
+                  })
+                  count += 1
+                } else if (existing.sourceText === '') {
+                  this.memory.set(key, {
+                    ...existing,
+                    sourceText: src,
+                    targetLanguage: data.targetLanguage,
+                  })
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore corrupted batch file
+        }
+      }
+      if (count > 0) {
+        this.save()
+      }
+      return count
+    } catch {
+      return 0
     }
   }
 }

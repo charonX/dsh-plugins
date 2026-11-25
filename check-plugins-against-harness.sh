@@ -11,7 +11,7 @@
 #
 # 用法：
 #   ./check-plugins-against-harness.sh                # 校验全部顶层 dsh-* 插件
-#   ./check-plugins-against-harness.sh dsh-autoloop   # 只校验指定仓库
+#   ./check-plugins-against-harness.sh dsh-manager    # 只校验指定仓库
 #   ./check-plugins-against-harness.sh --skip-build   # 不自动重建 harness
 #   ./check-plugins-against-harness.sh --keep         # 保留临时工作目录便于排查
 #
@@ -98,6 +98,7 @@ const walk = (dir) => {
 }
 walk(path.join(harness, 'vendor'))
 walk(path.join(harness, 'packages'))
+walk(path.join(harness, 'apps'))
 fs.writeFileSync(out, JSON.stringify(map))
 EOF
 
@@ -138,7 +139,16 @@ console.log(`linked ${linked.size} harness package(s)`)
 EOF
 
   echo "=== $name"
-  if ! ( cd "$dst" && pnpm install >/dev/null 2>&1 ); then
+  if [ -f "$root/pnpm-workspace.yaml" ]; then
+    node - "$root/pnpm-workspace.yaml" "$dst/pnpm-workspace.yaml" <<'EOF'
+const fs = require('fs')
+const [srcFile, dstFile] = process.argv.slice(2)
+const text = fs.readFileSync(srcFile, 'utf8')
+const match = text.match(/(?:^|\n)(allowBuilds:[\s\S]*?)(?=\n[A-Za-z_]|$)/)
+if (match) fs.writeFileSync(dstFile, 'packages:\n  - .\n' + match[1].trimStart() + '\n')
+EOF
+  fi
+  if ! ( cd "$dst" && pnpm install </dev/null >/dev/null 2>&1 ); then
     results+=("$name|INSTALL|failed"); failed=1; continue
   fi
 
@@ -165,17 +175,17 @@ EOF
 
   ok=1
   step typecheck typecheck || ok=0
-  step test test || ok=0
-  if [ -f "$dst/src/client/index.tsx" ]; then
+  if [ -f "$dst/src/client/index.tsx" ] || [ -f "$dst/src/client/index.ts" ]; then
     step build build || ok=0
   else
     # 没有 client 半的插件（尚未实现 bundle 前端）不要求产出 client 包。
     status+=("build:skip(no client entry)")
   fi
+  step test test || ok=0
   if [ "$ok" -eq 0 ]; then
     failed=1
     verdict=FAIL
-  elif [ ! -f "$dst/src/client/index.tsx" ]; then
+  elif [ ! -f "$dst/src/client/index.tsx" ] && [ ! -f "$dst/src/client/index.ts" ]; then
     verdict=WIP
   else
     verdict=PASS

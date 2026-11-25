@@ -21,6 +21,7 @@ export const COLORS = {
   borderStrong: 'var(--dsw-alias-border-l2, rgba(0,0,0,0.14))',
   error: 'var(--dsw-alias-state-error-primary, #dc2626)',
   warn: 'var(--dsw-alias-state-warn-primary, #d97706)',
+  success: 'var(--dsw-alias-state-success-primary, #16a34a)',
   radiusSm: 'var(--dsw-radius-sm, 6px)',
   radiusMd: 'var(--dsw-radius-md, 8px)',
   radiusLg: 'var(--dsw-radius-lg, 12px)',

@@ -68,6 +68,7 @@ export const SKIP_SELECTOR = [
   '[contenteditable]',
   '[hidden]',
   '[data-dsh-translate-ui]',
+  '[data-dsh-tr-owned="true"]',
 ].join(',')
 
 /**
@@ -85,6 +86,88 @@ export interface PageLimits {
   readonly maxItemsPerBatch: number
   /** Longest accepted single text unit in UTF-16 code units. */
   readonly maxCharsPerItem: number
+  /** Optional destination language tag, e.g. 'zh-CN', 'en'. */
+  readonly targetLanguage?: string
+}
+
+const DEV_TOOL_KEYWORDS: ReadonlySet<string> = new Set([
+  'git', 'npm', 'pnpm', 'yarn', 'bun', 'bash', 'zsh', 'sh', 'ssh',
+  'http', 'https', 'url', 'uri', 'api', 'cli', 'sdk', 'gui', 'ui',
+  'dom', 'css', 'html', 'js', 'ts', 'jsx', 'tsx', 'json', 'yaml',
+  'yml', 'toml', 'sql', 'readme', 'license', 'docker', 'dockerfile',
+])
+
+/**
+ * Whether a text contains any linguistic letters (Latin, Han, Kana, Hangul, Cyrillic, etc.).
+ * Pure symbols, numbers, punctuation, or whitespace cannot be meaningfully translated.
+ * @param text - normalized block text.
+ * @returns true if text contains translatable characters.
+ */
+export function isTranslatableText(text: string): boolean {
+  const trimmed = text.trim()
+  if (trimmed === '') return false
+  // Skip standalone URLs
+  if (/^https?:\/\/[^\s]+$/u.test(trimmed)) return false
+  // Skip standalone commit hashes or hex object IDs (at least one digit and 7-64 hex chars, or 32+ hex chars)
+  if (/^(?=.*\d)[0-9a-fA-F]{7,64}$|^[0-9a-fA-F]{32,64}$/u.test(trimmed)) return false
+  // Skip standalone versions like v1.2.0, 0.2.2-alpha.3
+  if (/^v?\d+(\.\d+)+(-[a-zA-Z0-9.]+)?$/u.test(trimmed)) return false
+  // Skip standalone kebab-case / snake_case slugs without spaces (e.g. backnotprop-pstack, foo_bar)
+  if (/^[a-zA-Z0-9]+([-_][a-zA-Z0-9]+)+$/u.test(trimmed)) return false
+  // Skip common standalone developer tool / tech abbreviations (e.g. git, npm, cli, json)
+  if (DEV_TOOL_KEYWORDS.has(trimmed.toLowerCase())) return false
+  // Must contain at least one letter in any alphabet or script
+  return /\p{L}/u.test(trimmed)
+}
+
+/**
+ * Whether a text is already in the requested destination language.
+ * E.g. when translating to Chinese, text that is already primarily Chinese
+ * does not need to be translated and should not be duplicated.
+ *
+ * @param text - normalized block text.
+ * @param targetLanguage - destination language tag, e.g. 'zh-CN', 'en'.
+ * @returns true if text is already in the target language.
+ */
+export function isAlreadyInTargetLanguage(text: string, targetLanguage?: string): boolean {
+  if (targetLanguage === undefined || targetLanguage.trim() === '') return false
+  const trimmed = text.trim()
+  if (trimmed === '') return true
+
+  const tag = targetLanguage.toLowerCase()
+
+  // Chinese target languages (zh, zh-CN, zh-TW, zh-HK, etc.)
+  if (tag.startsWith('zh')) {
+    const hanMatches = trimmed.match(/\p{Script=Han}/gu)
+    if (!hanMatches) return false
+    const hanCount = hanMatches.length
+    const latinMatches = trimmed.match(/[a-zA-Z]/gu)
+    const latinCount = latinMatches ? latinMatches.length : 0
+
+    // 1. Pure Chinese text (with optional numbers, punctuation, spaces)
+    if (latinCount === 0) return true
+
+    // 2. Chinese characters are greater or equal to Latin characters (e.g. "DSH 本地构建")
+    if (hanCount >= latinCount) return true
+
+    // 3. Starts with Chinese label followed by path/code (e.g. "技能目录 : skills/architect", "版本 4ae1636")
+    if (/^\p{Script=Han}+[\s:：·/_-]/u.test(trimmed)) return true
+
+    // 4. Substantial Chinese presence (>= 25% of all letters/Hanzi)
+    if (hanCount / (hanCount + latinCount) >= 0.25) return true
+
+    return false
+  }
+
+  // English target language (en, en-US, etc.)
+  if (tag.startsWith('en')) {
+    const hanMatches = trimmed.match(/\p{Script=Han}/gu)
+    if (hanMatches && hanMatches.length > 0) return false
+    const latinMatches = trimmed.match(/[a-zA-Z]/gu)
+    return (latinMatches?.length ?? 0) > 0
+  }
+
+  return false
 }
 
 /** One distinct string to translate, addressed by a request-local id. */
@@ -140,7 +223,14 @@ export function planPage(blocks: readonly PageBlock[], limits: PageLimits): Page
   const skipped: string[] = []
   const seen = new Map<string, string>()
   for (const block of blocks) {
-    if (block.text === '' || block.text.length > limits.maxCharsPerItem) {
+    if (
+      block.text === '' ||
+      block.text.length > limits.maxCharsPerItem ||
+      (limits.targetLanguage !== undefined && (
+        !isTranslatableText(block.text) ||
+        isAlreadyInTargetLanguage(block.text, limits.targetLanguage)
+      ))
+    ) {
       skipped.push(block.key)
       continue
     }
