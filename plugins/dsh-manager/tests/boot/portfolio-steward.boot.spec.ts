@@ -124,6 +124,12 @@ class PortfolioAdapter extends LlmAdapter {
         args: {
           ruleId: this.routeRuleId,
           dependsOn: [this.existingTicketId],
+          worktree: {
+            mode: 'worktree',
+            baseBranch: 'main',
+            branch: 'feat-dsh-manager-notifications',
+            mergeTarget: 'test',
+          },
           rationale: `Overlaps SettingsPage.tsx with ${this.existingTicketId}`,
         },
       }])) yield c
@@ -222,6 +228,12 @@ test('Steward Eval records supersededBy for duplicates and Route sets dependsOn 
     expect(blockedView?.dependsOn).toEqual([existing.id])
     expect(blockedView?.waitingOn?.map(dep => dep.id)).toEqual([existing.id])
     expect(blockedView?.state).toBe('todo')
+    expect(blockedView?.worktree).toEqual({
+      mode: 'worktree',
+      baseBranch: 'main',
+      branch: 'feat-dsh-manager-notifications',
+      mergeTarget: 'test',
+    })
 
     // Finishing the prerequisite wakes Executor.pump() and runs nextTicket automatically.
     await ctx.dshManagerBoard.finishTicket(existing.id, Date.now())

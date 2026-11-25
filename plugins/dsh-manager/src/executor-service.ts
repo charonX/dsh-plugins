@@ -9,6 +9,7 @@
  * references, never copied. The boot sweep marks interrupted runs so a crash
  * mid-dispatch never makes work silently disappear.
  */
+import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -24,7 +25,7 @@ import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-tool-present/types'
 import type {} from '@deepseek-ai/dsh-workspace-changes/types'
 import z from '@deepseek-ai/schemastery'
-import type { TicketRecord } from './board-domain.ts'
+import type { TicketRecord, TicketWorktreePlan } from './board-domain.ts'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { answerAttention, askAttention, classifyConfirmationAnswer, isEscalationAttention, settleMatchingPendingAttentions, settlePendingEscalationAttentions, type AttentionAction, type AttentionRecord, type AttentionStorePort } from './attention/attention-core.ts'
@@ -36,7 +37,7 @@ import { attentionAnswerInputSchema, attentionListInputSchema, type AttentionAns
 import { cancelDispatch, enqueueDispatch, latestExternalSession, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
 import { buildExternalCliPrompt, runCliBackend, type ExternalAgentKind } from './dispatch/cli-backend.ts'
 import type { AgentKind, CrewMember } from './crew/crew-core.ts'
-import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor } from './dispatch/worktree.ts'
+import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor, worktreePathFor } from './dispatch/worktree.ts'
 import { resolveTaskScratchDir } from './dispatch/scratch-artifacts.ts'
 import { discoverWorkspaceSkills, formatSkillPromptLines } from './dispatch/workspace-skills.ts'
 import { discoverProjectLandingFacts, formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from './dispatch/landing-discovery.ts'
@@ -679,10 +680,13 @@ export class DshManagerExecutor extends TypertRemoteService {
       throw new RemoteError('dshManager/ticket-not-found', `ticket ${input.ticketId} does not exist`, { id: input.ticketId })
     }
     const projectId = this.projectOfTicket(ticket)
-    if (projectId === undefined) return {}
-    const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
-    if (workspace === undefined) return {}
-    const worktree = await inspectTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
+    const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
+    const spec = this.resolveWorktreeSpec(ticket, workspace?.path)
+    if (spec.repoRoot === undefined) return {}
+    const worktree = await inspectTicketWorktree(this.ctx.subprocess, spec.repoRoot, spec.rootTicketId, {
+      branch: spec.branch,
+      ...(spec.path === undefined ? {} : { path: spec.path }),
+    })
     return { worktree }
   }
 
@@ -700,10 +704,13 @@ export class DshManagerExecutor extends TypertRemoteService {
       throw new RemoteError('dshManager/dispatch-active', `ticket ${ticket.id} still has active dispatch ${active.id}`, { id: active.id })
     }
     const projectId = this.projectOfTicket(ticket)
-    if (projectId === undefined) return { removed: false }
-    const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
-    if (workspace === undefined) return { removed: false }
-    return await removeTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
+    const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
+    const spec = this.resolveWorktreeSpec(ticket, workspace?.path)
+    if (spec.repoRoot === undefined) return { removed: false }
+    return await removeTicketWorktree(this.ctx.subprocess, spec.repoRoot, spec.rootTicketId, {
+      branch: spec.branch,
+      ...(spec.path === undefined ? {} : { path: spec.path }),
+    })
   }
 
   /**
@@ -759,23 +766,47 @@ export class DshManagerExecutor extends TypertRemoteService {
       await recordReport(store, record.id, 'failed', 'the ticket no longer exists', Date.now())
       return
     }
-    // A mapped ticket works inside its own (or shared flow-root) git worktree;
-    // an unmapped one stays in the configured cwd, read-only.
+    // A mapped ticket works inside its planned (or fallback) git worktree;
+    // Steward can also designate `mode: 'none'` for read-only work or point
+    // `repoRoot` to a nested sub-repo inside an aggregate workspace.
     const projectId = this.projectOfTicket(ticket)
     let cwd = this.config.cwd ?? process.cwd()
     let scratchBase = cwd
+    let workspacePath: string | undefined
     if (projectId !== undefined) {
       const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
       if (workspace === undefined) {
         await recordReport(store, record.id, 'failed', `the mapped project ${projectId} has no workspace`, Date.now())
         return
       }
+      workspacePath = workspace.path
       scratchBase = workspace.path
-      try {
-        cwd = await ensureTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
-      } catch (error) {
-        await recordReport(store, record.id, 'failed', `the worktree failed to prepare: ${String(error)}`, Date.now())
-        return
+    }
+    const worktreeSpec = this.resolveWorktreeSpec(ticket, workspacePath)
+    if (projectId !== undefined) {
+      if (worktreeSpec.mode === 'worktree' && worktreeSpec.repoRoot !== undefined) {
+        try {
+          cwd = await ensureTicketWorktree(this.ctx.subprocess, worktreeSpec.repoRoot, worktreeSpec.rootTicketId, {
+            branch: worktreeSpec.branch,
+            baseBranch: worktreeSpec.baseBranch,
+            ...(worktreeSpec.path === undefined ? {} : { path: worktreeSpec.path }),
+          })
+          if (ticket.worktree?.path !== cwd) {
+            await this.ctx.dshManagerBoard.updateWorktreePlan(worktreeSpec.rootTicketId, {
+              mode: 'worktree',
+              repoRoot: worktreeSpec.repoRoot,
+              baseBranch: worktreeSpec.baseBranch,
+              branch: worktreeSpec.branch,
+              ...(worktreeSpec.mergeTarget === undefined ? {} : { mergeTarget: worktreeSpec.mergeTarget }),
+              path: cwd,
+            })
+          }
+        } catch (error) {
+          await recordReport(store, record.id, 'failed', `the worktree failed to prepare: ${String(error)}`, Date.now())
+          return
+        }
+      } else {
+        cwd = worktreeSpec.repoRoot ?? workspacePath ?? cwd
       }
     }
     const taskScratchDir = projectId === undefined ? undefined : this.taskScratchDirOf(ticket, scratchBase)
@@ -785,8 +816,8 @@ export class DshManagerExecutor extends TypertRemoteService {
     const stageMeta = this.stageAndMemberOf(ticket)
     const member = stageMeta.member
     const stageMode = stageMeta.stageMode
-    const repoRoot = projectId === undefined ? cwd : scratchBase
-    const landingFacts = projectId !== undefined && this.isLandingStage(ticket, member?.name, stageMode)
+    const repoRoot = worktreeSpec.repoRoot ?? (projectId === undefined ? cwd : scratchBase)
+    const landingFacts = projectId !== undefined && worktreeSpec.mode !== 'none' && this.isLandingStage(ticket, member?.name, stageMode)
       ? await discoverProjectLandingFacts(this.ctx.subprocess, cwd).catch(() => undefined)
       : undefined
     const agentKind: AgentKind = member?.agentKind ?? 'builtin'
@@ -795,7 +826,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       .sort((left, right) => right.decidedAt - left.decidedAt)[0]
 
     if (agentKind !== 'builtin') {
-      await this.runExternalCliExecutor(store, record, ticket, agentKind, member, projectId, cwd, lastRework, taskScratchDir, stageMode, landingFacts)
+      await this.runExternalCliExecutor(store, record, ticket, agentKind, member, projectId, cwd, lastRework, taskScratchDir, stageMode, landingFacts, worktreeSpec)
       return
     }
 
@@ -826,7 +857,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     })
     try {
       const skills = await discoverWorkspaceSkills(cwd)
-      const base = this.executorPrompt(ticket, projectId, cwd, skills, taskScratchDir, stageMode, landingFacts)
+      const base = this.executorPrompt(ticket, projectId, cwd, skills, taskScratchDir, stageMode, landingFacts, worktreeSpec)
       const prompt = lastRework === undefined ? base : [
         base,
         lastRework.origin === 'human'
@@ -864,11 +895,12 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     stageMode?: 'execute' | 'review',
     landingFacts?: ProjectLandingFacts,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): Promise<void> {
     const resumeSessionId = latestExternalSession(store, ticket.id, agentKind)
     await recordExternalSession(store, record.id, agentKind, resumeSessionId, Date.now())
     const skills = resumeSessionId !== undefined && lastRework !== undefined ? [] : await discoverWorkspaceSkills(cwd)
-    const prompt = this.externalCliPrompt(ticket, projectId, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, stageMode, landingFacts)
+    const prompt = this.externalCliPrompt(ticket, projectId, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, stageMode, landingFacts, worktreeSpec)
     const idleTimeoutMs = this.config.turnTimeoutMs
     const controller = new AbortController()
     this.activeControllers.set(record.id, controller)
@@ -1016,6 +1048,64 @@ export class DshManagerExecutor extends TypertRemoteService {
     return flowChain(this.ctx.dshManagerBoard.ticketRecords(), ticket.id)?.root.id ?? ticket.id
   }
 
+  /**
+   * Resolve effective git repository root, base branch, feature branch, and
+   * merge target from Steward's ticket plan (falling back cleanly to legacy
+   * workspace/ticket defaults).
+   */
+  private resolveWorktreeSpec(ticket: TicketRecord, fallbackRepoRoot?: string): {
+    readonly rootTicketId: string
+    readonly mode: 'worktree' | 'in-place' | 'none'
+    readonly repoRoot?: string
+    readonly baseBranch: string
+    readonly branch: string
+    readonly path?: string
+    readonly mergeTarget?: string
+  } {
+    const root = ticket.flow === undefined
+      ? undefined
+      : flowChain(this.ctx.dshManagerBoard.ticketRecords(), ticket.id)?.root
+    const rootTicketId = root?.id ?? ticket.id
+    const plan = ticket.worktree ?? root?.worktree
+    const mappedRoot = fallbackRepoRoot ?? (() => {
+      const pid = this.projectOfTicket(ticket)
+      return pid === undefined ? undefined : this.ctx.workspaceRegistry.get(pid as WorkspaceId)?.path
+    })()
+    const repoRoot = plan?.repoRoot !== undefined && existsSync(plan.repoRoot) ? plan.repoRoot : mappedRoot
+    const mode = plan?.mode ?? (repoRoot !== undefined ? 'worktree' : 'none')
+    const branch = worktreeBranchFor(rootTicketId, plan?.branch)
+    const baseBranch = plan?.baseBranch?.trim() || 'main'
+    const path = plan?.path !== undefined && plan.path.trim() !== ''
+      ? plan.path.trim()
+      : (repoRoot === undefined ? undefined : worktreePathFor(repoRoot, rootTicketId, { branch: plan?.branch }))
+    const mergeTarget = plan?.mergeTarget?.trim() || undefined
+    return {
+      rootTicketId,
+      mode,
+      ...(repoRoot === undefined ? {} : { repoRoot }),
+      baseBranch,
+      branch,
+      ...(path === undefined ? {} : { path }),
+      ...(mergeTarget === undefined ? {} : { mergeTarget }),
+    }
+  }
+
+  /** Format worktree plan lines so Executor and Delivery stages stay aligned. */
+  private worktreePlanPromptLines(spec: ReturnType<DshManagerExecutor['resolveWorktreeSpec']> | undefined): readonly string[] {
+    if (spec === undefined) return []
+    if (spec.mode === 'none') {
+      return ['Worktree plan: mode=none (read-only analysis; do not create a git worktree).']
+    }
+    const parts = [
+      `mode=${spec.mode}`,
+      spec.repoRoot === undefined ? undefined : `repoRoot=${spec.repoRoot}`,
+      `baseBranch=${spec.baseBranch}`,
+      `branch=${spec.branch}`,
+      spec.mergeTarget === undefined ? undefined : `mergeTarget=${spec.mergeTarget}`,
+    ].filter((part): part is string => part !== undefined)
+    return [`Worktree plan: ${parts.join(', ')}.`]
+  }
+
   /** Resolve the shared scratch task directory for a ticket or flow walk. */
   private taskScratchDirOf(ticket: TicketRecord, basePath: string): string {
     const root = ticket.flow === undefined
@@ -1126,6 +1216,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     stageMode?: 'execute' | 'review',
     landingFacts?: ProjectLandingFacts,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): string {
     const mandate = ticket.mandate
     const flow = ticket.flow
@@ -1163,6 +1254,7 @@ export class DshManagerExecutor extends TypertRemoteService {
         ...this.upstreamStageLines(ticket),
         ...this.answeredAttentionLines(ticket.id),
         ...formatSkillPromptLines(skills),
+        ...this.worktreePlanPromptLines(worktreeSpec),
         ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
         ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
         projectId === undefined
@@ -1245,6 +1337,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       agentCtx.tools.register(this.localMergeBranchTool(ticket, cwd, repoRoot, projectId))
       agentCtx.tools.register(this.pushBranchTool(cwd, projectId))
       agentCtx.tools.register(this.createMrOrPrTool(cwd))
+      agentCtx.tools.register(this.registerWorktreeTool(sessionId, ticket))
       this.installApprovalGate(agentCtx, record)
     }
     const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
@@ -1287,6 +1380,10 @@ export class DshManagerExecutor extends TypertRemoteService {
         if (taskScratchDir !== undefined) {
           const disposeScratch = this.ctx.sandboxPolicy.registerWritableRoot(session, taskScratchDir)
           this.ctx.effect(() => disposeScratch, `dsh-manager: release executor scratch grant ${sessionId}`)
+        }
+        if (repoRoot !== cwd) {
+          const disposeRepoRoot = this.ctx.sandboxPolicy.registerWritableRoot(session, repoRoot)
+          this.ctx.effect(() => disposeRepoRoot, `dsh-manager: release executor repo root grant ${sessionId}`)
         }
       }
       const title = formatExecutorSessionTitle(ticket)
@@ -1351,6 +1448,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     stageMode?: 'execute' | 'review',
     landingFacts?: ProjectLandingFacts,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): string {
     const mandate = ticket.mandate
     const flow = ticket.flow
@@ -1364,6 +1462,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       ...this.upstreamStageLines(ticket),
       ...this.answeredAttentionLines(ticket.id),
       ...formatSkillPromptLines(skills),
+      ...this.worktreePlanPromptLines(worktreeSpec),
       ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
       ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
       projectId === undefined
@@ -1568,13 +1667,16 @@ export class DshManagerExecutor extends TypertRemoteService {
     projectId: string | undefined,
   ) {
     const self = this
-    const rootTicketId = this.worktreeTicketIdOf(ticket)
-    const sourceBranch = worktreeBranchFor(rootTicketId)
+    const spec = this.resolveWorktreeSpec(ticket, repoRoot)
+    const rootTicketId = spec.rootTicketId
+    const effectiveRepoRoot = spec.repoRoot ?? repoRoot
+    const sourceBranch = spec.branch
+    const worktreePath = spec.path
     return defineTool({
       name: 'local_merge_branch',
       description: 'Rebase the ticket branch onto targetBranch (if configured) and merge locally under a per-project lock; requires Approval.',
       parameters: {
-        targetBranch: { type: 'string', required: true, description: 'Target local branch to merge into, e.g. main or develop.' },
+        targetBranch: { type: 'string', required: true, description: 'Target local branch to merge into (e.g. test or the branch specified in repo git-flow).' },
         strategy: { type: 'string', enum: ['rebase-then-ff', 'ff-only', 'merge-commit'], description: 'Merge strategy (default: rebase-then-ff).' },
         removeWorktreeOnSuccess: { type: 'boolean', description: 'Remove the ticket worktree cleanly after a successful merge.' },
       },
@@ -1601,16 +1703,19 @@ export class DshManagerExecutor extends TypertRemoteService {
         }],
       },
       async execute(args, _exec) {
+        const requestedTarget = typeof args.targetBranch === 'string' && args.targetBranch.trim() !== ''
+          ? args.targetBranch.trim()
+          : spec.mergeTarget ?? 'main'
         const res = await localMergeBranch(self.ctx.subprocess, {
-          repoRoot,
+          repoRoot: effectiveRepoRoot,
           sourceBranch,
-          targetBranch: String(args.targetBranch).trim(),
-          worktreeCwd: cwd,
+          targetBranch: requestedTarget,
+          worktreeCwd: worktreePath ?? cwd,
           ...(args.strategy === 'rebase-then-ff' || args.strategy === 'ff-only' || args.strategy === 'merge-commit'
             ? { strategy: args.strategy }
             : {}),
-          ...(args.removeWorktreeOnSuccess === true ? { removeWorktreeOnSuccess: true, ticketId: rootTicketId } : {}),
-          lockKey: projectId ?? repoRoot,
+          ...(args.removeWorktreeOnSuccess === true ? { removeWorktreeOnSuccess: true, ticketId: rootTicketId, worktreeBranch: sourceBranch, ...(worktreePath === undefined ? {} : { worktreePath }) } : {}),
+          lockKey: projectId ?? effectiveRepoRoot,
         })
         return { ...res, conflictFiles: [...res.conflictFiles] }
       },
@@ -1699,6 +1804,53 @@ export class DshManagerExecutor extends TypertRemoteService {
           ...(args.forge === 'github' || args.forge === 'gitlab' ? { forge: args.forge } : {}),
           ...(args.draft === true ? { draft: true } : {}),
         })
+      },
+    })
+  }
+
+  /** Register or update an executor-created worktree path/branch on the root ticket and grant sandbox write access. */
+  private registerWorktreeTool(sessionId: SessionId, ticket: TicketRecord) {
+    const self = this
+    const rootTicketId = this.worktreeTicketIdOf(ticket)
+    return defineTool({
+      name: 'register_worktree',
+      description: 'Register the active git worktree (repoRoot, path, branch, baseBranch, mergeTarget) on this ticket so downstream stages and board UI track it.',
+      parameters: {
+        mode: { type: 'string', enum: ['worktree', 'in-place', 'none'], description: 'Worktree mode (default worktree).' },
+        repoRoot: { type: 'string', description: 'Exact git repository root path.' },
+        path: { type: 'string', description: 'Filesystem path of the active worktree directory.' },
+        branch: { type: 'string', description: 'Feature branch name (e.g. feat-... ).' },
+        baseBranch: { type: 'string', description: 'Base branch name (default main).' },
+        mergeTarget: { type: 'string', description: 'Integration target branch (e.g. test).' },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, properties: { registered: { type: 'boolean' } } },
+        render: (_args, value) => [{ type: 'text', text: `registered: ${String(value.registered)}` }],
+      },
+      async execute(args, _exec) {
+        const mode = args.mode === 'none' || args.mode === 'in-place' ? args.mode : 'worktree'
+        const clean = (v: unknown): string | undefined => typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+        const plan: TicketWorktreePlan = {
+          mode,
+          ...(clean(args.repoRoot) === undefined ? {} : { repoRoot: clean(args.repoRoot) }),
+          ...(clean(args.baseBranch) === undefined ? {} : { baseBranch: clean(args.baseBranch) }),
+          ...(clean(args.branch) === undefined ? {} : { branch: clean(args.branch) }),
+          ...(clean(args.mergeTarget) === undefined ? {} : { mergeTarget: clean(args.mergeTarget) }),
+          ...(clean(args.path) === undefined ? {} : { path: clean(args.path) }),
+        }
+        const updated = await self.ctx.dshManagerBoard.updateWorktreePlan(rootTicketId, plan)
+        const session = self.ctx.sessions.get(sessionId)
+        if (session !== undefined && mode !== 'none') {
+          if (plan.path !== undefined) {
+            const disposePath = self.ctx.sandboxPolicy.registerWritableRoot(session, plan.path)
+            self.ctx.effect(() => disposePath, `dsh-manager: release registered worktree grant ${sessionId}`)
+          }
+          if (plan.repoRoot !== undefined) {
+            const disposeRoot = self.ctx.sandboxPolicy.registerWritableRoot(session, plan.repoRoot)
+            self.ctx.effect(() => disposeRoot, `dsh-manager: release registered repo grant ${sessionId}`)
+          }
+        }
+        return { registered: updated !== undefined }
       },
     })
   }

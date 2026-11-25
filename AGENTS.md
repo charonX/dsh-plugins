@@ -4,10 +4,11 @@
 
 ## Git Flow 与交付收口（强制规则，详见 [docs/git-flow.md](docs/git-flow.md)）
 
+- **AI Native 为主，辅助硬编码**：涉及任务归属判断、目标仓库识别、worktree 规划、`feat-*` 分支命名、路由取舍与审查裁决等语义决策，交由 Agent / 管家依据仓库文档与上下文自主分析并填入工单；代码仅提供最小确定性原语（原子登记、沙箱授权、串行锁、审批门禁与门禁测试）。
+- **适配多子仓规则**：不同子仓库遵循各自仓内的 `AGENTS.md` / `docs/git-flow.md`；通用流程与执行器不得把单个仓库的分支特例写死为全局前提。
 - **`main` 仅接受 GitHub PR**：`main` 分支受 GitHub 分支保护。严禁任何本地或自动化直接 `git push origin main` 或执行 `local_merge_branch(targetBranch: "main")`。
-- **`test` 为集成验收分支**：开发分支 / worktree 完成并跑通 `./check-plugins-against-harness.sh <plugin>` 后，经人工确认本地合入 **`test`**（`local_merge_branch(targetBranch: "test")`）；严禁直接合入 `main`。
-- **特性分支命名以 `feat-` 开头**：格式为 `feat-<plugin>-<feature-summary>`（英文小写短横线，体现具体功能，例如 `feat-dsh-manager-watchdog-heartbeat`）。
-- **人工发起 PR 入 `main`**：`test` 分支实测通过后，由人工推送并向 `main` 发起 GitHub PR，在 GitHub 上审核合并。
+- **新开 worktree 默认从 `main` 拉取**：特性分支统一以 `feat-<plugin>-<feature-summary>` 命名（英文小写短横线，体现具体功能，例如 `feat-dsh-manager-watchdog-heartbeat`），默认从最新 `main` 拉出。
+- **`test` 为集成验收分支，人工发起 PR 入 `main`**：在 `dsh-plugins` 中开发测试并通过 `./check-plugins-against-harness.sh <plugin>` 后，经人工确认本地合入 **`test`**（`local_merge_branch(targetBranch: "test")`）；`test` 实测通过后由人工向 `main` 发起 GitHub PR 并合并。
 
 ## 目录与仓库角色
 
