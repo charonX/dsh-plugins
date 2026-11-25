@@ -21,9 +21,15 @@ import { POLICY_VERSION, abandonEval, finishEval, pendingBacklog, requeueEval, s
 import {
   acceptCandidateInputSchema,
   evalListInputSchema,
+  stewardPromptInputSchema,
   type CandidateView, type DecisionAction, type DecisionView, type EvalListInput, type EvalRecordView, type EvalTriggerView,
-  type StewardStatusView,
+  type StewardPromptInput, type StewardPromptView, type StewardStatusView,
 } from './evals/wire-types.ts'
+import type { TeamConfigDocument } from './team-config/team-config-core.ts'
+import type { TurnId } from './prompt/prompt-sections.ts'
+import { resolveSections } from './prompt/prompt-resolve.ts'
+import { buildPromptContext, type PromptContextInput } from './prompt/prompt-vars.ts'
+import { renderTurn, type RenderedTurnPrompt } from './prompt/prompt-render.ts'
 import { decisionsDomain, type DecisionRecord } from './decisions/decisions-domain.ts'
 import { askAttention, settlePendingEscalationAttentions, type AttentionRecord } from './attention/attention-core.ts'
 import type { PolicyProposalChange } from './policy/policy-core.ts'
@@ -192,6 +198,8 @@ export class DshManagerSteward extends TypertRemoteService {
   private suggesting = false
   /** The recent-activity ring the status RPC serves; capped, newest appended. */
   private activity: StewardStatusView['activity'] = []
+  /** Ring buffer of the last 20 rendered Steward turn prompts for MonitorPage inspection. */
+  private recentPrompts = new Map<string, StewardPromptView>()
 
   constructor(ctx: Context, config: StewardConfig) {
     super(ctx, 'dshManagerSteward', { namespace: 'dshManager' })
@@ -244,8 +252,59 @@ export class DshManagerSteward extends TypertRemoteService {
   }
 
   /** Record one activity entry for the status feed; the ring holds the last 50. */
-  private note(kind: StewardStatusView['activity'][number]['kind'], text: string): void {
-    this.activity = [...this.activity.slice(-49), { at: Date.now(), kind, text }]
+  private note(kind: StewardStatusView['activity'][number]['kind'], text: string, promptId?: string): void {
+    this.activity = [
+      ...this.activity.slice(-49),
+      { at: Date.now(), kind, text, ...(promptId === undefined ? {} : { promptId }) },
+    ]
+  }
+
+  private teamConfigSnapshot(): { readonly config?: TeamConfigDocument; readonly revision: number } {
+    const svc = (this.ctx as unknown as {
+      get?: (key: string) => { snapshot?: () => TeamConfigDocument; status?: () => { readonly revision: number } } | undefined
+    }).get?.('dshManagerTeamConfig')
+    return {
+      ...(svc?.snapshot === undefined ? {} : { config: svc.snapshot() }),
+      revision: svc?.status?.().revision ?? 1,
+    }
+  }
+
+  private prepareStewardTurn(
+    turnId: TurnId,
+    ctxInput: PromptContextInput,
+  ): { readonly rendered: RenderedTurnPrompt; readonly promptId: string } {
+    const { config, revision } = this.teamConfigSnapshot()
+    const ctx = buildPromptContext(ctxInput)
+    const resolved = resolveSections(turnId, {
+      ...(config === undefined ? {} : { config }),
+      variants: ctx.variants,
+    })
+    const rendered = renderTurn(turnId, ctx, resolved)
+    const promptId = `steward-prompt-${crypto.randomUUID()}`
+    const view: StewardPromptView = {
+      promptId,
+      turnId,
+      text: rendered.text,
+      truncated: rendered.truncated,
+      sections: [...rendered.sections],
+      templateRevision: revision,
+      renderedAt: Date.now(),
+    }
+    this.recentPrompts.set(promptId, view)
+    while (this.recentPrompts.size > 20) {
+      const oldest = this.recentPrompts.keys().next().value
+      if (oldest === undefined) break
+      this.recentPrompts.delete(oldest)
+    }
+    return { rendered, promptId }
+  }
+
+  /** Fetch the full rendered prompt for a recent Steward activity entry. */
+  @Remote
+  async stewardPrompt(rawInput: StewardPromptInput): Promise<{ readonly prompt?: StewardPromptView }> {
+    const input = stewardPromptInputSchema.parse(rawInput)
+    const prompt = this.recentPrompts.get(input.promptId)
+    return { ...(prompt === undefined ? {} : { prompt }) }
   }
 
   /** The steward's live status: what it is doing, what waits, what it just did. */
@@ -455,6 +514,7 @@ export class DshManagerSteward extends TypertRemoteService {
     decision: EvalDecision,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
     inlineRoute?: StewardRoutePick,
+    evalPromptId?: string,
   ): Promise<void> {
     const store = this.ctx.dshManagerBoard.evalStore()
     await this.recordEvalDecision(evalId, threadId, decision)
@@ -471,11 +531,11 @@ export class DshManagerSteward extends TypertRemoteService {
     const noteSuffix = decision.action === 'ignore' && decision.supersededBy !== undefined
       ? ` · supersededBy ${decision.supersededBy}`
       : decision.title === undefined ? '' : ` · ${decision.title}`
-    this.note('eval-decision', `${decision.action}${noteSuffix}`)
+    this.note('eval-decision', `${decision.action}${noteSuffix}`, evalPromptId)
     const outcomeTicket = store.getEval(evalId)?.ticketId
     if (decision.action !== 'accept' || outcomeTicket === undefined) return
     if (inlineRoute !== undefined && (inlineRoute.none === true || inlineRoute.ruleId !== undefined)) {
-      await this.applyRoutePick(outcomeTicket, rules, inlineRoute)
+      await this.applyRoutePick(outcomeTicket, rules, inlineRoute, evalPromptId)
       return
     }
     await this.routeAndDispatch(outcomeTicket)
@@ -489,20 +549,20 @@ export class DshManagerSteward extends TypertRemoteService {
     acceptMode: AcceptMode,
   ): Promise<void> {
     const store = this.ctx.dshManagerBoard.evalStore()
-    let decision: EvalDecision | undefined
+    let evalOutcome: { readonly decision: EvalDecision | undefined; readonly promptId: string } | undefined
     try {
       this.note('eval-start', `${triggers[0]?.externalKey ?? threadId} (+${triggers.length})`)
-      decision = await this.driveTurn(evalId, threadId, triggers)
+      evalOutcome = await this.driveTurn(evalId, threadId, triggers)
     } catch (error) {
       await abandonEval(store, evalId, 'failed')
       throw error
     }
-    if (decision === undefined) {
+    if (evalOutcome.decision === undefined) {
       await this.abandonInconclusive(threadId, evalId)
       return
     }
     const rules = this.ctx.dshManagerRoute.list().filter(rule => rule.enabled)
-    await this.settleEvalOutcome(threadId, evalId, triggers, acceptMode, decision, rules)
+    await this.settleEvalOutcome(threadId, evalId, triggers, acceptMode, evalOutcome.decision, rules, undefined, evalOutcome.promptId)
   }
 
   /** Drive one eval turn for one thread's triggers in an isolated short Session. */
@@ -554,34 +614,32 @@ export class DshManagerSteward extends TypertRemoteService {
     const batchProjectId = batchProjectIds.size === 1 ? [...batchProjectIds][0] : undefined
     const portfolioLines = this.portfolioLinesFor(batchProjectId)
     const repoContextLines = this.workspaceRepoContextLines(batchProjectId)
-    const prompt = [
-      `Batch-triage ${prepared.length} pending threads (Evaluate and route each item in one pass).`,
-      'Items:',
-      ...threadBlocks,
-      'Decision records (binding):',
-      ...(recordLines.length > 0 ? recordLines : ['- none recorded']),
-      ...portfolioLines,
-      ...repoContextLines,
-      'Dedup / Subsumption rule: If an incoming thread/bug is already resolved or being fixed by an active or recently ended portfolio ticket, pass action="ignore" with supersededBy="<ticketId>" and explain why in rationale.',
-      'Parallel vs Sequencing rule: When accepting and routing inline onto a pipeline, pass dependsOn=["<ticketId>"] ONLY if it touches the same module/files or must land after an active ticket; otherwise omit dependsOn so independent work runs in parallel.',
-      'Worktree plan rule (AI Native): When accepting and routing inline, analyze which real git repoRoot is targeted, set worktree.mode ("worktree" for edits, "none" for read-only analysis), baseBranch (default "main"), a semantic branch starting with "feat-" (e.g. feat-<plugin>-<summary>), and mergeTarget per that repo\'s AGENTS.md / git-flow (e.g. "test" when configured).',
-      ...(ruleLines.length > 0 ? ['Configured route rules:', ...ruleLines] : ['Configured route rules: none']),
-      'Submit every decision through record_triage_batch (passing each evalId, action, strength, title, scope, rationale, optional supersededBy when ignoring, and when accepting with rules configured also ruleId or none: true plus optional dependsOn and worktree). You may alternatively call record_decision for individual evalIds.',
-    ].join('\n')
+    const { rendered, promptId } = this.prepareStewardTurn('steward.batch-eval', {
+      batchCount: prepared.length,
+      portfolioLines,
+      ruleLines,
+      dataBlocks: {
+        items: ['Items:', ...threadBlocks],
+        decisions: ['Decision records (binding):', ...(recordLines.length > 0 ? recordLines : ['- none recorded'])],
+        portfolio: portfolioLines,
+        repoContext: repoContextLines,
+        rules: ruleLines.length > 0 ? ['Configured route rules:', ...ruleLines] : ['Configured route rules: none'],
+      },
+    })
 
     const recorded = new Map<string, {
       readonly decision: EvalDecision
       readonly route?: StewardRoutePick
     }>()
     try {
-      this.note('eval-start', `batch (${prepared.length} threads)`)
+      this.note('eval-start', `batch (${prepared.length} threads)`, promptId)
       await this.runStewardTurn(
-        'batch-eval',
+        'steward.batch-eval',
         agentCtx => {
           agentCtx.tools.register(this.triageBatchTool(prepared, recorded))
           agentCtx.tools.register(this.batchFallbackDecisionTool(prepared, recorded))
         },
-        prompt,
+        rendered.text,
       )
     } catch (error) {
       for (const item of prepared) {
@@ -612,6 +670,7 @@ export class DshManagerSteward extends TypertRemoteService {
         outcome.decision,
         rules,
         outcome.route,
+        promptId,
       )
     }
     for (const item of missed) {
@@ -699,8 +758,8 @@ export class DshManagerSteward extends TypertRemoteService {
     if (ticket === undefined || ticket.flow !== undefined) return
     const rules = this.ctx.dshManagerRoute.list().filter(rule => rule.enabled)
     if (rules.length === 0) return
-    const pick = await this.driveRouteTurn(ticket, rules)
-    await this.applyRoutePick(ticketId, rules, pick)
+    const { pick, promptId } = await this.driveRouteTurn(ticket, rules)
+    await this.applyRoutePick(ticketId, rules, pick, promptId)
   }
 
   /** Apply a routing decision (inline from batch triage or dedicated route turn). */
@@ -708,6 +767,7 @@ export class DshManagerSteward extends TypertRemoteService {
     ticketId: string,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
     pick: StewardRoutePick | undefined,
+    routePromptId?: string,
   ): Promise<void> {
     if (pick?.worktree !== undefined) {
       await this.ctx.dshManagerBoard.updateWorktreePlan(ticketId, pick.worktree)
@@ -715,7 +775,7 @@ export class DshManagerSteward extends TypertRemoteService {
     if (pick === undefined || (pick.none !== true && pick.ruleId === undefined)) {
       // An inconclusive routing turn leaves the ticket on the board; the
       // next tick does not re-route (the ticket is no longer in the backlog).
-      this.note('eval-failed', `route inconclusive · ${ticketId}`)
+      this.note('eval-failed', `route inconclusive · ${ticketId}`, routePromptId)
       return
     }
     if (pick.none === true) {
@@ -726,17 +786,17 @@ export class DshManagerSteward extends TypertRemoteService {
         ...(pick.rationale === undefined ? {} : { details: pick.rationale }),
       }, Date.now())
       await this.publish(attention)
-      this.note('eval-decision', `route → human · ${ticketId}`)
+      this.note('eval-decision', `route → human · ${ticketId}`, routePromptId)
       return
     }
     const rule = rules.find(entry => entry.id === pick.ruleId)
     if (rule === undefined) {
-      this.note('eval-failed', `route rule ${pick.ruleId} vanished · ${ticketId}`)
+      this.note('eval-failed', `route rule ${pick.ruleId} vanished · ${ticketId}`, routePromptId)
       return
     }
     const pipeline = this.ctx.dshManagerPipeline.require(rule.pipelineId)
     if (pipeline.stages.length === 0) {
-      this.note('eval-failed', `pipeline ${pipeline.name} is empty · ${ticketId}`)
+      this.note('eval-failed', `pipeline ${pipeline.name} is empty · ${ticketId}`, routePromptId)
       return
     }
     const ticket = this.ctx.dshManagerBoard.ticketRecord(ticketId)
@@ -747,7 +807,8 @@ export class DshManagerSteward extends TypertRemoteService {
     while (startIndex < pipeline.stages.length) {
       const stage = pipeline.stages[startIndex]!
       if (!stage.skippable) break
-      const skipPick = await this.driveSkipTurn(ticket, stage, startIndex)
+      const skipOutcome = await this.driveSkipTurn(ticket, stage, startIndex)
+      const skipPick = skipOutcome.pick
       if (skipPick?.skip !== true) break
       if (alreadyAligned) {
         skipped.push({ stageIndex: startIndex, reason: skipPick.rationale })
@@ -769,7 +830,7 @@ export class DshManagerSteward extends TypertRemoteService {
         ...(skipPick.rationale === '' ? {} : { details: skipPick.rationale }),
       }, Date.now())
       await this.publish(attention)
-      this.note('eval-decision', `skip proposed · stage ${startIndex + 1} · ${ticketId}`)
+      this.note('eval-decision', `skip proposed · stage ${startIndex + 1} · ${ticketId}`, skipOutcome.promptId)
       return
     }
     if (startIndex >= pipeline.stages.length) {
@@ -808,10 +869,10 @@ export class DshManagerSteward extends TypertRemoteService {
       ? []
       : unresolvedDependencies(this.ctx.dshManagerBoard.ticketRecords(), annotatedTicket)
     if (waitingOn.length > 0) {
-      this.note('eval-decision', `waiting (${waitingOn.length} dep) · ${pipeline.name} · ${ticketId}`)
+      this.note('eval-decision', `waiting (${waitingOn.length} dep) · ${pipeline.name} · ${ticketId}`, routePromptId)
       return
     }
-    this.note('eval-decision', `route → ${pipeline.name} ${startIndex + 1}/${pipeline.stages.length} · ${ticketId}`)
+    this.note('eval-decision', `route → ${pipeline.name} ${startIndex + 1}/${pipeline.stages.length} · ${ticketId}`, routePromptId)
     await this.ctx.dshManagerExecutor.dispatchTicket({ ticketId })
   }
 
@@ -873,7 +934,7 @@ export class DshManagerSteward extends TypertRemoteService {
   private async driveRouteTurn(
     ticket: TicketRecord,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
-  ): Promise<StewardRoutePick | undefined> {
+  ): Promise<{ readonly pick: StewardRoutePick | undefined; readonly promptId: string }> {
     let recordedPick: StewardRoutePick | undefined
     const lines = rules.map(rule => {
       const pipeline = this.ctx.dshManagerPipeline.require(rule.pipelineId)
@@ -881,25 +942,24 @@ export class DshManagerSteward extends TypertRemoteService {
     })
     const portfolioLines = this.portfolioLinesFor(ticket.projectId, [ticket.id])
     const repoContextLines = this.workspaceRepoContextLines(ticket.projectId)
-    const prompt = [
-      `Route the accepted ticket ${ticket.id}: "${ticket.title}".`,
-      ticket.mandate === undefined ? undefined : `Its mandate covers ${ticket.mandate.scope}.`,
-      ...portfolioLines,
-      ...repoContextLines,
-      'Sequencing rule: If this ticket modifies the same module/files or clearly depends on an active ticket above, pass its ticket id(s) in dependsOn on record_route; otherwise leave dependsOn empty so independent work runs in parallel.',
-      'Worktree plan rule (AI Native): Also fill worktree on record_route — set mode ("worktree" for code/doc edits, "none" for read-only research/review), repoRoot (exact sub-repo git root if targeting e.g. repos/<name>), baseBranch (default "main"), semantic branch starting with "feat-" (e.g. feat-<plugin>-<summary>), and mergeTarget matching that repo\'s AGENTS.md / docs/git-flow.md (e.g. "test" when specified).',
-      'The configured route rules are:',
-      ...lines,
-      'Pick the rule whose pipeline best carries this ticket through the record_route tool (pass its ruleId), or declare none fits (pass none: true) — an unmatched ticket waits for a human judgment.',
-    ].filter(line => line !== undefined).join('\n')
+    const { rendered, promptId } = this.prepareStewardTurn('steward.route', {
+      ticket,
+      portfolioLines,
+      ruleLines: lines,
+      dataBlocks: {
+        portfolio: portfolioLines,
+        repoContext: repoContextLines,
+        rules: lines,
+      },
+    })
     await this.runStewardTurn(
-      'route',
+      'steward.route',
       agentCtx => {
         agentCtx.tools.register(this.routeTool(pick => { recordedPick = pick }))
       },
-      prompt,
+      rendered.text,
     )
-    return recordedPick
+    return { pick: recordedPick, promptId }
   }
 
   /** Queue a flow walk for one ticket through the durable effects queue. */
@@ -956,7 +1016,8 @@ export class DshManagerSteward extends TypertRemoteService {
       while (index < pipeline.stages.length) {
         const stage = pipeline.stages[index]!
         if (stage.skippable) {
-          const pick = await this.driveSkipTurn(ticket, stage, index)
+          const skipOutcome = await this.driveSkipTurn(ticket, stage, index)
+          const pick = skipOutcome.pick
           if (pick?.skip === true) {
             // The skip waits for the human: the pending state lands on the
             // ticket, the attention asks with the rationale, and the walk
@@ -976,7 +1037,7 @@ export class DshManagerSteward extends TypertRemoteService {
               ...(pick.rationale === '' ? {} : { details: pick.rationale }),
             }, Date.now())
             await this.publish(attention)
-            this.note('eval-decision', `skip proposed · stage ${index + 1} · ${ticket.id}`)
+            this.note('eval-decision', `skip proposed · stage ${index + 1} · ${ticket.id}`, skipOutcome.promptId)
             return
           }
         }
@@ -1086,7 +1147,7 @@ export class DshManagerSteward extends TypertRemoteService {
     ticket: TicketRecord,
     stage: PipelineStage,
     index: number,
-  ): Promise<{ readonly skip: boolean; readonly rationale: string } | undefined> {
+  ): Promise<{ readonly pick: { readonly skip: boolean; readonly rationale: string } | undefined; readonly promptId: string }> {
     let recordedPick: { readonly skip: boolean; readonly rationale: string } | undefined
     const member = (() => {
       try {
@@ -1095,27 +1156,32 @@ export class DshManagerSteward extends TypertRemoteService {
         return undefined
       }
     })()
-    const prompt = [
-      `Decide whether pipeline stage ${index + 1} can be skipped for ticket ${ticket.id}: "${ticket.title}".`,
+    const hasSkipLogic = stage.skipLogic !== undefined && stage.skipLogic !== ''
+    const contextLines = [
       ticket.mandate === undefined ? undefined : `Mandate scope: ${ticket.mandate.scope}`,
       ticket.acceptanceCriteria === undefined || ticket.acceptanceCriteria === ''
         ? undefined
         : `Agreed acceptance criteria (already aligned with the user): ${ticket.acceptanceCriteria}`,
       ticket.handoffSessionId === undefined ? undefined : `Originates from aligned discussion session: ${ticket.handoffSessionId}`,
       member === undefined ? undefined : `The stage's member: ${member.name} (${member.role}).`,
-      stage.skipLogic === undefined || stage.skipLogic === ''
-        ? 'The stage is marked skippable but carries no skip logic; skip it only when the mandate clearly does not need it.'
-        : `The stage's skip logic: ${stage.skipLogic}`,
-      'Decide through the decide_skip tool.',
-    ].filter(line => line !== undefined).join('\n')
+      hasSkipLogic ? `The stage's skip logic: ${stage.skipLogic}` : undefined,
+    ].filter((line): line is string => line !== undefined)
+    const { rendered, promptId } = this.prepareStewardTurn('steward.skip', {
+      ticket,
+      stage,
+      ...(member === undefined ? {} : { member }),
+      stageIndex: index,
+      hasSkipLogic,
+      dataBlocks: { context: contextLines },
+    })
     await this.runStewardTurn(
-      'skip',
+      'steward.skip',
       agentCtx => {
         agentCtx.tools.register(this.skipTool(pick => { recordedPick = pick }))
       },
-      prompt,
+      rendered.text,
     )
-    return recordedPick
+    return { pick: recordedPick, promptId }
   }
 
   /**
@@ -1143,7 +1209,7 @@ export class DshManagerSteward extends TypertRemoteService {
     evalId: string,
     threadId: string,
     triggers: readonly TriggerRecord[],
-  ): Promise<EvalDecision | undefined> {
+  ): Promise<{ readonly decision: EvalDecision | undefined; readonly promptId: string }> {
     let recordedDecision: EvalDecision | undefined
     const lines = triggers.map(trigger => {
       const detail = describePayload(trigger.payload)
@@ -1155,26 +1221,27 @@ export class DshManagerSteward extends TypertRemoteService {
     const recordLines = decisions.map(entry => `- [${entry.kind}] ${entry.statement}`)
     const payloadProject = (triggers[0]?.payload as { readonly projectId?: unknown } | undefined)?.projectId
     const portfolioLines = this.portfolioLinesFor(typeof payloadProject === 'string' && payloadProject !== '' ? payloadProject : undefined)
-    const prompt = [
-      `Evaluate the pending changes of thread ${threadId} (eval ${evalId}).`,
-      'Triggers:',
-      ...lines,
-      'Decision records (binding):',
-      ...(recordLines.length > 0 ? recordLines : ['- none recorded']),
-      ...portfolioLines,
-      'Dedup / Subsumption rule: If this thread/bug is already resolved or being fixed by an active or recently ended portfolio ticket, call record_decision with action="ignore" and supersededBy="<ticketId>".',
-      'Decide through the record_decision tool: accept the work explicitly supported by the triggers, or ignore or stop it.',
-    ].join('\n')
+    const { rendered, promptId } = this.prepareStewardTurn('steward.eval', {
+      evalId,
+      threadId,
+      triggerLines: lines,
+      portfolioLines,
+      dataBlocks: {
+        triggers: ['Triggers:', ...lines],
+        decisions: ['Decision records (binding):', ...(recordLines.length > 0 ? recordLines : ['- none recorded'])],
+        portfolio: portfolioLines,
+      },
+    })
     await this.runStewardTurn(
-      'eval',
+      'steward.eval',
       agentCtx => {
         agentCtx.tools.register(this.decisionTool(evalId, threadId, decision => {
           recordedDecision = decision
         }))
       },
-      prompt,
+      rendered.text,
     )
-    return recordedDecision
+    return { decision: recordedDecision, promptId }
   }
 
   /** Record the system's `incomplete` decision for a retired batch. */
@@ -1590,26 +1657,27 @@ export class DshManagerSteward extends TypertRemoteService {
     const lastRework = [...reviews]
       .filter(review => review.ticketId === entry.ticketId && review.verdict === 'rework')
       .sort((left, right) => right.decidedAt - left.decidedAt)[0]
-    const prompt = [
-      `Review the finished work on ticket ${entry.ticketId} (dispatch ${entry.dispatchId}).`,
+    const reportLines = [
       readyReport === undefined ? undefined : `The executor's summary report:\n${readyReport.message}`,
       lastRework === undefined ? undefined : `The earlier rework opinion: ${lastRework.feedback}`,
-      isReviewStage
-        ? 'This dispatch ran the dedicated read-only Review stage. Read its concise review report and verify from the facts reported whether review & verification actually passed (all required tests, typechecks, and gates ran and passed with zero open blocking findings). Record verdict "pass" when review is complete and all checks passed; record "rework" when any tests failed, checks were skipped, or blocking issues remain (carrying the open finding IDs, failing command outputs, and review-report.md / test-report.log paths in feedback so the implementation stage fixes them).'
-        : 'Decide through the record_review tool: pass when the work is verified and complete (ready for human acceptance), otherwise rework with concrete missing checks or issues.',
-      'You may propose the next step on this thread through the record_followup tool (parent ticket id, title, proposed mandate scope, rationale); its scope may only narrow the parent mandate — a wider scope waits for the user\'s approval.',
-    ].filter(line => line !== undefined).join('\n')
+    ].filter((line): line is string => line !== undefined)
+    const { rendered, promptId } = this.prepareStewardTurn('steward.review', {
+      ...(ticket === undefined ? {} : { ticket }),
+      dispatchId: entry.dispatchId,
+      stageMode: isReviewStage ? 'review' : 'execute',
+      dataBlocks: { reports: reportLines },
+    })
     let verdict: { readonly verdict: ReviewVerdict; readonly feedback: string } | undefined
     let followup: { readonly parentTicketId: string; readonly title: string; readonly scope: string; readonly rationale: string } | undefined
     await this.runStewardTurn(
-      'review',
+      'steward.review',
       agentCtx => {
         agentCtx.tools.register(this.reviewTool(recorded => { verdict = recorded }))
         agentCtx.tools.register(this.followUpTool(recorded => { followup = recorded }))
       },
-      prompt,
+      rendered.text,
     )
-    if (verdict !== undefined) await this.applyReview(entry, verdict, priorReworks)
+    if (verdict !== undefined) await this.applyReview(entry, verdict, priorReworks, promptId)
     if (followup !== undefined) await this.applyFollowup(followup, entry.dispatchId)
   }
 
@@ -1618,6 +1686,7 @@ export class DshManagerSteward extends TypertRemoteService {
     entry: { readonly ticketId: string; readonly dispatchId: string },
     verdict: { readonly verdict: ReviewVerdict; readonly feedback: string },
     priorReworks: number,
+    reviewPromptId?: string,
   ): Promise<void> {
     const now = Date.now()
     await recordReview(this.ctx.dshManagerBoard.reviewStore(), {
@@ -1626,7 +1695,7 @@ export class DshManagerSteward extends TypertRemoteService {
       verdict: verdict.verdict,
       feedback: verdict.feedback,
     }, now)
-    this.note('review', `${verdict.verdict} · ${entry.ticketId}`)
+    this.note('review', `${verdict.verdict} · ${entry.ticketId}`, reviewPromptId)
     const path = reviewPath(verdict.verdict, priorReworks)
     if (path === 'acceptance') {
       // A flow ticket that is not its pipeline's last stage walks onward; the
@@ -1793,18 +1862,24 @@ export class DshManagerSteward extends TypertRemoteService {
 
   /** Drive one end-suggestion turn for one candidate ticket in an isolated session. */
   private async driveEndSuggestion(candidate: { readonly ticketId: string; readonly threadId: string; readonly trigger: TriggerRecord }): Promise<void> {
-    const prompt = [
-      `The external object behind ticket ${candidate.ticketId} (thread ${candidate.threadId}) has ended.`,
-      `Trigger: [${candidate.trigger.externalKey}] ${describePayload(candidate.trigger.payload) ?? candidate.trigger.externalKey} — ${candidate.trigger.url}`,
-      'Decide through the suggest_end tool whether the user should be asked to close this ticket, or keep it open through the keep_open tool.',
-    ].join('\n')
+    const ticket = this.ctx.dshManagerBoard.ticketRecord(candidate.ticketId)
+    const { rendered, promptId } = this.prepareStewardTurn('steward.end-suggestion', {
+      ...(ticket === undefined ? {} : { ticket }),
+      threadId: candidate.threadId,
+      dataBlocks: {
+        trigger: [
+          `Trigger: [${candidate.trigger.externalKey}] ${describePayload(candidate.trigger.payload) ?? candidate.trigger.externalKey} — ${candidate.trigger.url}`,
+        ],
+      },
+    })
+    this.note('eval-decision', `suggest-end · ${candidate.ticketId}`, promptId)
     await this.runStewardTurn(
-      'end-suggestion',
+      'steward.end-suggestion',
       agentCtx => {
         agentCtx.tools.register(this.suggestEndTool(candidate.ticketId))
         agentCtx.tools.register(this.keepOpenTool())
       },
-      prompt,
+      rendered.text,
     )
     this.handledEndTriggers.add(`${candidate.ticketId}:${candidate.trigger.id}`)
   }

@@ -453,6 +453,33 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
                             ? <p className={css.detailStatus}>{t('board.detail.dispatch.emptyMessages')}</p>
                             : null}
 
+                          <details className={css.detailToolGroup}>
+                            <summary className={css.detailToolSummary}>
+                              {t('board.detail.dispatch.prompt.title')}
+                              {dispatch.prompt !== undefined
+                                ? ` · ${dispatch.prompt.turnId} · ${t('board.detail.dispatch.prompt.revision', { rev: dispatch.prompt.templateRevision })}`
+                                : ''}
+                            </summary>
+                            {dispatch.prompt === undefined
+                              ? <p className={css.detailStatus}>{t('board.detail.dispatch.prompt.legacy')}</p>
+                              : (
+                                <div className={css.detailList}>
+                                  <div className={css.detailWorktreeRow}>
+                                    {dispatch.prompt.sections.map(sec => (
+                                      <span key={sec.id} className={css.detailActivityTag}>
+                                        {sec.id}:{t(`board.detail.dispatch.prompt.source.${sec.source}`)}
+                                        {sec.locked ? `(${t('board.detail.dispatch.prompt.locked')})` : ''}
+                                      </span>
+                                    ))}
+                                    {dispatch.prompt.truncated
+                                      ? <Tag tone="warning">{t('board.detail.dispatch.prompt.truncated')}</Tag>
+                                      : null}
+                                  </div>
+                                  <pre className={css.detailDiffPre}>{dispatch.prompt.text}</pre>
+                                </div>
+                              )}
+                          </details>
+
                           {toolMessages.length > 0
                             ? (
                               <details className={css.detailToolGroup} open={active || toolMessages.length <= 3}>

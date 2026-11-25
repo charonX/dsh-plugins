@@ -3,7 +3,7 @@
  * by the Host service and the client contribution.
  */
 import { z as zod } from 'zod'
-import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
+import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchPromptRecord, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
 import type { AgentKind } from '../crew/crew-core.ts'
 import type { TicketView } from '../board-domain.ts'
 
@@ -26,6 +26,8 @@ export interface DispatchMessageView {
   readonly at: number
 }
 
+export type DispatchPromptView = DispatchPromptRecord
+
 /** One dispatch as the wire sees it. */
 export interface DispatchView {
   readonly id: string
@@ -41,6 +43,8 @@ export interface DispatchView {
   readonly agentKind?: AgentKind
   /** Sticky external CLI session id when executed by an external CLI. */
   readonly externalSessionId?: string
+  /** Actual rendered prompt dispatched to this executor run (absent on legacy pre-template records). */
+  readonly prompt?: DispatchPromptView
   readonly reports: readonly ReportView[]
   /** Chronological conversation & tool stream assembled from Session events or external CLI reports. */
   readonly messages?: readonly DispatchMessageView[]

@@ -10,15 +10,24 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-storage-domain'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { crewDomain } from './crew/crew-domain.ts'
 import type { CrewMember } from './crew/crew-core.ts'
 import { pipelineDomain } from './pipeline/pipeline-domain.ts'
 import type { PipelineRecord } from './pipeline/pipeline-core.ts'
 import { routeDomain } from './route/route-domain.ts'
 import type { RouteRule } from './route/route-core.ts'
+import type { TicketRecord } from './board-domain.ts'
+import { discoverWorkspaceSkills } from './dispatch/workspace-skills.ts'
+import { discoverProjectLandingFacts, formatLandingDiscoveryPromptLines } from './dispatch/landing-discovery.ts'
+import { TURN_IDS, TURN_REGISTRY, type TurnId } from './prompt/prompt-sections.ts'
+import { resolveSections, type GlobalPromptsConfig, type PromptSectionsMap } from './prompt/prompt-resolve.ts'
+import { PROMPT_VARIABLES, buildPromptContext } from './prompt/prompt-vars.ts'
+import { probeProjectFacts } from './prompt/project-facts.ts'
+import { renderTurn } from './prompt/prompt-render.ts'
 import {
   emptyTeamConfig,
   parseTeamConfigYaml,
@@ -29,11 +38,31 @@ import {
   type TeamConfigStatusView,
 } from './team-config/team-config-core.ts'
 import { createTeamConfigTools } from './team-config/team-config-tools.ts'
+import { applyPresetToTeamConfig } from './team-config/presets.ts'
+import {
+  presetApplyInputSchema,
+  promptPreviewInputSchema,
+  promptSaveInputSchema,
+  teamConfigImportYamlInputSchema,
+  type PresetApplyInput,
+  type PromptPreviewInput,
+  type PromptPreviewView,
+  type PromptRegistryView,
+  type PromptSaveInput,
+  type TeamConfigImportYamlInput,
+} from './team-config/wire-types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Unified hot-reloading YAML configuration store for team, pipelines, and routes. */
     dshManagerTeamConfig: DshManagerTeamConfig
+  }
+}
+
+declare module '@deepseek-ai/dsh-typert-protocol' {
+  interface RemoteErrorDetailsMap {
+    /** Prompt template validation or scope mutation failed. */
+    'dshManager/prompt-invalid': { readonly reason: string }
   }
 }
 
@@ -175,6 +204,357 @@ export class DshManagerTeamConfig extends TypertRemoteService {
   @Remote
   async teamConfigReload(): Promise<TeamConfigStatusView> {
     return await this.reloadFromDisk()
+  }
+
+  /** Materialize an independent pipeline (and any missing crew members) from a built-in read-only preset. */
+  @Remote
+  async presetApply(rawInput: PresetApplyInput): Promise<{
+    readonly pipeline: PipelineRecord
+    readonly createdMembers: readonly CrewMember[]
+    readonly status: TeamConfigStatusView
+  }> {
+    const input = presetApplyInputSchema.parse(rawInput)
+    let createdPipeline!: PipelineRecord
+    let createdMembers: readonly CrewMember[] = []
+    await this.mutate((current) => {
+      const result = applyPresetToTeamConfig(current, input.presetId)
+      createdPipeline = result.pipeline
+      createdMembers = result.createdMembers
+      return result.nextDoc
+    })
+    return { pipeline: createdPipeline, createdMembers, status: this.status() }
+  }
+
+  /** Build the Prompt Studio registry snapshot: built-in turns, variables, current overrides, pipelines, and YAML. */
+  @Remote
+  async promptRegistry(): Promise<PromptRegistryView> {
+    return this.buildRegistryView()
+  }
+
+  /** Save or clear prompt section overrides at global, pipeline, or stage level through the single write chain. */
+  @Remote
+  async promptSave(rawInput: PromptSaveInput): Promise<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }> {
+    const input = promptSaveInputSchema.parse(rawInput)
+    try {
+      await this.mutate((current) => {
+        const mergeSections = (
+          existing: PromptSectionsMap | undefined,
+        ): PromptSectionsMap | undefined => {
+          const next: Record<string, string> = { ...(existing?.sections ?? {}) }
+          for (const [secId, val] of Object.entries(input.sections)) {
+            if (val === null) delete next[secId]
+            else next[secId] = val
+          }
+          return Object.keys(next).length === 0 ? undefined : { sections: next }
+        }
+
+        if (input.scope === 'global') {
+          if (input.turnId === undefined) {
+            throw new Error('turnId is required when scope is "global"')
+          }
+          const turns: Record<string, PromptSectionsMap | undefined> = { ...(current.prompts?.turns ?? {}) }
+          const merged = mergeSections(turns[input.turnId])
+          if (merged === undefined) delete turns[input.turnId]
+          else turns[input.turnId] = merged
+          const hasAnyTurn = Object.values(turns).some(t => t?.sections !== undefined && Object.keys(t.sections).length > 0)
+          const nextDoc: TeamConfigDocument = {
+            version: current.version,
+            crew: current.crew,
+            pipelines: current.pipelines,
+            routes: current.routes,
+            ...(hasAnyTurn ? { prompts: { turns } as GlobalPromptsConfig } : {}),
+          }
+          return nextDoc
+        }
+
+        if (input.pipelineId === undefined) {
+          throw new Error(`pipelineId is required when scope is "${input.scope}"`)
+        }
+        const targetPipeline = current.pipelines.find(p => p.id === input.pipelineId)
+        if (targetPipeline === undefined) {
+          throw new Error(`pipeline "${input.pipelineId}" does not exist`)
+        }
+        const now = Date.now()
+        const pipelines = current.pipelines.map((p) => {
+          if (p.id !== input.pipelineId) return p
+          if (input.scope === 'pipeline') {
+            const nextPrompt = mergeSections(p.prompt)
+            const { prompt: _old, ...rest } = p
+            return {
+              ...rest,
+              ...(nextPrompt === undefined ? {} : { prompt: nextPrompt }),
+              updatedAt: now,
+            }
+          }
+          if (input.stageIndex === undefined || input.stageIndex < 0 || input.stageIndex >= p.stages.length) {
+            throw new Error(`pipeline "${input.pipelineId}" has no stage at index ${String(input.stageIndex)}`)
+          }
+          const stages = p.stages.map((st, idx) => {
+            if (idx !== input.stageIndex) return st
+            const nextPrompt = mergeSections(st.prompt)
+            const { prompt: _old, ...rest } = st
+            return {
+              ...rest,
+              ...(nextPrompt === undefined ? {} : { prompt: nextPrompt }),
+            }
+          })
+          return { ...p, stages, updatedAt: now }
+        })
+        return { ...current, pipelines }
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new RemoteError('dshManager/prompt-invalid', reason, { reason })
+    }
+    return { status: this.status(), registry: this.buildRegistryView() }
+  }
+
+  /** Validate and import a pasted `team-config.yaml` string atomically through the shared parser/validator. */
+  @Remote
+  async teamConfigImportYaml(rawInput: TeamConfigImportYamlInput): Promise<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }> {
+    const input = teamConfigImportYamlInputSchema.parse(rawInput)
+    try {
+      const parsed = parseTeamConfigYaml(input.yaml)
+      await this.mutate(() => parsed)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new RemoteError('dshManager/prompt-invalid', reason, { reason })
+    }
+    return { status: this.status(), registry: this.buildRegistryView() }
+  }
+
+    private applyDraftSections(
+    existing: Readonly<Record<string, string>> | undefined,
+    drafts: Readonly<Record<string, string | null>> | undefined,
+  ): PromptSectionsMap | undefined {
+    if (drafts === undefined) {
+      return existing === undefined ? undefined : { sections: existing }
+    }
+    const merged: Record<string, string> = { ...(existing ?? {}) }
+    for (const [secId, val] of Object.entries(drafts)) {
+      if (val === null) {
+        delete merged[secId]
+      } else {
+        merged[secId] = val
+      }
+    }
+    return Object.keys(merged).length === 0 ? undefined : { sections: merged }
+  }
+
+/** Render a live preview of `turnId` against real project facts, ticket (or sample context), and draft edits. */
+  @Remote
+  async promptRenderPreview(rawInput: PromptPreviewInput): Promise<PromptPreviewView> {
+    const input = promptPreviewInputSchema.parse(rawInput)
+    const doc = this.doc
+    const pipeline = input.pipelineId === undefined
+      ? undefined
+      : doc.pipelines.find(p => p.id === input.pipelineId)
+    const stageIndex = input.stageIndex ?? (pipeline !== undefined && pipeline.stages.length > 0 ? 0 : undefined)
+    const stage = pipeline !== undefined && stageIndex !== undefined
+      ? pipeline.stages[stageIndex]
+      : undefined
+    const member = stage === undefined
+      ? undefined
+      : doc.crew.find(m => m.id === stage.memberId)
+
+    const boardSvc = (this.ctx as unknown as {
+      get?: (key: string) => { ticketRecord?: (id: string) => TicketRecord | undefined } | undefined
+    }).get?.('dshManagerBoard')
+    const realTicket = input.ticketId === undefined ? undefined : boardSvc?.ticketRecord?.(input.ticketId)
+    const ticket: TicketRecord = realTicket ?? {
+      id: 'ticket-sample-1',
+      title: 'Sample preview ticket',
+      state: 'todo',
+      threadId: 'thread-sample-1',
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      mandate: {
+        scope: 'Implement feature or verify repository changes',
+        strength: 'explicit',
+        policyVersion: '1',
+      },
+      acceptanceCriteria: 'All verification gates pass',
+      ...(pipeline !== undefined && stageIndex !== undefined
+        ? {
+            flow: {
+              pipelineId: pipeline.id,
+              pipelineName: pipeline.name,
+              stageIndex,
+              stageCount: pipeline.stages.length,
+            },
+          }
+        : {}),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }
+
+    const resolvedProjectId = input.projectId ?? realTicket?.projectId
+    const workspaceSvc = (this.ctx as unknown as {
+      get?: (key: string) => {
+        get?: (id: WorkspaceId) => { readonly id: string; readonly title?: string; readonly path: string } | undefined
+      } | undefined
+    }).get?.('workspaceRegistry')
+    const workspace = resolvedProjectId === undefined ? undefined : workspaceSvc?.get?.(resolvedProjectId as WorkspaceId)
+    const subprocessSvc = (this.ctx as unknown as {
+      get?: (key: string) => unknown
+    }).get?.('subprocess')
+
+    const cwd = workspace?.path ?? process.cwd()
+    const skills = workspace === undefined ? [] : await discoverWorkspaceSkills(workspace.path).catch(() => [])
+    const landingFacts = workspace !== undefined && subprocessSvc !== undefined
+      ? await discoverProjectLandingFacts(subprocessSvc as never, workspace.path).catch(() => undefined)
+      : undefined
+    const projectFacts = workspace === undefined
+      ? undefined
+      : await probeProjectFacts(workspace.path, landingFacts).catch(() => undefined)
+
+    const hasDrafts = input.draftSections !== undefined
+
+    // Apply draft sections (including `null` deletions) at the targeted scope.
+    let effectiveConfig: TeamConfigDocument = doc
+    if (input.pipelineId === undefined && hasDrafts) {
+      const nextMap = this.applyDraftSections(doc.prompts?.turns?.[input.turnId]?.sections, input.draftSections)
+      const nextTurns = { ...(doc.prompts?.turns ?? {}) }
+      if (nextMap === undefined) delete nextTurns[input.turnId]
+      else nextTurns[input.turnId] = nextMap
+      const { prompts: _omitted, ...restDoc } = doc
+      effectiveConfig = Object.keys(nextTurns).length === 0
+        ? restDoc
+        : { ...restDoc, prompts: { turns: nextTurns } }
+    }
+    let effectivePipeline = pipeline
+    if (pipeline !== undefined && input.pipelineId !== undefined && input.stageIndex === undefined && hasDrafts) {
+      const nextPrompt = this.applyDraftSections(pipeline.prompt?.sections, input.draftSections)
+      const { prompt: _omitted, ...rest } = pipeline
+      effectivePipeline = nextPrompt === undefined ? rest : { ...rest, prompt: nextPrompt }
+    }
+    let effectiveStage = stage
+    if (stage !== undefined && input.stageIndex !== undefined && hasDrafts) {
+      const nextPrompt = this.applyDraftSections(stage.prompt?.sections, input.draftSections)
+      const { prompt: _omitted, ...rest } = stage
+      effectiveStage = nextPrompt === undefined ? rest : { ...rest, prompt: nextPrompt }
+    }
+
+    const stageMode = stage?.mode ?? 'execute'
+    const scratchDir = workspace === undefined ? undefined : `${workspace.path}/.dsh-scratch/${ticket.id}`
+    const landingLines = landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)
+
+    const ctx = buildPromptContext({
+      ticket,
+      ...(pipeline === undefined ? {} : { pipeline }),
+      ...(stage === undefined ? {} : { stage }),
+      ...(member === undefined ? {} : { member }),
+      ...(stageIndex === undefined ? {} : { stageIndex }),
+      ...(pipeline === undefined ? {} : { stageCount: pipeline.stages.length }),
+      ...(resolvedProjectId === undefined ? {} : { projectId: resolvedProjectId }),
+      ...(workspace?.title === undefined ? {} : { projectName: workspace.title }),
+      ...(workspace === undefined ? {} : { projectRoot: workspace.path }),
+      ...(projectFacts === undefined ? {} : { projectFacts }),
+      ...(landingFacts === undefined ? {} : { landingFacts }),
+      skills,
+      landingLines,
+      cwd,
+      ...(scratchDir === undefined ? {} : { scratchDir }),
+      stageMode,
+      evalId: 'eval-sample-1',
+      dispatchId: 'dispatch-sample-1',
+      batchCount: 1,
+      portfolioLines: ['Portfolio tickets: none'],
+      ruleLines: doc.routes.map(r => `- rule ${r.id}: ${r.condition}`),
+      triggerLines: ['- [SAMPLE-1] https://example.invalid/1'],
+      dataBlocks: {
+        items: ['Items:', '1. thread thread-sample-1 (eval eval-sample-1)'],
+        triggers: ['Triggers:', '- [SAMPLE-1] https://example.invalid/1'],
+        decisions: ['Decision records (binding):', '- none recorded'],
+        portfolio: ['Portfolio tickets: none'],
+        rules: doc.routes.length > 0
+          ? ['Configured route rules:', ...doc.routes.map(r => `- rule ${r.id}: ${r.condition}`)]
+          : ['Configured route rules: none'],
+        context: [`Mandate scope: ${ticket.mandate?.scope ?? 'sample'}`],
+        reports: ['The executor\'s summary report:\nSample ready report.'],
+        trigger: ['Trigger: [SAMPLE-1] merge request (merged) — https://example.invalid/1'],
+      },
+    })
+
+    const resolved = resolveSections(input.turnId as TurnId, {
+      config: effectiveConfig,
+      ...(effectivePipeline === undefined ? {} : { pipeline: effectivePipeline }),
+      ...(effectiveStage === undefined ? {} : { stage: effectiveStage }),
+      variants: ctx.variants,
+    })
+
+    const rendered = renderTurn(input.turnId as TurnId, ctx, resolved)
+    return {
+      turnId: rendered.turnId,
+      text: rendered.text,
+      truncated: rendered.truncated,
+      sections: resolved.map((sec) => {
+        const renderedSec = rendered.sections.find(r => r.id === sec.id)
+        return {
+          id: sec.id,
+          label: sec.label,
+          text: renderedSec?.text ?? sec.text,
+          defaultText: sec.defaultText,
+          source: sec.source,
+          locked: sec.locked,
+        }
+      }),
+      missingVars: rendered.missingVars,
+      unknownVars: rendered.unknownVars,
+      ...(workspace === undefined
+        ? {}
+        : {
+            resolvedProject: {
+              id: workspace.id,
+              name: workspace.title ?? workspace.id,
+              root: workspace.path,
+            },
+          }),
+    }
+  }
+
+  private buildRegistryView(): PromptRegistryView {
+    const doc = this.doc
+    const membersById = new Map(doc.crew.map(m => [m.id, m]))
+    return {
+      turns: TURN_IDS.map((turnId) => {
+        const def = TURN_REGISTRY[turnId]
+        return {
+          id: def.id,
+          label: def.label,
+          description: def.description,
+          scopeConfigurable: def.scopeConfigurable,
+          sections: def.sections.map(s => ({
+            id: s.id,
+            label: s.label,
+            description: s.description,
+            defaultText: s.defaultText,
+            locked: s.locked,
+            ...(s.variants === undefined ? {} : { variants: s.variants }),
+          })),
+          dataBlocks: def.dataBlocks,
+        }
+      }),
+      variables: PROMPT_VARIABLES,
+      ...(doc.prompts === undefined ? {} : { globalPrompts: doc.prompts }),
+      pipelines: doc.pipelines.map(p => ({
+        id: p.id,
+        name: p.name,
+        ...(p.prompt === undefined ? {} : { prompt: p.prompt }),
+        stages: p.stages.map((st, index) => {
+          const member = membersById.get(st.memberId)
+          return {
+            index,
+            memberId: st.memberId,
+            memberName: member?.name ?? st.memberId,
+            ...(member?.agentKind === undefined ? {} : { memberAgentKind: member.agentKind }),
+            ...(st.mode === undefined ? {} : { mode: st.mode }),
+            ...(st.prompt === undefined ? {} : { prompt: st.prompt }),
+          }
+        }),
+      })),
+      yaml: serializeTeamConfigYaml(doc),
+      status: this.status(),
+    }
   }
 
   /**

@@ -41,7 +41,7 @@ import {
   type FileDiffView, type TicketChangeDiffInput, type TicketDetailInput, type TicketDetailView,
   type WorktreeInspectionView,
 } from './dispatch/wire-types.ts'
-import { evalListInputSchema, acceptCandidateInputSchema, type AcceptCandidateInput, type CandidateView, type EvalListInput, type EvalRecordView, type StewardStatusView } from './evals/wire-types.ts'
+import { evalListInputSchema, acceptCandidateInputSchema, stewardPromptInputSchema, type AcceptCandidateInput, type CandidateView, type EvalListInput, type EvalRecordView, type StewardPromptInput, type StewardPromptView, type StewardStatusView } from './evals/wire-types.ts'
 import { uiSettingsUpdateInputSchema, type UiSettingsUpdateInput, type UiSettingsView } from './settings/wire-types.ts'
 import {
   imSettingsUpdateInputSchema,
@@ -57,6 +57,18 @@ import {
   type CrewInput, type CrewMemberIdInput, type CrewMemberView, type CrewUpdateInput, type ModelProviderOptions,
 } from './crew/wire-types.ts'
 import type { TeamConfigStatusView } from './team-config/team-config-core.ts'
+import {
+  presetApplyInputSchema,
+  promptPreviewInputSchema,
+  promptSaveInputSchema,
+  teamConfigImportYamlInputSchema,
+  type PresetApplyInput,
+  type PromptPreviewInput,
+  type PromptPreviewView,
+  type PromptRegistryView,
+  type PromptSaveInput,
+  type TeamConfigImportYamlInput,
+} from './team-config/wire-types.ts'
 import { pipelineIdSchema, pipelineInputSchema, pipelineUpdateInputSchema, type PipelineIdInput, type PipelineInput, type PipelineUpdateInput, type PipelineView } from './pipeline/wire-types.ts'
 import { routeIdSchema, routeInputSchema, routeUpdateInputSchema, type RouteIdInput, type RouteInput, type RouteRuleView, type RouteUpdateInput } from './route/wire-types.ts'
 import { policyDiffInputSchema, policyUpdateInputSchema, type PolicyDiff, type PolicyDiffInput, type PolicyRecord, type PolicyUpdateInput } from './policy/wire-types.ts'
@@ -118,6 +130,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     answerAttention: (input: AttentionAnswerInput) => Promise<RemoteResult<AttentionView>>
     notificationList: () => Promise<RemoteResult<{ readonly notifications: readonly NotificationView[] }>>
     stewardStatus: () => Promise<RemoteResult<StewardStatusView>>
+    stewardPrompt: (input: StewardPromptInput) => Promise<RemoteResult<{ readonly prompt?: StewardPromptView }>>
     uiSettings: () => Promise<RemoteResult<{ readonly settings: UiSettingsView }>>
     uiSettingsUpdate: (input: UiSettingsUpdateInput) => Promise<RemoteResult<{ readonly settings: UiSettingsView }>>
     imSettings: () => Promise<RemoteResult<ImSettingsSnapshotView>>
@@ -126,6 +139,11 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     crewList: () => Promise<RemoteResult<{ readonly members: readonly CrewMemberView[] }>>
     teamConfigStatus: () => Promise<RemoteResult<TeamConfigStatusView>>
     teamConfigReload: () => Promise<RemoteResult<TeamConfigStatusView>>
+    promptRegistry: () => Promise<RemoteResult<PromptRegistryView>>
+    promptSave: (input: PromptSaveInput) => Promise<RemoteResult<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }>>
+    teamConfigImportYaml: (input: TeamConfigImportYamlInput) => Promise<RemoteResult<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }>>
+    promptRenderPreview: (input: PromptPreviewInput) => Promise<RemoteResult<PromptPreviewView>>
+    presetApply: (input: PresetApplyInput) => Promise<RemoteResult<{ readonly pipeline: PipelineView; readonly createdMembers: readonly CrewMemberView[]; readonly status: TeamConfigStatusView }>>
     modelOptions: () => Promise<RemoteResult<{ readonly providers: readonly ModelProviderOptions[] }>>
     agentKindOptions: (input?: AgentKindOptionsInput) => Promise<RemoteResult<{ readonly kinds: readonly AgentKindOption[] }>>
     crewAdd: (input: CrewInput) => Promise<RemoteResult<{ readonly member: CrewMemberView }>>
@@ -987,6 +1005,30 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           decode: value => value as StewardStatusView,
         },
       },
+      'dshManager/stewardPrompt': {
+        service: 'dshManagerSteward',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'StewardPromptInput',
+            create: () => stewardPromptInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'StewardPromptInput',
+            create: () => stewardPromptInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'StewardPromptResult',
+          create: () => z.any(),
+          decode: value => value as { readonly prompt?: StewardPromptView },
+        },
+      },
       'dshManager/uiSettings': {
         service: 'dshManagerSettings',
         invocation: { kind: 'direct' },
@@ -1492,6 +1534,117 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           typeSymbol: 'TeamConfigReload',
           create: () => z.any(),
           decode: value => value as TeamConfigStatusView,
+        },
+      },
+      'dshManager/promptRegistry': {
+        service: 'dshManagerTeamConfig',
+        invocation: { kind: 'direct' },
+        parameters: [],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'PromptRegistryView',
+          create: () => z.any(),
+          decode: value => value as PromptRegistryView,
+        },
+      },
+      'dshManager/promptSave': {
+        service: 'dshManagerTeamConfig',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'PromptSaveInput',
+            create: () => promptSaveInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'PromptSaveInput',
+            create: () => promptSaveInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'PromptSaveResult',
+          create: () => z.any(),
+          decode: value => value as { readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView },
+        },
+      },
+      'dshManager/teamConfigImportYaml': {
+        service: 'dshManagerTeamConfig',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'TeamConfigImportYamlInput',
+            create: () => teamConfigImportYamlInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'TeamConfigImportYamlInput',
+            create: () => teamConfigImportYamlInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'TeamConfigImportYamlResult',
+          create: () => z.any(),
+          decode: value => value as { readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView },
+        },
+      },
+      'dshManager/promptRenderPreview': {
+        service: 'dshManagerTeamConfig',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'PromptPreviewInput',
+            create: () => promptPreviewInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'PromptPreviewInput',
+            create: () => promptPreviewInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'PromptPreviewView',
+          create: () => z.any(),
+          decode: value => value as PromptPreviewView,
+        },
+      },
+      'dshManager/presetApply': {
+        service: 'dshManagerTeamConfig',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'PresetApplyInput',
+            create: () => presetApplyInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'PresetApplyInput',
+            create: () => presetApplyInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'PresetApplyResult',
+          create: () => z.any(),
+          decode: value => value as {
+            readonly pipeline: PipelineView
+            readonly createdMembers: readonly CrewMemberView[]
+            readonly status: TeamConfigStatusView
+          },
         },
       },
     },

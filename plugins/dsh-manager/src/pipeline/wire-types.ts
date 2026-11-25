@@ -3,7 +3,7 @@
  * host service and the client contribution.
  */
 import { z as zod } from 'zod'
-import { pipelineStage, STAGE_MODES } from './pipeline-core.ts'
+import { promptScopeOverrideSchema, STAGE_MODES } from './pipeline-core.ts'
 import type { PipelineRecord } from './pipeline-core.ts'
 
 export type PipelineView = PipelineRecord
@@ -15,6 +15,7 @@ export const pipelineStageInputSchema = zod.object({
   skippable: zod.boolean().optional(),
   skipLogic: zod.string().trim().max(2000).optional(),
   mode: zod.enum(STAGE_MODES).optional(),
+  prompt: promptScopeOverrideSchema.optional(),
 })
 
 export type PipelineStageInput = zod.infer<typeof pipelineStageInputSchema>
@@ -22,6 +23,7 @@ export type PipelineStageInput = zod.infer<typeof pipelineStageInputSchema>
 export const pipelineInputSchema = zod.object({
   name: zod.string().trim().min(1).max(40),
   stages: zod.array(pipelineStageInputSchema).min(1),
+  prompt: promptScopeOverrideSchema.optional(),
 })
 
 export type PipelineInput = zod.infer<typeof pipelineInputSchema>

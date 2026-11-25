@@ -2,9 +2,10 @@
 import { useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import { Button, SegmentedControl, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, SegmentedControl, StateDot, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import { EvalRecordsPage } from './EvalRecordsPage.tsx'
 import type { EvalsInjected } from './evals-source.ts'
+import type { StewardPromptView } from '../evals/wire-types.ts'
 import type { StewardInjected, StewardSnapshot } from './steward-source.ts'
 import css from './MonitorPage.module.css'
 
@@ -16,7 +17,7 @@ export type MonitorPageProps = PropsRuntime<'main'>
 
 /** Render the Steward status strip and switch between Eval records and Steward activity. */
 export function MonitorPage(props: MonitorPageProps) {
-  const { useSteward, onStewardRetry, t } = props
+  const { useSteward, onStewardRetry, onStewardPrompt, t } = props
   const stewardSnapshot = useSteward(snapshot => snapshot)
   const [subView, setSubView] = useState<MonitorSubView>('evals')
 
@@ -43,7 +44,7 @@ export function MonitorPage(props: MonitorPageProps) {
       >
         {subView === 'evals'
           ? <EvalRecordsPage {...props} variant="embedded" />
-          : <StewardActivityFeed snapshot={stewardSnapshot} t={t} />}
+          : <StewardActivityFeed snapshot={stewardSnapshot} onStewardPrompt={onStewardPrompt} t={t} />}
       </div>
     </div>
   )
@@ -86,10 +87,16 @@ function StewardStatusStrip({ snapshot, onRetry, t }: {
 }
 
 /** Chronological Steward activity timeline (newest first). */
-function StewardActivityFeed({ snapshot, t }: {
+function StewardActivityFeed({ snapshot, onStewardPrompt, t }: {
   snapshot: StewardSnapshot
+  onStewardPrompt?: ((promptId: string) => Promise<StewardPromptView | undefined>) | undefined
   t: TranslateNS<'dshManager'>
 }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [promptsById, setPromptsById] = useState<Record<string, StewardPromptView | null>>({})
+  const [loadingIds, setLoadingIds] = useState<Record<string, boolean>>({})
+  const [errorIds, setErrorIds] = useState<Record<string, boolean>>({})
+
   if (snapshot.status === 'error') {
     return null
   }
@@ -97,6 +104,27 @@ function StewardActivityFeed({ snapshot, t }: {
     return <p className={css.empty}>{t('steward.loading')}</p>
   }
   const { activity } = snapshot.steward
+
+  const togglePrompt = (promptId: string): void => {
+    const nextOpen = !expanded[promptId]
+    setExpanded(prev => ({ ...prev, [promptId]: nextOpen }))
+    if (!nextOpen || promptsById[promptId] !== undefined || onStewardPrompt === undefined || loadingIds[promptId] === true) {
+      return
+    }
+    setErrorIds(prev => ({ ...prev, [promptId]: false }))
+    setLoadingIds(prev => ({ ...prev, [promptId]: true }))
+    void onStewardPrompt(promptId)
+      .then((prompt) => {
+        setPromptsById(prev => ({ ...prev, [promptId]: prompt ?? null }))
+      })
+      .catch(() => {
+        setErrorIds(prev => ({ ...prev, [promptId]: true }))
+      })
+      .finally(() => {
+        setLoadingIds(prev => ({ ...prev, [promptId]: false }))
+      })
+  }
+
   return (
     <section className={css.feedSection} aria-label={t('steward.feed.title')}>
       <h2 className={css.feedTitle}>{t('steward.feed.title')}</h2>
@@ -104,15 +132,58 @@ function StewardActivityFeed({ snapshot, t }: {
         ? <p className={css.empty}>{t('steward.feed.empty')}</p>
         : (
           <ul className={css.feed}>
-            {activity.map((entry, index) => (
-              <li key={`${entry.at}-${index}`} className={css.entry}>
-                <span className={css.entryTime}>{new Date(entry.at).toLocaleString()}</span>
-                <span className={css.entryKind}>
-                  <span className={css.badge} data-kind={entry.kind}>{t(`steward.kind.${entry.kind}`)}</span>
-                </span>
-                <span className={css.entryText}>{entry.text}</span>
-              </li>
-            ))}
+            {activity.map((entry, index) => {
+              const promptId = entry.promptId
+              const isOpen = promptId !== undefined && expanded[promptId] === true
+              const loaded = promptId === undefined ? undefined : promptsById[promptId]
+              const isLoading = promptId !== undefined && loadingIds[promptId] === true
+              return (
+                <li key={`${entry.at}-${index}`} className={css.entry}>
+                  <div className={css.entryRow}>
+                    <span className={css.entryTime}>{new Date(entry.at).toLocaleString()}</span>
+                    <span className={css.entryKind}>
+                      <span className={css.badge} data-kind={entry.kind}>{t(`steward.kind.${entry.kind}`)}</span>
+                    </span>
+                    <span className={css.entryText}>{entry.text}</span>
+                    {promptId !== undefined && onStewardPrompt !== undefined
+                      ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { togglePrompt(promptId) }}
+                        >
+                          {isOpen ? t('steward.feed.prompt.hide') : t('steward.feed.prompt.view')}
+                        </Button>
+                      )
+                      : null}
+                  </div>
+                  {isOpen && promptId !== undefined
+                    ? (
+                      <div className={css.entryPromptBox}>
+                        {isLoading
+                          ? <span className={css.empty}>{t('steward.feed.prompt.loading')}</span>
+                          : errorIds[promptId] === true
+                            ? <span className={css.empty}>{t('steward.error')}</span>
+                            : loaded === null || loaded === undefined
+                              ? <span className={css.empty}>{t('steward.feed.prompt.expired')}</span>
+                            : (
+                              <>
+                                <div className={css.entryPromptMeta}>
+                                  <span>{loaded.turnId}</span>
+                                  <span>{t('board.detail.dispatch.prompt.revision', { rev: loaded.templateRevision })}</span>
+                                  {loaded.truncated
+                                    ? <Tag tone="warning">{t('board.detail.dispatch.prompt.truncated')}</Tag>
+                                    : null}
+                                </div>
+                                <pre className={css.entryPromptPre}>{loaded.text}</pre>
+                              </>
+                            )}
+                      </div>
+                    )
+                    : null}
+                </li>
+              )
+            })}
           </ul>
         )}
     </section>

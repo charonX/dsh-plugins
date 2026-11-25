@@ -6,15 +6,17 @@
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { z } from 'zod'
 import { AGENT_KINDS, crewMember, type CrewMember } from '../crew/crew-core.ts'
-import { pipelineRecord, STAGE_MODES, type PipelineRecord, type PipelineStage } from '../pipeline/pipeline-core.ts'
+import { pipelineRecord, promptScopeOverrideSchema, STAGE_MODES, type PipelineRecord, type PipelineStage, type PromptScopeOverride } from '../pipeline/pipeline-core.ts'
 import { routeRule, type RouteRule } from '../route/route-core.ts'
+import { validateGlobalPrompts, validateScopePrompt, type GlobalPromptsConfig } from '../prompt/prompt-resolve.ts'
 
 /** Canonical in-memory and on-disk shape of `team-config.yaml`. */
 export interface TeamConfigDocument {
-  readonly version: 1
+  readonly version: 1 | 2
   readonly crew: readonly CrewMember[]
   readonly pipelines: readonly PipelineRecord[]
   readonly routes: readonly RouteRule[]
+  readonly prompts?: GlobalPromptsConfig
 }
 
 /** Health and revision snapshot of the team-config hot-reload store. */
@@ -38,18 +40,28 @@ const yamlCrewSchema = z.object({
   updatedAt: z.number().optional(),
 })
 
+const yamlPromptScopeSchema = z.object({
+  sections: z.record(z.string().trim().min(1), z.string()).optional(),
+})
+
+const yamlGlobalPromptsSchema = z.object({
+  turns: z.record(z.string().trim().min(1), yamlPromptScopeSchema).optional(),
+})
+
 const yamlStageSchema = z.object({
   memberId: z.string().trim().min(1),
   instruction: z.string().trim().max(4000).optional(),
   skippable: z.boolean().optional(),
   skipLogic: z.string().trim().max(2000).optional(),
   mode: z.enum(STAGE_MODES).optional(),
+  prompt: yamlPromptScopeSchema.optional(),
 })
 
 const yamlPipelineSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().trim().min(1).max(40),
   stages: z.array(yamlStageSchema).optional(),
+  prompt: yamlPromptScopeSchema.optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
 })
@@ -65,11 +77,40 @@ const yamlRouteSchema = z.object({
 })
 
 const yamlRootSchema = z.object({
-  version: z.literal(1).optional(),
+  version: z.union([z.literal(1), z.literal(2)]).optional(),
   crew: z.array(yamlCrewSchema).optional(),
   pipelines: z.array(yamlPipelineSchema).optional(),
   routes: z.array(yamlRouteSchema).optional(),
+  prompts: yamlGlobalPromptsSchema.optional(),
 })
+
+function cleanScopePrompt(raw: { readonly sections?: Readonly<Record<string, string>> | undefined } | undefined): PromptScopeOverride | undefined {
+  if (raw?.sections === undefined) return undefined
+  const entries = Object.entries(raw.sections)
+  if (entries.length === 0) return undefined
+  return promptScopeOverrideSchema.parse({ sections: Object.fromEntries(entries) })
+}
+
+function cleanGlobalPrompts(raw: GlobalPromptsConfig | undefined): GlobalPromptsConfig | undefined {
+  if (raw?.turns === undefined) return undefined
+  const turns: Record<string, { readonly sections: Readonly<Record<string, string>> }> = {}
+  for (const [turnId, scope] of Object.entries(raw.turns)) {
+    const cleaned = cleanScopePrompt(scope)
+    if (cleaned?.sections !== undefined) {
+      turns[turnId] = { sections: cleaned.sections }
+    }
+  }
+  return Object.keys(turns).length === 0 ? undefined : { turns }
+}
+
+/** Return true when any global, pipeline, or stage prompt override is configured. */
+export function hasPromptOverrides(doc: TeamConfigDocument): boolean {
+  if (cleanGlobalPrompts(doc.prompts) !== undefined) return true
+  return doc.pipelines.some(pipeline =>
+    cleanScopePrompt(pipeline.prompt) !== undefined
+    || pipeline.stages.some(stage => cleanScopePrompt(stage.prompt) !== undefined),
+  )
+}
 
 /** Empty valid team configuration. */
 export function emptyTeamConfig(): TeamConfigDocument {
@@ -106,13 +147,17 @@ export function validateTeamConfigDocument(doc: TeamConfigDocument): TeamConfigD
       throw new Error(`duplicate pipeline id "${pipeline.id}"`)
     }
     pipelineIds.add(pipeline.id)
+    validateScopePrompt(pipeline.prompt, `pipeline "${pipeline.id}"`)
     for (let index = 0; index < pipeline.stages.length; index += 1) {
       const stage = pipeline.stages[index]!
       if (!crewIds.has(stage.memberId)) {
         throw new Error(`pipeline "${pipeline.id}" stage ${index + 1} references unknown crew member "${stage.memberId}"`)
       }
+      validateScopePrompt(stage.prompt, `pipeline "${pipeline.id}" stage ${index + 1}`)
     }
   }
+
+  validateGlobalPrompts(doc.prompts)
 
   const routeIds = new Set<string>()
   for (const rule of doc.routes) {
@@ -171,17 +216,23 @@ export function parseTeamConfigYaml(yamlText: string, now = Date.now()): TeamCon
   const pipelines: PipelineRecord[] = (data.pipelines ?? []).map((item, idx) => {
     const createdAt = item.createdAt ?? now + idx
     const updatedAt = item.updatedAt ?? createdAt
-    const stages: PipelineStage[] = (item.stages ?? []).map(stage => ({
-      memberId: stage.memberId,
-      instruction: stage.instruction ?? '',
-      skippable: stage.skippable ?? false,
-      ...(stage.skipLogic === undefined ? {} : { skipLogic: stage.skipLogic }),
-      ...(stage.mode === undefined ? {} : { mode: stage.mode }),
-    }))
+    const stages: PipelineStage[] = (item.stages ?? []).map(stage => {
+      const stagePrompt = cleanScopePrompt(stage.prompt)
+      return {
+        memberId: stage.memberId,
+        instruction: stage.instruction ?? '',
+        skippable: stage.skippable ?? false,
+        ...(stage.skipLogic === undefined ? {} : { skipLogic: stage.skipLogic }),
+        ...(stage.mode === undefined ? {} : { mode: stage.mode }),
+        ...(stagePrompt === undefined ? {} : { prompt: stagePrompt }),
+      }
+    })
+    const pipelinePrompt = cleanScopePrompt(item.prompt)
     return pipelineRecord.parse({
       id: item.id,
       name: item.name,
       stages,
+      ...(pipelinePrompt === undefined ? {} : { prompt: pipelinePrompt }),
       createdAt,
       updatedAt,
     })
@@ -201,11 +252,13 @@ export function parseTeamConfigYaml(yamlText: string, now = Date.now()): TeamCon
     })
   })
 
+  const prompts = cleanGlobalPrompts(data.prompts)
   return validateTeamConfigDocument({
-    version: 1,
+    version: data.version ?? 1,
     crew,
     pipelines,
     routes,
+    ...(prompts === undefined ? {} : { prompts }),
   })
 }
 
@@ -214,8 +267,10 @@ export function parseTeamConfigYaml(yamlText: string, now = Date.now()): TeamCon
  * agent-editable YAML with a header comment.
  */
 export function serializeTeamConfigYaml(doc: TeamConfigDocument): string {
+  const prompts = cleanGlobalPrompts(doc.prompts)
+  const outVersion: 1 | 2 = hasPromptOverrides(doc) ? 2 : doc.version
   const plain = {
-    version: 1,
+    version: outVersion,
     crew: doc.crew.map(member => ({
       id: member.id,
       name: member.name,
@@ -227,19 +282,27 @@ export function serializeTeamConfigYaml(doc: TeamConfigDocument): string {
       createdAt: member.createdAt,
       updatedAt: member.updatedAt,
     })),
-    pipelines: doc.pipelines.map(pipeline => ({
-      id: pipeline.id,
-      name: pipeline.name,
-      stages: pipeline.stages.map(stage => ({
-        memberId: stage.memberId,
-        instruction: stage.instruction,
-        skippable: stage.skippable,
-        ...(stage.skipLogic === undefined ? {} : { skipLogic: stage.skipLogic }),
-        ...(stage.mode === undefined ? {} : { mode: stage.mode }),
-      })),
-      createdAt: pipeline.createdAt,
-      updatedAt: pipeline.updatedAt,
-    })),
+    pipelines: doc.pipelines.map(pipeline => {
+      const pipelinePrompt = cleanScopePrompt(pipeline.prompt)
+      return {
+        id: pipeline.id,
+        name: pipeline.name,
+        ...(pipelinePrompt === undefined ? {} : { prompt: pipelinePrompt }),
+        stages: pipeline.stages.map(stage => {
+          const stagePrompt = cleanScopePrompt(stage.prompt)
+          return {
+            memberId: stage.memberId,
+            instruction: stage.instruction,
+            skippable: stage.skippable,
+            ...(stage.skipLogic === undefined ? {} : { skipLogic: stage.skipLogic }),
+            ...(stage.mode === undefined ? {} : { mode: stage.mode }),
+            ...(stagePrompt === undefined ? {} : { prompt: stagePrompt }),
+          }
+        }),
+        createdAt: pipeline.createdAt,
+        updatedAt: pipeline.updatedAt,
+      }
+    }),
     routes: doc.routes.map(rule => ({
       id: rule.id,
       condition: rule.condition,
@@ -249,10 +312,11 @@ export function serializeTeamConfigYaml(doc: TeamConfigDocument): string {
       createdAt: rule.createdAt,
       updatedAt: rule.updatedAt,
     })),
+    ...(prompts === undefined ? {} : { prompts }),
   }
   const header = [
     '# Dsh Manager 团队与流程配置（支持热更新：修改并保存后自动校验生效）',
-    '# 文档字段：crew（队员）、pipelines（流水线）、routes（路由规则）',
+    '# 文档字段：crew（队员）、pipelines（流水线）、routes（路由规则）、prompts（提示词覆盖）',
     '',
   ].join('\n')
   const body = stringifyYaml(plain, { lineWidth: 100 })

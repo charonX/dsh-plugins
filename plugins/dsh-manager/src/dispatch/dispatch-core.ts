@@ -54,6 +54,28 @@ export const reportRecord = z.object({
 
 export type ReportRecord = z.infer<typeof reportRecord>
 
+/** Provenance of one rendered prompt section stored on a dispatch record. */
+export const dispatchPromptSectionRecord = z.object({
+  id: z.string(),
+  text: z.string(),
+  source: z.enum(['builtin', 'global', 'pipeline', 'stage']),
+  locked: z.boolean(),
+})
+
+export type DispatchPromptSectionRecord = z.infer<typeof dispatchPromptSectionRecord>
+
+/** Full rendered prompt snapshot persisted on a dispatch record. */
+export const dispatchPromptRecord = z.object({
+  turnId: z.string(),
+  text: z.string(),
+  truncated: z.boolean(),
+  sections: z.array(dispatchPromptSectionRecord),
+  templateRevision: z.number(),
+  renderedAt: z.number(),
+})
+
+export type DispatchPromptRecord = z.infer<typeof dispatchPromptRecord>
+
 /** One dispatch of a ticket to an Executor Session. */
 export const dispatchRecord = z.object({
   id: z.string(),
@@ -68,6 +90,8 @@ export const dispatchRecord = z.object({
   agentKind: z.enum(AGENT_KINDS).optional(),
   /** Sticky external CLI session id captured from stream-json for rework `--resume`. */
   externalSessionId: z.string().optional(),
+  /** Rendered prompt snapshot actually dispatched to the executor. */
+  prompt: dispatchPromptRecord.optional(),
   /** Every report the executor submitted, in order. */
   reports: z.array(reportRecord).default([]),
   createdAt: z.number(),
@@ -226,4 +250,18 @@ export function latestExternalSession(
   return store.listDispatches()
     .filter(record => record.ticketId === ticketId && record.agentKind === agentKind && record.externalSessionId !== undefined && record.externalSessionId !== '')
     .sort((left, right) => right.createdAt - left.createdAt)[0]?.externalSessionId
+}
+
+/** Persist the exact rendered prompt snapshot on a dispatch record before execution begins. */
+export async function recordDispatchPrompt(
+  store: DispatchStorePort,
+  id: string,
+  prompt: DispatchPromptRecord,
+  now: number,
+): Promise<DispatchRecord | undefined> {
+  const record = store.getDispatch(id)
+  if (record === undefined) return undefined
+  const updated: DispatchRecord = { ...record, prompt, updatedAt: Math.max(record.updatedAt, now) }
+  await store.putDispatch(updated)
+  return updated
 }

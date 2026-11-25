@@ -90,11 +90,47 @@
 
 .entry {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
   gap: 8px;
   padding: 8px 4px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l4);
   font-size: 13px;
+}
+
+.entryRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.entryPromptBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.entryPromptMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.entryPromptPre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--dsw-font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .entry:last-child {
