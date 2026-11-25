@@ -260,4 +260,41 @@ describe('adaptive landing discovery & git landing ops', () => {
     expect(mrRes.created).toBe(true)
     expect(mrRes.url).toBe('https://gitlab.example.com/org/repo/-/merge_requests/12')
   })
+
+  test('ensureTicketWorktree cuts feat-* from main and localMergeBranch merges into test without touching main', async () => {
+    const { subprocess, repoDir } = await createSeededRepo('dsh-land-feat-test-')
+    const mainBranch = await git(subprocess, repoDir, 'symbolic-ref', '--short', 'HEAD')
+    await git(subprocess, repoDir, 'branch', 'test', mainBranch)
+
+    const featBranch = 'feat-dsh-manager-worktree-flow'
+    const wt = await ensureTicketWorktree(subprocess, repoDir, 'ticket-feat-1', {
+      branch: featBranch,
+      baseBranch: mainBranch,
+    })
+    const checkedBranch = await git(subprocess, wt, 'symbolic-ref', '--short', 'HEAD')
+    expect(checkedBranch).toBe(featBranch)
+
+    await writeFile(join(wt, 'feature.txt'), 'feat ok\n', 'utf8')
+    await git(subprocess, wt, 'add', 'feature.txt')
+    await git(subprocess, wt, 'commit', '-m', 'feat(dsh-manager): add feat branch workflow')
+
+    const merged = await localMergeBranch(subprocess, {
+      repoRoot: repoDir,
+      sourceBranch: featBranch,
+      targetBranch: 'test',
+      worktreeCwd: wt,
+      removeWorktreeOnSuccess: true,
+      ticketId: 'ticket-feat-1',
+      worktreeBranch: featBranch,
+      worktreePath: wt,
+    })
+    expect(merged.merged).toBe(true)
+    expect(merged.targetBranch).toBe('test')
+    expect(merged.worktreeRemoved).toBe(true)
+
+    const testFiles = await git(subprocess, repoDir, 'ls-tree', '--name-only', 'test')
+    expect(testFiles).toContain('feature.txt')
+    const mainFiles = await git(subprocess, repoDir, 'ls-tree', '--name-only', mainBranch)
+    expect(mainFiles).not.toContain('feature.txt')
+  })
 })

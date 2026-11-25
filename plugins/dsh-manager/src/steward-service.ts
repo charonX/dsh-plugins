@@ -5,15 +5,18 @@
  * not clutter the Web workspace session tree). Every decision is recorded
  * durably in storage-domain.
  */
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import { resolveAgentModelOptions } from './agent-model-options.ts'
-import type { EvalRecord, TicketRecord } from './board-domain.ts'
+import type { EvalRecord, TicketRecord, TicketWorktreePlan } from './board-domain.ts'
 import { POLICY_VERSION, abandonEval, finishEval, pendingBacklog, requeueEval, startEval, type AcceptMode, type EvalDecision, type TicketOrigin } from './evals/eval-core.ts'
 import {
   acceptCandidateInputSchema,
@@ -90,6 +93,50 @@ const FLOW_ADVANCE_EFFECT_KIND = 'flow-advance'
 
 /** The eval turn budget. */
 const DEFAULT_EVAL_TIMEOUT_MS = 120_000
+
+interface StewardRoutePick {
+  readonly ruleId?: string
+  readonly none?: boolean
+  readonly rationale?: string
+  readonly dependsOn?: readonly string[]
+  readonly worktree?: TicketWorktreePlan
+}
+
+function normalizeWorktreePlan(raw: unknown): TicketWorktreePlan | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const obj = raw as Record<string, unknown>
+  const mode = obj.mode === 'none' || obj.mode === 'in-place' || obj.mode === 'worktree' ? obj.mode : undefined
+  const clean = (v: unknown): string | undefined => typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+  const repoRoot = clean(obj.repoRoot)
+  const baseBranch = clean(obj.baseBranch)
+  const branch = clean(obj.branch)
+  const mergeTarget = clean(obj.mergeTarget)
+  const path = clean(obj.path)
+  if (mode === undefined && repoRoot === undefined && branch === undefined && mergeTarget === undefined && baseBranch === undefined && path === undefined) {
+    return undefined
+  }
+  return {
+    mode: mode ?? 'worktree',
+    ...(repoRoot === undefined ? {} : { repoRoot }),
+    ...(baseBranch === undefined ? {} : { baseBranch }),
+    ...(branch === undefined ? {} : { branch }),
+    ...(mergeTarget === undefined ? {} : { mergeTarget }),
+    ...(path === undefined ? {} : { path }),
+  }
+}
+
+const WORKTREE_PLAN_PARAM = {
+  type: 'object' as const,
+  additionalProperties: false,
+  description: 'Optional AI-analyzed worktree & target repo plan written onto the ticket.',
+  properties: {
+    mode: { type: 'string' as const, enum: ['worktree', 'in-place', 'none'], description: 'worktree for isolated code edits (default), none for read-only analysis, in-place for non-git paths.' },
+    repoRoot: { type: 'string' as const, description: 'Exact git repository root path to modify (e.g. a sub-repo under repos/<name> rather than an aggregate root).' },
+    baseBranch: { type: 'string' as const, description: 'Base branch to cut the new worktree from (default main).' },
+    branch: { type: 'string' as const, description: 'Semantic feature branch starting with feat- (kebab-case, e.g. feat-dsh-manager-xxx).' },
+    mergeTarget: { type: 'string' as const, description: 'Local integration target branch declared by that repo rules (e.g. test for dsh-plugins, or omit if PR-only).' },
+  },
+}
 
 /**
  * One human-readable descriptor of a trigger's payload, so the main Session
@@ -407,7 +454,7 @@ export class DshManagerSteward extends TypertRemoteService {
     acceptMode: AcceptMode,
     decision: EvalDecision,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
-    inlineRoute?: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] },
+    inlineRoute?: StewardRoutePick,
   ): Promise<void> {
     const store = this.ctx.dshManagerBoard.evalStore()
     await this.recordEvalDecision(evalId, threadId, decision)
@@ -504,7 +551,9 @@ export class DshManagerSteward extends TypertRemoteService {
       prepared.flatMap(item => item.triggers.map(t => (t.payload as { readonly projectId?: unknown } | undefined)?.projectId))
         .filter((id): id is string => typeof id === 'string' && id !== ''),
     )
-    const portfolioLines = this.portfolioLinesFor(batchProjectIds.size === 1 ? [...batchProjectIds][0] : undefined)
+    const batchProjectId = batchProjectIds.size === 1 ? [...batchProjectIds][0] : undefined
+    const portfolioLines = this.portfolioLinesFor(batchProjectId)
+    const repoContextLines = this.workspaceRepoContextLines(batchProjectId)
     const prompt = [
       `Batch-triage ${prepared.length} pending threads (Evaluate and route each item in one pass).`,
       'Items:',
@@ -512,15 +561,17 @@ export class DshManagerSteward extends TypertRemoteService {
       'Decision records (binding):',
       ...(recordLines.length > 0 ? recordLines : ['- none recorded']),
       ...portfolioLines,
+      ...repoContextLines,
       'Dedup / Subsumption rule: If an incoming thread/bug is already resolved or being fixed by an active or recently ended portfolio ticket, pass action="ignore" with supersededBy="<ticketId>" and explain why in rationale.',
       'Parallel vs Sequencing rule: When accepting and routing inline onto a pipeline, pass dependsOn=["<ticketId>"] ONLY if it touches the same module/files or must land after an active ticket; otherwise omit dependsOn so independent work runs in parallel.',
+      'Worktree plan rule (AI Native): When accepting and routing inline, analyze which real git repoRoot is targeted, set worktree.mode ("worktree" for edits, "none" for read-only analysis), baseBranch (default "main"), a semantic branch starting with "feat-" (e.g. feat-<plugin>-<summary>), and mergeTarget per that repo\'s AGENTS.md / git-flow (e.g. "test" when configured).',
       ...(ruleLines.length > 0 ? ['Configured route rules:', ...ruleLines] : ['Configured route rules: none']),
-      'Submit every decision through record_triage_batch (passing each evalId, action, strength, title, scope, rationale, optional supersededBy when ignoring, and when accepting with rules configured also ruleId or none: true plus optional dependsOn). You may alternatively call record_decision for individual evalIds.',
+      'Submit every decision through record_triage_batch (passing each evalId, action, strength, title, scope, rationale, optional supersededBy when ignoring, and when accepting with rules configured also ruleId or none: true plus optional dependsOn and worktree). You may alternatively call record_decision for individual evalIds.',
     ].join('\n')
 
     const recorded = new Map<string, {
       readonly decision: EvalDecision
-      readonly route?: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] }
+      readonly route?: StewardRoutePick
     }>()
     try {
       this.note('eval-start', `batch (${prepared.length} threads)`)
@@ -656,8 +707,11 @@ export class DshManagerSteward extends TypertRemoteService {
   private async applyRoutePick(
     ticketId: string,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
-    pick: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] } | undefined,
+    pick: StewardRoutePick | undefined,
   ): Promise<void> {
+    if (pick?.worktree !== undefined) {
+      await this.ctx.dshManagerBoard.updateWorktreePlan(ticketId, pick.worktree)
+    }
     if (pick === undefined || (pick.none !== true && pick.ruleId === undefined)) {
       // An inconclusive routing turn leaves the ticket on the board; the
       // next tick does not re-route (the ticket is no longer in the backlog).
@@ -770,22 +824,70 @@ export class DshManagerSteward extends TypertRemoteService {
     return formatPortfolioPromptLines(snapshot)
   }
 
+  /** Build compact workspace & sub-repo git-flow hints so Steward plans target repoRoot & branches accurately. */
+  private workspaceRepoContextLines(projectId?: string): string[] {
+    const registry = (this.ctx as unknown as {
+      get?: (name: string) => {
+        get?: (id: WorkspaceId) => { readonly id: string; readonly title?: string; readonly path?: string } | undefined
+        list?: () => readonly { readonly id: string; readonly title?: string; readonly path?: string }[]
+      } | undefined
+    }).get?.('workspaceRegistry')
+    const workspaces = projectId !== undefined
+      ? [registry?.get?.(projectId as WorkspaceId)].filter((w): w is { readonly id: string; readonly title?: string; readonly path?: string } => w !== undefined)
+      : (registry?.list?.() ?? []).slice(0, 4)
+    if (workspaces.length === 0) return []
+    const lines: string[] = ['Mapped workspace & repository context (for worktree planning):']
+    for (const ws of workspaces) {
+      if (typeof ws.path !== 'string' || ws.path === '') continue
+      lines.push(`- Workspace ${ws.title ?? ws.id} (${ws.path})`)
+      const reposDir = join(ws.path, 'repos')
+      if (!existsSync(reposDir)) continue
+      try {
+        const subdirs = readdirSync(reposDir, { withFileTypes: true }).filter(d => d.isDirectory()).slice(0, 8)
+        for (const sub of subdirs) {
+          const subPath = join(reposDir, sub.name)
+          if (!existsSync(join(subPath, '.git'))) continue
+          const flowPath = existsSync(join(subPath, 'docs', 'git-flow.md'))
+            ? join(subPath, 'docs', 'git-flow.md')
+            : existsSync(join(subPath, 'AGENTS.md')) ? join(subPath, 'AGENTS.md') : undefined
+          let hint = ''
+          if (flowPath !== undefined) {
+            try {
+              const snippet = readFileSync(flowPath, 'utf8').slice(0, 900).replace(/\s+/g, ' ')
+              const targetsTest = /\btest\b/i.test(snippet) && /main/.test(snippet)
+              if (targetsTest) hint = ' [doc hints: base=main, mergeTarget=test]'
+            } catch {
+              // Non-fatal; skip unreadable doc.
+            }
+          }
+          lines.push(`  - sub-repo: ${subPath}${hint}`)
+        }
+      } catch {
+        // Ignore unreadable repos directory.
+      }
+    }
+    return lines.length === 1 ? [] : lines
+  }
+
   /** Send one routing turn in an isolated session and wait for the recorded pick. */
   private async driveRouteTurn(
     ticket: TicketRecord,
     rules: readonly { readonly id: string; readonly condition: string; readonly pipelineId: string }[],
-  ): Promise<{ readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] } | undefined> {
-    let recordedPick: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] } | undefined
+  ): Promise<StewardRoutePick | undefined> {
+    let recordedPick: StewardRoutePick | undefined
     const lines = rules.map(rule => {
       const pipeline = this.ctx.dshManagerPipeline.require(rule.pipelineId)
       return `- rule ${rule.id} → pipeline "${pipeline.name}" (${pipeline.stages.length} stages): ${rule.condition}`
     })
     const portfolioLines = this.portfolioLinesFor(ticket.projectId, [ticket.id])
+    const repoContextLines = this.workspaceRepoContextLines(ticket.projectId)
     const prompt = [
       `Route the accepted ticket ${ticket.id}: "${ticket.title}".`,
       ticket.mandate === undefined ? undefined : `Its mandate covers ${ticket.mandate.scope}.`,
       ...portfolioLines,
+      ...repoContextLines,
       'Sequencing rule: If this ticket modifies the same module/files or clearly depends on an active ticket above, pass its ticket id(s) in dependsOn on record_route; otherwise leave dependsOn empty so independent work runs in parallel.',
+      'Worktree plan rule (AI Native): Also fill worktree on record_route — set mode ("worktree" for code/doc edits, "none" for read-only research/review), repoRoot (exact sub-repo git root if targeting e.g. repos/<name>), baseBranch (default "main"), semantic branch starting with "feat-" (e.g. feat-<plugin>-<summary>), and mergeTarget matching that repo\'s AGENTS.md / docs/git-flow.md (e.g. "test" when specified).',
       'The configured route rules are:',
       ...lines,
       'Pick the rule whose pipeline best carries this ticket through the record_route tool (pass its ruleId), or declare none fits (pass none: true) — an unmatched ticket waits for a human judgment.',
@@ -1176,7 +1278,7 @@ export class DshManagerSteward extends TypertRemoteService {
     prepared: readonly { readonly evalId: string; readonly threadId: string }[],
     recorded: Map<string, {
       readonly decision: EvalDecision
-      readonly route?: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] }
+      readonly route?: StewardRoutePick
     }>,
   ) {
     const self = this
@@ -1207,6 +1309,7 @@ export class DshManagerSteward extends TypertRemoteService {
                 items: { type: 'string' },
                 description: 'Prerequisite ticket IDs when accepting and routing inline (omit to run in parallel).',
               },
+              worktree: WORKTREE_PLAN_PARAM,
             },
           },
         },
@@ -1229,6 +1332,7 @@ export class DshManagerSteward extends TypertRemoteService {
             readonly ruleId?: unknown
             readonly none?: unknown
             readonly dependsOn?: unknown
+            readonly worktree?: unknown
           }
           if (typeof entry.evalId !== 'string') continue
           const target = byEvalId.get(entry.evalId)
@@ -1250,11 +1354,13 @@ export class DshManagerSteward extends TypertRemoteService {
           const dependsOn = Array.isArray(entry.dependsOn)
             ? entry.dependsOn.filter((id): id is string => typeof id === 'string' && id.trim() !== '').map(id => id.trim())
             : undefined
-          const route = (typeof entry.ruleId === 'string' || entry.none === true)
+          const worktree = normalizeWorktreePlan(entry.worktree)
+          const route = (typeof entry.ruleId === 'string' || entry.none === true || worktree !== undefined)
             ? {
                 ...(typeof entry.ruleId === 'string' ? { ruleId: entry.ruleId } : {}),
                 ...(entry.none === true ? { none: true } : {}),
                 ...(dependsOn !== undefined && dependsOn.length > 0 ? { dependsOn } : {}),
+                ...(worktree === undefined ? {} : { worktree }),
                 rationale,
               }
             : undefined
@@ -1271,7 +1377,7 @@ export class DshManagerSteward extends TypertRemoteService {
     prepared: readonly { readonly evalId: string; readonly threadId: string }[],
     recorded: Map<string, {
       readonly decision: EvalDecision
-      readonly route?: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] }
+      readonly route?: StewardRoutePick
     }>,
   ) {
     const self = this
@@ -1333,11 +1439,11 @@ export class DshManagerSteward extends TypertRemoteService {
 
   /** The tool a routing turn mounts: picking the pipeline a ticket walks. */
   private routeTool(
-    onRecorded: (pick: { readonly ruleId?: string; readonly none?: boolean; readonly rationale?: string; readonly dependsOn?: readonly string[] }) => void,
+    onRecorded: (pick: StewardRoutePick) => void,
   ) {
     return defineTool({
       name: 'record_route',
-      description: 'Pick the route rule whose pipeline should carry this ticket, or declare none fits.',
+      description: 'Pick the route rule whose pipeline should carry this ticket (and optionally record its worktree plan), or declare none fits.',
       parameters: {
         ruleId: { type: 'string', description: 'The matched route rule\'s id; omit when none fits.' },
         none: { type: 'boolean', description: 'True when no configured rule fits the ticket.' },
@@ -1346,6 +1452,7 @@ export class DshManagerSteward extends TypertRemoteService {
           items: { type: 'string' },
           description: 'Optional prerequisite ticket IDs that must finish before this ticket dispatches (omit to run in parallel).',
         },
+        worktree: WORKTREE_PLAN_PARAM,
         rationale: { type: 'string', required: true, description: 'Why this rule matches, or what is missing from the rules.' },
       },
       output: {
@@ -1356,10 +1463,12 @@ export class DshManagerSteward extends TypertRemoteService {
         const dependsOn = Array.isArray(args.dependsOn)
           ? args.dependsOn.filter((id): id is string => typeof id === 'string' && id.trim() !== '').map(id => id.trim())
           : undefined
+        const worktree = normalizeWorktreePlan(args.worktree)
         onRecorded({
           ...(typeof args.ruleId === 'string' ? { ruleId: args.ruleId } : {}),
           ...(args.none === true ? { none: true } : {}),
           ...(dependsOn !== undefined && dependsOn.length > 0 ? { dependsOn } : {}),
+          ...(worktree === undefined ? {} : { worktree }),
           ...(typeof args.rationale === 'string' ? { rationale: args.rationale } : {}),
         })
         return { recorded: true }

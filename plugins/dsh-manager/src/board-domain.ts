@@ -57,6 +57,22 @@ export const ticketFlow = z.object({
 
 export type TicketFlow = z.infer<typeof ticketFlow>
 
+/** Worktree execution mode decided for a ticket (by Steward or executor). */
+export const WORKTREE_MODES = ['worktree', 'in-place', 'none'] as const
+export type WorktreeMode = (typeof WORKTREE_MODES)[number]
+
+/** Structured worktree & repository-target plan stored on a ticket. */
+export const ticketWorktreePlan = z.object({
+  mode: z.enum(WORKTREE_MODES).default('worktree'),
+  repoRoot: z.string().optional(),
+  baseBranch: z.string().optional(),
+  branch: z.string().optional(),
+  mergeTarget: z.string().optional(),
+  path: z.string().optional(),
+})
+
+export type TicketWorktreePlan = z.infer<typeof ticketWorktreePlan>
+
 /** One ticket on the board; the record shape grows with later tickets. */
 export const ticketRecord = z.object({
   /** Stable ticket id. */
@@ -73,6 +89,8 @@ export const ticketRecord = z.object({
   mandate: mandateRecord.optional(),
   /** The flow annotation when the Steward routed this ticket onto a pipeline. */
   flow: ticketFlow.optional(),
+  /** Worktree & target repository plan analyzed by Steward or updated by Executor. */
+  worktree: ticketWorktreePlan.optional(),
   /** The connection the originating external object lives under. */
   sourceConnectionId: z.string().optional(),
   /** The ticket this one follows up, when the Steward minted it as the next step. */
@@ -184,6 +202,8 @@ export interface TicketView {
   readonly mandate?: { readonly strength: 'explicit' | 'inferred'; readonly scope: string; readonly policyVersion: string }
   /** The flow annotation when the ticket walks a pipeline stage. */
   readonly flow?: TicketFlow
+  /** Worktree & target repository plan attached to this ticket. */
+  readonly worktree?: TicketWorktreePlan
   /** Shared scratch directory for intermediate process artifacts. */
   readonly scratchDir?: string
   /** Prerequisite ticket IDs configured on this ticket. */

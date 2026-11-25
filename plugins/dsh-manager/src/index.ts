@@ -11,7 +11,7 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-storage-domain'
-import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView } from './board-domain.ts'
+import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView, type TicketWorktreePlan } from './board-domain.ts'
 import { boardFilterSchema, closeTicketInputSchema, ticketDependenciesInputSchema, type BoardFilter, type CloseTicketInput, type TicketDependenciesInput } from './board/wire-types.ts'
 import { unresolvedDependencies, validateDependencies } from './board/dependency-core.ts'
 import type { AttentionStorePort } from './attention/attention-core.ts'
@@ -137,6 +137,23 @@ export class DshManagerBoard extends TypertRemoteService {
     const updated: TicketRecord = { ...record, flow, updatedAt: Date.now() }
     await this.domain!.table('tickets').put(id as never, updated)
     await this.touchFlowMirror(id)
+    return updated
+  }
+
+  /** Persist or merge the structured worktree & repository target plan on a ticket. */
+  async updateWorktreePlan(id: string, patch: TicketWorktreePlan): Promise<TicketRecord | undefined> {
+    const record = this.domain!.table('tickets').get(id as never)
+    if (record === undefined) return undefined
+    const merged: TicketWorktreePlan = {
+      mode: patch.mode,
+      ...((patch.repoRoot ?? record.worktree?.repoRoot) === undefined ? {} : { repoRoot: patch.repoRoot ?? record.worktree?.repoRoot }),
+      ...((patch.baseBranch ?? record.worktree?.baseBranch) === undefined ? {} : { baseBranch: patch.baseBranch ?? record.worktree?.baseBranch }),
+      ...((patch.branch ?? record.worktree?.branch) === undefined ? {} : { branch: patch.branch ?? record.worktree?.branch }),
+      ...((patch.mergeTarget ?? record.worktree?.mergeTarget) === undefined ? {} : { mergeTarget: patch.mergeTarget ?? record.worktree?.mergeTarget }),
+      ...((patch.path ?? record.worktree?.path) === undefined ? {} : { path: patch.path ?? record.worktree?.path }),
+    }
+    const updated: TicketRecord = { ...record, worktree: merged, updatedAt: Date.now() }
+    await this.domain!.table('tickets').put(id as never, updated)
     return updated
   }
 
@@ -363,6 +380,7 @@ export class DshManagerBoard extends TypertRemoteService {
       ...(parent.handoffSessionId === undefined ? {} : { handoffSessionId: parent.handoffSessionId }),
       ...(parent.acceptanceCriteria === undefined ? {} : { acceptanceCriteria: parent.acceptanceCriteria }),
       ...(parent.scratchDir === undefined ? {} : { scratchDir: parent.scratchDir }),
+      ...(parent.worktree === undefined ? {} : { worktree: parent.worktree }),
       createdAt: now,
       updatedAt: now,
     }
@@ -579,6 +597,7 @@ export class DshManagerBoard extends TypertRemoteService {
       ...(record.url === undefined ? {} : { url: record.url }),
       ...(record.mandate === undefined ? {} : { mandate: record.mandate }),
       ...(flow === undefined ? {} : { flow }),
+      ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
       ...(record.scratchDir === undefined ? {} : { scratchDir: record.scratchDir }),
       ...(record.dependsOn === undefined || record.dependsOn.length === 0 ? {} : { dependsOn: record.dependsOn }),
       ...(waitingOn.length === 0 ? {} : { waitingOn }),
