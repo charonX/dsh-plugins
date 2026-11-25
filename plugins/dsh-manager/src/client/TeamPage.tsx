@@ -8,15 +8,18 @@ import type { CrewInjected } from './crew-source.ts'
 import type { PipelineInjected } from './pipeline-source.ts'
 import type { RouteInjected } from './route-source.ts'
 import type { TeamConfigInjected } from './team-config-source.ts'
+import type { PromptInjected } from './prompt-source.ts'
 import { CrewSection } from './CrewSection.tsx'
 import { OrchestrationWorkbench } from './OrchestrationWorkbench.tsx'
+import { PromptStudio } from './PromptStudio.tsx'
 import css from './TeamPage.module.css'
 
-export type TeamSubView = 'workbench' | 'crew'
+export type TeamSubView = 'workbench' | 'crew' | 'prompt'
 
 /** Narrowed TeamPage props: runtime monitoring (Steward & Evals) lives on MonitorPage. */
 export type TeamPageProps = PropsRuntime<'main'>
   & InjectFace<CrewInjected & PipelineInjected & RouteInjected & TeamConfigInjected>
+  & Partial<InjectFace<PromptInjected>>
   & PropsLocale<'dshManager'>
 
 /** Render the team overview strip, YAML hot-reload banner, and sub-view panels. */
@@ -37,6 +40,7 @@ export function TeamPage(props: TeamPageProps) {
           options={[
             { value: 'workbench', label: t('team.view.workbench') },
             { value: 'crew', label: t('team.view.crew') },
+            { value: 'prompt', label: t('team.view.prompt') },
           ]}
         />
       </div>
@@ -51,11 +55,19 @@ export function TeamPage(props: TeamPageProps) {
               <OrchestrationWorkbench {...props} />
             </div>
           )
-          : (
-            <section id="dsh-team-crew" className={css.panelSection} aria-label={t('crew.section')}>
-              <CrewSection {...props} />
-            </section>
-          )}
+          : subView === 'crew'
+            ? (
+              <section id="dsh-team-crew" className={css.panelSection} aria-label={t('crew.section')}>
+                <CrewSection {...props} />
+              </section>
+            )
+            : props.usePrompts !== undefined && props.onPromptSave !== undefined && props.onPromptPreview !== undefined
+              ? (
+                <PromptStudio
+                  {...(props as TeamPageProps & InjectFace<PromptInjected>)}
+                />
+              )
+              : null}
       </div>
     </div>
   )

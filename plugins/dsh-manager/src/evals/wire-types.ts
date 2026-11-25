@@ -99,6 +99,31 @@ export interface StewardActivityView {
   readonly kind: StewardActivityKind
   /** The detail line: thread or ticket identifiers, an action, an error. */
   readonly text: string
+  /** Identifier of the rendered turn prompt retained in the Steward's 20-entry history ring. */
+  readonly promptId?: string
+}
+
+export const stewardPromptInputSchema = zod.object({
+  promptId: zod.string().min(1),
+})
+
+export type StewardPromptInput = zod.infer<typeof stewardPromptInputSchema>
+
+export interface StewardPromptSectionView {
+  readonly id: string
+  readonly text: string
+  readonly source: 'builtin' | 'global' | 'pipeline' | 'stage'
+  readonly locked: boolean
+}
+
+export interface StewardPromptView {
+  readonly promptId: string
+  readonly turnId: string
+  readonly text: string
+  readonly truncated: boolean
+  readonly sections: readonly StewardPromptSectionView[]
+  readonly templateRevision: number
+  readonly renderedAt: number
 }
 
 /** The steward's live status for the client's status card and feed. */

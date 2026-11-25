@@ -230,6 +230,7 @@
 - **M3 主 Session 加看板**：Eval、Decision、Policy（接单部分）、接单模式、工单、Subscription 扇出、看板与评估记录页，暂不派工。
 - **M4 执行器**：worktree、派工、Report、Attention（提问 / Approval / 验收）、动作审批拦截、Deliverable 展示、副作用队列与 Channel 写回。
 - **M5 收尾**：审阅与返工、后续工单、"建议结束"、Watchdog、决策记录（原晨间简报项已随 2026-11-24 重构移除）。
+- **团队配置 v2 与提示词工作台（2026-11-25）**：`team-config.yaml` 升级支持 `version: 2`（向后兼容 v1），在全局 `prompts.turns`、流水线 `pipeline.prompt`、环节 `stage.prompt` 三层提供按段落 ID 合并的提示词覆盖与契约段锁定；执行器下发提示词随 `DispatchRecord.prompt` 持久化在工单详情回看，管家 6 个轮次保留最近 20 份原文供运行监控页展开；团队页新增「提示词」子视图（8 个内置轮次树、只读变量目录、实时项目/工单预览、二次确认保存、YAML 导出/导入）及 3 条只读流程预设一键复制。
 - **之后**：GitHub Connector、webhook 投递、IM 通知出口。
 
 ## Testing Decisions

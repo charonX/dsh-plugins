@@ -7,7 +7,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import z from '@deepseek-ai/schemastery'
-import { pipelineRecord, type PipelineRecord, type PipelineStage } from './pipeline/pipeline-core.ts'
+import { pipelineRecord, type PipelineRecord, type PipelineStage, type PromptScopeOverride } from './pipeline/pipeline-core.ts'
 import type {} from './team-config-service.ts'
 import { crewMemberIdSchema, type CrewMemberIdInput } from './crew/wire-types.ts'
 import {
@@ -43,6 +43,13 @@ export interface PipelineConfig {}
 
 export const PipelineConfig: z<PipelineConfig> = z.object({})
 
+function normalizePromptScope(prompt: PromptScopeOverride | undefined): PromptScopeOverride | undefined {
+  if (prompt?.sections === undefined) return undefined
+  const entries = Object.entries(prompt.sections)
+  if (entries.length === 0) return undefined
+  return { sections: Object.fromEntries(entries) }
+}
+
 export class DshManagerPipeline extends TypertRemoteService {
   /** Host facilities the pipeline reads; the crew validates stage references. */
   static inject = ['dshManagerTeamConfig', 'dshManagerCrew']
@@ -68,10 +75,12 @@ export class DshManagerPipeline extends TypertRemoteService {
     const input = pipelineInputSchema.parse(rawInput)
     const stages = input.stages.map(stage => this.materializeStage(stage))
     const now = Date.now()
+    const prompt = normalizePromptScope(input.prompt)
     const record = pipelineRecord.parse({
       id: `pipe-${crypto.randomUUID()}`,
       name: input.name,
       stages,
+      ...(prompt === undefined ? {} : { prompt }),
       createdAt: now,
       updatedAt: now,
     })
@@ -90,12 +99,16 @@ export class DshManagerPipeline extends TypertRemoteService {
     const stages = input.stages === undefined
       ? current.stages
       : input.stages.map(stage => this.materializeStage(stage))
-    const next = pipelineRecord.parse({
+    const nextPrompt = input.prompt === undefined ? current.prompt : normalizePromptScope(input.prompt)
+    const draft: Record<string, unknown> = {
       ...current,
       ...(input.name === undefined ? {} : { name: input.name }),
       stages,
       updatedAt: Date.now(),
-    })
+    }
+    if (nextPrompt === undefined) delete draft.prompt
+    else draft.prompt = nextPrompt
+    const next = pipelineRecord.parse(draft)
     await this.ctx.dshManagerTeamConfig.mutate(doc => ({
       ...doc,
       pipelines: doc.pipelines.map(item => (item.id === next.id ? next : item)),
@@ -153,12 +166,14 @@ export class DshManagerPipeline extends TypertRemoteService {
     // The referenced member must exist; a disabled member may stay referenced
     // but no dispatch will start from it.
     this.ctx.dshManagerCrew.require(parsed.memberId)
+    const prompt = normalizePromptScope(parsed.prompt)
     return {
       memberId: parsed.memberId,
       instruction: parsed.instruction ?? '',
       skippable: parsed.skippable ?? false,
       ...(parsed.skipLogic === undefined ? {} : { skipLogic: parsed.skipLogic }),
       ...(parsed.mode === undefined ? {} : { mode: parsed.mode }),
+      ...(prompt === undefined ? {} : { prompt }),
     }
   }
 }

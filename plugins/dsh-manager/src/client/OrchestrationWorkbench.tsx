@@ -7,7 +7,9 @@ import type { PipelineStageInput, PipelineView } from '../pipeline/wire-types.ts
 import type { RouteRuleView } from '../route/wire-types.ts'
 import type { CrewInjected, CrewSnapshot } from './crew-source.ts'
 import type { PipelineInjected, PipelineSnapshot } from './pipeline-source.ts'
+import type { PromptInjected } from './prompt-source.ts'
 import type { RouteInjected, RouteSnapshot } from './route-source.ts'
+import { PIPELINE_PRESETS, type PresetId } from '../team-config/presets.ts'
 import {
   clampLine,
   connectedNodeIds,
@@ -23,6 +25,7 @@ import css from './TeamPage.module.css'
 export type WorkbenchViewMode = 'graph' | 'list'
 
 export type OrchestrationWorkbenchProps = InjectFace<CrewInjected & PipelineInjected & RouteInjected>
+  & Partial<Pick<InjectFace<PromptInjected>, 'onPresetApply'>>
   & PropsLocale<'dshManager'>
 
 interface RuleForm {
@@ -67,6 +70,7 @@ export function OrchestrationWorkbench(props: OrchestrationWorkbenchProps) {
     onRuleReferencesOfPipeline,
     onPipelineRetry,
     onAgentKindOptions,
+    onPresetApply,
     t,
   } = props
 
@@ -92,6 +96,10 @@ export function OrchestrationWorkbench(props: OrchestrationWorkbenchProps) {
 
   // Shared 2-step pipeline delete confirmation
   const [pendingPipelineRemove, setPendingPipelineRemove] = useState<{ id: string; rules: readonly string[] }>()
+  // Read-only preset copy modal
+  const [presetModalOpen, setPresetModalOpen] = useState(false)
+  const [presetBusyId, setPresetBusyId] = useState<PresetId | undefined>()
+  const [presetError, setPresetError] = useState<string | undefined>()
 
   const rules = routeData.rules ?? []
   const pipelines = pipelineData.pipelines ?? []
@@ -268,9 +276,40 @@ export function OrchestrationWorkbench(props: OrchestrationWorkbenchProps) {
               <Button variant="outline" size="sm" onClick={openPipelineAdd}>
                 {t('pipeline.add.open')}
               </Button>
+              {onPresetApply !== undefined
+                ? (
+                  <Button
+                    id="dsh-team-preset-open"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setPresetError(undefined)
+                      setPresetModalOpen(true)
+                    }}
+                  >
+                    {t('preset.open')}
+                  </Button>
+                )
+                : null}
             </div>
           )
-          : null}
+          : onPresetApply !== undefined
+            ? (
+              <div className={css.workbenchActions}>
+                <Button
+                  id="dsh-team-preset-open"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPresetError(undefined)
+                    setPresetModalOpen(true)
+                  }}
+                >
+                  {t('preset.open')}
+                </Button>
+              </div>
+            )
+            : null}
       </div>
 
       <div
@@ -387,6 +426,65 @@ export function OrchestrationWorkbench(props: OrchestrationWorkbenchProps) {
         onSubmit={submitPipeline}
         t={t}
       />
+
+      <Modal
+        open={presetModalOpen}
+        onClose={() => { setPresetModalOpen(false) }}
+        title={t('preset.modal.title')}
+        closeLabel={t('route.cancel')}
+      >
+        <div className={css.promptConfirmBody}>
+          <p className={css.panelHint}>{t('preset.modal.hint')}</p>
+          {presetError !== undefined ? <p className={css.formError} role="alert">{presetError}</p> : null}
+          <ul className={css.cards}>
+            {PIPELINE_PRESETS.map(preset => (
+              <li key={preset.id} className={css.card}>
+                <div className={css.cardHeader}>
+                  <strong>{preset.name}</strong>
+                  <Tag tone="neutral">{t('preset.readonly')}</Tag>
+                  <Tag tone="info">{t('route.mindmapStageCount', { count: preset.stages.length })}</Tag>
+                </div>
+                <p className={css.panelHint}>{preset.summary}</p>
+                <ol className={css.stageList}>
+                  {preset.stages.map((st, idx) => (
+                    <li key={`${preset.id}-${idx}`} className={css.stageItem}>
+                      <div className={css.stageItemTop}>
+                        <span className={css.stageIndex}>{idx + 1}</span>
+                        <strong>{st.memberName}</strong>
+                        <Tag tone={st.mode === 'review' ? 'warning' : 'neutral'}>{st.mode}</Tag>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                <div className={css.cardActions}>
+                  <Button
+                    id={`dsh-preset-copy-${preset.id}`}
+                    variant="primary"
+                    size="sm"
+                    disabled={presetBusyId !== undefined || onPresetApply === undefined}
+                    onClick={() => {
+                      if (onPresetApply === undefined) return
+                      setPresetBusyId(preset.id)
+                      setPresetError(undefined)
+                      void onPresetApply(preset.id)
+                        .then((res) => {
+                          if (!res.ok) {
+                            setPresetError(res.error ?? t('preset.copy.failed'))
+                            return
+                          }
+                          setPresetModalOpen(false)
+                        })
+                        .finally(() => { setPresetBusyId(undefined) })
+                    }}
+                  >
+                    {presetBusyId === preset.id ? t('preset.copying') : t('preset.copy')}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Modal>
     </div>
   )
 }

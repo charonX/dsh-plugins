@@ -287,4 +287,60 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
 
     expect(pageErrors).toEqual([])
   })
+
+  test('Team Prompt Studio shows 8 turns, locked read-only sections, rejects unknown vars, and applies presets', async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', err => pageErrors.push(err.message))
+
+    await openManager(page)
+    await page.locator('#dsh-manager-tab-team').click()
+    await expect(page.locator('#dsh-manager-panel-team')).toBeVisible()
+
+    // AC-10: Apply bug-fix preset from Orchestration workbench
+    await page.locator('#dsh-team-preset-open').click()
+    const presetDialog = page.getByRole('dialog')
+    await expect(presetDialog).toBeVisible()
+    await page.locator('#dsh-preset-copy-bug-fix').click()
+    await expect(presetDialog).toBeHidden()
+
+    await page.locator('#dsh-team-workbench-mode-list').click()
+    await expect(page.locator('#dsh-team-orchestration')).toContainText('缺陷修复')
+
+    // AC-1: Switch to Prompts sub-view
+    await page.locator('#dsh-team-view-prompt').click()
+    await expect(page.locator('#dsh-team-prompt')).toBeVisible()
+    await expect(page.locator('#dsh-prompt-node-turn-executor')).toBeVisible()
+    await expect(page.locator('#dsh-prompt-node-turn-steward\\.route')).toBeVisible()
+
+    // AC-4: Locked section `report` has no input box
+    await expect(page.locator('#dsh-prompt-input-report')).toHaveCount(0)
+    await expect(page.locator('#dsh-prompt-section-report pre')).toBeVisible()
+
+    // AC-5: Unknown variable save is rejected cleanly
+    const identityInput = page.locator('#dsh-prompt-input-identity')
+    await identityInput.fill('Hello {{nope}}')
+    await page.getByRole('button', { name: /保存更改|Save changes/ }).click()
+    const confirmDialog = page.getByRole('dialog')
+    await expect(confirmDialog).toBeVisible()
+    await confirmDialog.getByRole('button', { name: /确认写入|Confirm & save/ }).click()
+    await expect(confirmDialog).toContainText(/unknown variable "nope"/)
+    await confirmDialog.getByRole('button', { name: /^(取消|Cancel)$/ }).click()
+
+    // Clean up copied preset pipeline & generated crew members
+    await page.locator('#dsh-team-view-workbench').click()
+    await page.locator('#dsh-team-workbench-mode-list').click()
+    const pipeCard = page.locator('#dsh-team-orchestration li', { hasText: '缺陷修复' }).first()
+    await pipeCard.getByRole('button', { name: /^(删除|Remove)$/ }).click()
+    await expect(page.locator('#dsh-team-orchestration')).not.toContainText('缺陷修复')
+
+    await page.locator('#dsh-team-view-crew').click()
+    for (const memberName of ['缺陷复现员', '根因修复员', '回归验证员']) {
+      const card = page.locator('#dsh-team-crew li', { hasText: memberName }).first()
+      if ((await card.count()) > 0) {
+        await card.getByRole('button', { name: /^(删除|Remove)$/ }).click()
+      }
+    }
+
+    expect(pageErrors).toEqual([])
+  })
 })

@@ -34,12 +34,18 @@ import { categorizeTool, requiresApproval } from './approval/approval-policy.ts'
 import { resolveAgentModelOptions, type ModelOptionLayer } from './agent-model-options.ts'
 import { createDomainAttentionStore } from './attention/storage-store.ts'
 import { attentionAnswerInputSchema, attentionListInputSchema, type AttentionAnswerInput, type AttentionListInput, type AttentionView } from './attention/wire-types.ts'
-import { cancelDispatch, enqueueDispatch, latestExternalSession, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
+import { cancelDispatch, enqueueDispatch, latestExternalSession, recordDispatchPrompt, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchPromptRecord, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
 import { buildExternalCliPrompt, runCliBackend, type ExternalAgentKind } from './dispatch/cli-backend.ts'
 import type { AgentKind, CrewMember } from './crew/crew-core.ts'
+import type { PipelineRecord, PipelineStage } from './pipeline/pipeline-core.ts'
+import type { TeamConfigDocument } from './team-config/team-config-core.ts'
+import { buildPromptContext, type ProjectFactsSnapshot } from './prompt/prompt-vars.ts'
+import { probeProjectFacts } from './prompt/project-facts.ts'
+import { resolveSections } from './prompt/prompt-resolve.ts'
+import { MAX_RENDERED_PROMPT_BYTES, renderTurn, truncateUtf8Bytes } from './prompt/prompt-render.ts'
 import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor, worktreePathFor } from './dispatch/worktree.ts'
 import { resolveTaskScratchDir } from './dispatch/scratch-artifacts.ts'
-import { discoverWorkspaceSkills, formatSkillPromptLines } from './dispatch/workspace-skills.ts'
+import { discoverWorkspaceSkills, type DiscoveredSkill } from './dispatch/workspace-skills.ts'
 import { discoverProjectLandingFacts, formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from './dispatch/landing-discovery.ts'
 import { checkBranchRebaseStatus, createMrOrPr, localMergeBranch, pushBranch } from './dispatch/landing-ops.ts'
 import { recordReview, type ReviewStorePort } from './review/review-core.ts'
@@ -820,13 +826,16 @@ export class DshManagerExecutor extends TypertRemoteService {
     const landingFacts = projectId !== undefined && worktreeSpec.mode !== 'none' && this.isLandingStage(ticket, member?.name, stageMode)
       ? await discoverProjectLandingFacts(this.ctx.subprocess, cwd).catch(() => undefined)
       : undefined
+    const projectFacts = projectId === undefined
+      ? undefined
+      : await probeProjectFacts(cwd, landingFacts).catch(() => undefined)
     const agentKind: AgentKind = member?.agentKind ?? 'builtin'
     const lastRework = [...this.reviewStore().listReviews()]
       .filter(review => review.ticketId === ticket.id && review.verdict === 'rework')
       .sort((left, right) => right.decidedAt - left.decidedAt)[0]
 
     if (agentKind !== 'builtin') {
-      await this.runExternalCliExecutor(store, record, ticket, agentKind, member, projectId, cwd, lastRework, taskScratchDir, stageMode, landingFacts, worktreeSpec)
+      await this.runExternalCliExecutor(store, record, ticket, agentKind, member, projectId, workspacePath, cwd, lastRework, taskScratchDir, stageMode, landingFacts, projectFacts, worktreeSpec)
       return
     }
 
@@ -857,14 +866,10 @@ export class DshManagerExecutor extends TypertRemoteService {
     })
     try {
       const skills = await discoverWorkspaceSkills(cwd)
-      const base = this.executorPrompt(ticket, projectId, cwd, skills, taskScratchDir, stageMode, landingFacts, worktreeSpec)
-      const prompt = lastRework === undefined ? base : [
-        base,
-        lastRework.origin === 'human'
-          ? `The user returned this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`
-          : `The Steward reworked this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`,
-      ].join('\n')
-      agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }))
+      const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
+      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, stageMode, landingFacts, projectFacts, worktreeSpec, lastRework)
+      await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: rendered.text }], source: { kind: 'user' } }))
       await agent.whenIdle()
     } catch (error) {
       // A crashed turn leaves the dispatch running with its history; the
@@ -890,17 +895,22 @@ export class DshManagerExecutor extends TypertRemoteService {
     agentKind: ExternalAgentKind,
     member: CrewMember | undefined,
     projectId: string | undefined,
+    _workspacePath: string | undefined,
     cwd: string,
     lastRework: { readonly origin: 'steward' | 'human'; readonly feedback: string } | undefined,
     taskScratchDir?: string,
     stageMode?: 'execute' | 'review',
     landingFacts?: ProjectLandingFacts,
+    projectFacts?: ProjectFactsSnapshot,
     worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): Promise<void> {
     const resumeSessionId = latestExternalSession(store, ticket.id, agentKind)
     await recordExternalSession(store, record.id, agentKind, resumeSessionId, Date.now())
     const skills = resumeSessionId !== undefined && lastRework !== undefined ? [] : await discoverWorkspaceSkills(cwd)
-    const prompt = this.externalCliPrompt(ticket, projectId, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, stageMode, landingFacts, worktreeSpec)
+    const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
+    const rendered = this.renderExternalCliPrompt(ticket, projectId, projectName, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, stageMode, landingFacts, projectFacts, worktreeSpec)
+    await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
+    const prompt = rendered.text
     const idleTimeoutMs = this.config.turnTimeoutMs
     const controller = new AbortController()
     this.activeControllers.set(record.id, controller)
@@ -1205,24 +1215,183 @@ export class DshManagerExecutor extends TypertRemoteService {
     return lines
   }
 
-  /** Prompt passed to a headless external CLI (no DSH-internal tool references). */
-  private externalCliPrompt(
+  private teamConfigSnapshot(): { readonly config?: TeamConfigDocument; readonly revision: number } {
+    const svc = (this.ctx as unknown as {
+      get?: (key: string) => { snapshot?: () => TeamConfigDocument; status?: () => { readonly revision: number } } | undefined
+    }).get?.('dshManagerTeamConfig')
+    return {
+      ...(svc?.snapshot === undefined ? {} : { config: svc.snapshot() }),
+      revision: svc?.status?.().revision ?? 1,
+    }
+  }
+
+  private resolveStageDetails(ticket: TicketRecord): {
+    readonly pipeline?: PipelineRecord
+    readonly stage?: PipelineStage
+    readonly member?: CrewMember
+    readonly stageCount?: number
+    readonly degradedStageText?: string
+  } {
+    const flow = ticket.flow
+    if (flow === undefined) return {}
+    try {
+      const pipeline = this.ctx.dshManagerPipeline.require(flow.pipelineId)
+      const stage = pipeline.stages[flow.stageIndex]
+      const member = stage === undefined ? undefined : this.ctx.dshManagerCrew.require(stage.memberId)
+      if (stage === undefined || member === undefined) {
+        return {
+          pipeline,
+          degradedStageText: `This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`,
+        }
+      }
+      return {
+        pipeline,
+        stage,
+        member,
+        stageCount: Math.max(pipeline.stages.length, flow.stageIndex + 1),
+      }
+    } catch {
+      return {
+        degradedStageText: `This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`,
+      }
+    }
+  }
+
+  /** Build prompt context and resolve 3-tier sections for executor/external-cli dispatches. */
+  private renderDispatchTurnPrompt(
+    turnId: 'executor' | 'external-cli',
     ticket: TicketRecord,
     projectId: string | undefined,
+    projectName: string | undefined,
     cwd: string,
-    lastRework: { readonly origin: 'steward' | 'human'; readonly feedback: string } | undefined,
-    resumed: boolean,
-    skills: readonly { readonly name: string; readonly description: string; readonly path: string }[] = [],
+    skills: readonly DiscoveredSkill[],
+    taskScratchDir: string | undefined,
+    stageMode: 'execute' | 'review' | undefined,
+    landingFacts: ProjectLandingFacts | undefined,
+    projectFacts: ProjectFactsSnapshot | undefined,
+    worktreeSpec: ReturnType<DshManagerExecutor['resolveWorktreeSpec']> | undefined,
+    reworkLines: readonly string[],
+  ): {
+    readonly text: string
+    readonly record: DispatchPromptRecord
+    readonly stageInstruction?: string
+  } {
+    const stageDetails = this.resolveStageDetails(ticket)
+    const handoffLines = this.handoffContextLines(ticket)
+    const upstreamLines = this.upstreamStageLines(ticket)
+    const answeredLines = this.answeredAttentionLines(ticket.id)
+    const worktreeLines = this.worktreePlanPromptLines(worktreeSpec)
+    const landingLines = landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)
+    const { config, revision } = this.teamConfigSnapshot()
+
+    const ctx = buildPromptContext({
+      ticket,
+      ...(stageDetails.pipeline === undefined ? {} : { pipeline: stageDetails.pipeline }),
+      ...(stageDetails.stage === undefined ? {} : { stage: stageDetails.stage }),
+      ...(stageDetails.member === undefined ? {} : { member: stageDetails.member }),
+      ...(stageDetails.stageCount === undefined ? {} : { stageCount: stageDetails.stageCount }),
+      ...(stageDetails.degradedStageText === undefined ? {} : { degradedStageText: stageDetails.degradedStageText }),
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(projectName === undefined ? {} : { projectName }),
+      ...(projectFacts === undefined ? {} : { projectFacts }),
+      ...(landingFacts === undefined ? {} : { landingFacts }),
+      skills,
+      handoffLines,
+      upstreamLines: upstreamLines.slice(1), // strip header since section template carries header
+      answeredLines: answeredLines.slice(1),
+      ...(worktreeLines[0] === undefined ? {} : { worktreeLine: worktreeLines[0] }),
+      landingLines,
+      cwd,
+      ...(taskScratchDir === undefined ? {} : { scratchDir: taskScratchDir }),
+      ...(worktreeSpec?.path === undefined ? {} : { worktreePath: worktreeSpec.path }),
+      ...(worktreeSpec?.baseBranch === undefined ? {} : { baseBranch: worktreeSpec.baseBranch }),
+      ...(worktreeSpec?.mergeTarget === undefined ? {} : { mergeTarget: worktreeSpec.mergeTarget }),
+      ...(stageMode === undefined ? {} : { stageMode }),
+      ...(reworkLines.length === 0 ? {} : { dataBlocks: { rework: reworkLines } }),
+    })
+
+    const resolved = resolveSections(turnId, {
+      ...(config === undefined ? {} : { config }),
+      ...(stageDetails.pipeline === undefined ? {} : { pipeline: stageDetails.pipeline }),
+      ...(stageDetails.stage === undefined ? {} : { stage: stageDetails.stage }),
+      variants: ctx.variants,
+    })
+
+    const rendered = renderTurn(turnId, ctx, resolved)
+    const stageInstruction = stageDetails.stage?.instruction !== undefined && stageDetails.stage.instruction !== ''
+      ? stageDetails.stage.instruction
+      : undefined
+    return {
+      text: rendered.text,
+      record: {
+        turnId,
+        text: rendered.text,
+        truncated: rendered.truncated,
+        sections: [...rendered.sections],
+        templateRevision: revision,
+        renderedAt: Date.now(),
+      },
+      ...(stageInstruction === undefined ? {} : { stageInstruction }),
+    }
+  }
+
+  /** Render the built-in executor prompt and capture its persisted prompt snapshot. */
+  private renderExecutorPrompt(
+    ticket: TicketRecord,
+    projectId: string | undefined,
+    projectName: string | undefined,
+    cwd: string,
+    skills: readonly DiscoveredSkill[],
     taskScratchDir?: string,
     stageMode?: 'execute' | 'review',
     landingFacts?: ProjectLandingFacts,
+    projectFacts?: ProjectFactsSnapshot,
     worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
-  ): string {
-    const mandate = ticket.mandate
-    const flow = ticket.flow
+    lastRework?: { readonly origin: 'steward' | 'human'; readonly feedback: string },
+  ): { readonly text: string; readonly record: DispatchPromptRecord } {
+    const reworkLines = lastRework === undefined
+      ? []
+      : [
+          lastRework.origin === 'human'
+            ? `The user returned this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`
+            : `The Steward reworked this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`,
+        ]
+    const rendered = this.renderDispatchTurnPrompt(
+      'executor',
+      ticket,
+      projectId,
+      projectName,
+      cwd,
+      skills,
+      taskScratchDir,
+      stageMode,
+      landingFacts,
+      projectFacts,
+      worktreeSpec,
+      reworkLines,
+    )
+    return { text: rendered.text, record: rendered.record }
+  }
+
+  /** Render the external CLI prompt (including leading `/command` extraction) and its snapshot. */
+  private renderExternalCliPrompt(
+    ticket: TicketRecord,
+    projectId: string | undefined,
+    projectName: string | undefined,
+    cwd: string,
+    lastRework: { readonly origin: 'steward' | 'human'; readonly feedback: string } | undefined,
+    resumed: boolean,
+    skills: readonly DiscoveredSkill[] = [],
+    taskScratchDir?: string,
+    stageMode?: 'execute' | 'review',
+    landingFacts?: ProjectLandingFacts,
+    projectFacts?: ProjectFactsSnapshot,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
+  ): { readonly text: string; readonly record: DispatchPromptRecord } {
+    const { revision } = this.teamConfigSnapshot()
     if (resumed && (lastRework !== undefined || this.answeredAttentionLines(ticket.id).length > 0)) {
       const answeredLines = this.answeredAttentionLines(ticket.id)
-      return buildExternalCliPrompt({
+      const text = buildExternalCliPrompt({
         candidates: [lastRework?.feedback, ...answeredLines],
         bodyLines: [
           lastRework === undefined
@@ -1238,38 +1407,58 @@ export class DshManagerExecutor extends TypertRemoteService {
               : `Apply the requested changes in the worktree at ${cwd}, run relevant tests/checks, save passing verification output to ${taskScratchDir ?? cwd}/test-report.log, and summarize what changed and what passed.`),
         ],
       })
+      const capped = truncateUtf8Bytes(text, MAX_RENDERED_PROMPT_BYTES)
+      return {
+        text: capped.text,
+        record: {
+          turnId: 'external-cli',
+          text: capped.text,
+          truncated: capped.truncated,
+          sections: [],
+          templateRevision: revision,
+          renderedAt: Date.now(),
+        },
+      }
     }
-    const stageInfo = flow === undefined ? undefined : this.stagePromptInfo(ticket, flow)
-    return buildExternalCliPrompt({
+
+    const reworkLines = lastRework === undefined
+      ? []
+      : [
+          lastRework.origin === 'human'
+            ? `Rework feedback from user: "${lastRework.feedback}".`
+            : `Rework feedback from Steward: "${lastRework.feedback}".`,
+        ]
+    const rendered = this.renderDispatchTurnPrompt(
+      'external-cli',
+      ticket,
+      projectId,
+      projectName,
+      cwd,
+      skills,
+      taskScratchDir,
+      stageMode,
+      landingFacts,
+      projectFacts,
+      worktreeSpec,
+      reworkLines,
+    )
+    const combinedText = buildExternalCliPrompt({
       candidates: [
-        stageInfo?.stageInstruction,
-        mandate?.scope,
+        rendered.stageInstruction,
+        ticket.mandate?.scope,
         ticket.title,
       ],
-      bodyLines: [
-        `Ticket ${ticket.id}: ${ticket.title}.`,
-        mandate === undefined ? undefined : `Mandate scope: ${mandate.scope} (strength ${mandate.strength}).`,
-        ...this.handoffContextLines(ticket),
-        ...(stageInfo?.lines ?? []),
-        ...this.upstreamStageLines(ticket),
-        ...this.answeredAttentionLines(ticket.id),
-        ...formatSkillPromptLines(skills),
-        ...this.worktreePlanPromptLines(worktreeSpec),
-        ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
-        ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
-        projectId === undefined
-          ? 'This ticket has no mapped project: analyze read-only; do not modify any files.'
-          : (stageMode === 'review'
-            ? `Inspect the shared git worktree at ${cwd} (read-only against source/test files), run full tests/verification gates, and finish with a concise review summary covering test results, blocking findings (if any), and review-report.md / test-report.log paths.`
-            : `Work directly in the git worktree at ${cwd}. Edit files, run tests/typecheck as needed, and finish with a concise summary of changes and verification results.`),
-        'You are running in non-interactive headless CLI mode: do NOT call interactive ask_question or ask_user tools. If any open decisions remain, include them concisely with your recommended defaults in your final Markdown output.',
-        lastRework === undefined
-          ? undefined
-          : (lastRework.origin === 'human'
-            ? `Rework feedback from user: "${lastRework.feedback}".`
-            : `Rework feedback from Steward: "${lastRework.feedback}".`),
-      ],
+      bodyLines: [rendered.text],
     })
+    const capped = truncateUtf8Bytes(combinedText, MAX_RENDERED_PROMPT_BYTES)
+    return {
+      text: capped.text,
+      record: {
+        ...rendered.record,
+        text: capped.text,
+        truncated: rendered.record.truncated || capped.truncated,
+      },
+    }
   }
 
   /** The project one ticket is mapped to, through its record or its external mapping. */
@@ -1411,106 +1600,6 @@ export class DshManagerExecutor extends TypertRemoteService {
       })
     }
     return handle.agent
-  }
-
-  /** Artifact directory and review-fact-file rules shared by built-in and external CLI prompts. */
-  private stageArtifactPromptLines(
-    cwd: string,
-    mapped: boolean,
-    taskScratchDir: string | undefined,
-    stageMode: 'execute' | 'review' | undefined,
-  ): readonly string[] {
-    if (!mapped || taskScratchDir === undefined) return []
-    const lines: string[] = [
-      `Task scratch directory (store ALL intermediate process artifacts here — e.g. design.md, repro-red.log, test-report.log, review-report.md, verify/ — NEVER write temporary process docs into ${cwd}): ${taskScratchDir}`,
-    ]
-    if (stageMode === 'review') {
-      lines.push(
-        `Strictly READ-ONLY Review stage: do NOT edit or commit business source files or test files in ${cwd}.`,
-        `Cumulative Review Fact File: ${taskScratchDir}/review-report.md. On Round 1 (file absent), record baseSha (current git HEAD), Spec & Standards findings numbered F-01, F-02, ... with exact file:line, and Proven Failures. On Round 2+ (file present), run an INCREMENTAL review: verify previously open findings against git diff <prevSha>..HEAD and ${taskScratchDir}/test-report.log, and inspect ONLY the incremental diff for new regressions (do NOT re-open already-cleared code or invent new stylistic nitpicks outside the incremental diff).`,
-        `Run all required checks and tests, write raw output tail to ${taskScratchDir}/test-report.log, update ${taskScratchDir}/review-report.md, and submit a concise review report summarizing: overall conclusion (passed or needs fixes), actual tests/gates run and their results, any open blocking issues (F-xx with file:line), and paths to review-report.md and test-report.log.`,
-      )
-    } else {
-      lines.push(
-        `If ${taskScratchDir}/review-report.md or ${taskScratchDir}/test-report.log exists from an earlier review/failure, read them first and resolve every open finding before reporting ready.`,
-        `Save your final test/gate verification output to ${taskScratchDir}/test-report.log (and any design/repro logs to ${taskScratchDir}/).`,
-      )
-    }
-    return lines
-  }
-
-  /** The prompt one executor turn opens with. */
-  private executorPrompt(
-    ticket: TicketRecord,
-    projectId: string | undefined,
-    cwd: string,
-    skills: readonly { readonly name: string; readonly description: string; readonly path: string }[] = [],
-    taskScratchDir?: string,
-    stageMode?: 'execute' | 'review',
-    landingFacts?: ProjectLandingFacts,
-    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
-  ): string {
-    const mandate = ticket.mandate
-    const flow = ticket.flow
-    return [
-      `You are the executor dispatched for ticket ${ticket.id}: ${ticket.title}.`,
-      mandate === undefined ? undefined : `Your mandate covers ${mandate.scope} (strength ${mandate.strength}).`,
-      ...this.handoffContextLines(ticket),
-      // A routed ticket dispatches as one pipeline stage: the crew member's
-      // duty prompt and the stage instruction open the work.
-      ...(flow === undefined ? [] : this.stagePromptLines(ticket, flow)),
-      ...this.upstreamStageLines(ticket),
-      ...this.answeredAttentionLines(ticket.id),
-      ...formatSkillPromptLines(skills),
-      ...this.worktreePlanPromptLines(worktreeSpec),
-      ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
-      ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
-      projectId === undefined
-        ? 'This ticket has no mapped project: analyze read-only; do not write or change any files.'
-        : (stageMode === 'review'
-          ? `This ticket is mapped to project ${projectId}. Review the shared worktree at ${cwd} read-only against source/test files, run verification commands, and write review artifacts only into ${taskScratchDir ?? cwd}.`
-          : `This ticket is mapped to project ${projectId}. Work in the worktree at ${cwd}: edit files and run tests there; local edits and test runs are pre-approved, external actions are not.`),
-      'Report through the submit_report tool: progress while working, waiting when input is pending, blocked when stuck, failed when the work cannot be done, not-needed when nothing is required, ready when the work is complete.',
-      'When the work needs the user\'s input, ask through the ask_user tool with a concrete question and end your turn; the answer arrives as your next message.',
-      'External writes & repository landing actions (post_mr_comment, set_jira_status, local_merge_branch, push_branch, create_mr_or_pr) wait for the user\'s approval before executing — use check_branch_rebase first for non-destructive baseline checks, and follow repository AGENTS.md + project-local skills (fallback: keep verified changes ready on branch and ask human if ambiguous).',
-      'Declare final deliverable files with the present tool before reporting ready.',
-    ].filter(line => line !== undefined).join('\n')
-  }
-
-  /** The duty/instruction lines a routed ticket's stage contributes to the prompt. */
-  private stagePromptLines(ticket: TicketRecord, flow: NonNullable<TicketRecord['flow']>): readonly string[] {
-    return this.stagePromptInfo(ticket, flow).lines
-  }
-
-  /** The duty/instruction lines plus raw instruction text for a routed stage. */
-  private stagePromptInfo(ticket: TicketRecord, flow: NonNullable<TicketRecord['flow']>): {
-    readonly stageInstruction?: string
-    readonly lines: readonly string[]
-  } {
-    let pipeline
-    let stage
-    let member
-    try {
-      pipeline = this.ctx.dshManagerPipeline.require(flow.pipelineId)
-      stage = pipeline.stages[flow.stageIndex]
-      member = stage === undefined ? undefined : this.ctx.dshManagerCrew.require(stage.memberId)
-    } catch {
-      // A pipeline or member deleted mid-flight degrades to the plain prompt;
-      // the ticket still executes its mandate.
-      return { lines: [`This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`] }
-    }
-    if (stage === undefined || member === undefined) {
-      return { lines: [`This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`] }
-    }
-    const liveStageCount = Math.max(pipeline.stages.length, flow.stageIndex + 1)
-    return {
-      ...(stage.instruction === '' ? {} : { stageInstruction: stage.instruction }),
-      lines: [
-        `You are "${member.name}", one stage of the "${pipeline.name}" pipeline (stage ${flow.stageIndex + 1} of ${liveStageCount}).`,
-        `Your duty: ${member.role}`,
-        stage.instruction === '' ? undefined : `This stage's instruction: ${stage.instruction}`,
-      ].filter(line => line !== undefined),
-    }
   }
 
   /**
@@ -2078,6 +2167,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       ...(sessionTitle === undefined ? {} : { sessionTitle }),
       ...(record.agentKind === undefined ? {} : { agentKind: record.agentKind }),
       ...(record.externalSessionId === undefined ? {} : { externalSessionId: record.externalSessionId }),
+      ...(record.prompt === undefined ? {} : { prompt: record.prompt }),
       reports,
       ...(messages.length === 0 ? {} : { messages }),
       createdAt: record.createdAt,

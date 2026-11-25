@@ -145,4 +145,102 @@ describe('team-config-core', () => {
     expect(result.doc.routes).toHaveLength(1)
     expect(result.warnings).toHaveLength(2)
   })
+
+  test('supports v2 prompt overrides across all 3 tiers and v1/v2 compatibility (AC-11)', () => {
+    const v2Yaml = [
+      'version: 2',
+      'crew:',
+      '  - id: c1',
+      '    name: C1',
+      '    role: role',
+      'pipelines:',
+      '  - id: p1',
+      '    name: P1',
+      '    prompt:',
+      '      sections:',
+      '        artifacts: pipeline artifacts {{env.scratchDir}}',
+      '    stages:',
+      '      - memberId: c1',
+      '        instruction: work',
+      '        prompt:',
+      '          sections:',
+      '            skills: stage skills {{skills.list}}',
+      'routes: []',
+      'prompts:',
+      '  turns:',
+      '    executor:',
+      '      sections:',
+      '        identity: global {{ticket.id}}',
+      '    steward.route:',
+      '      sections:',
+      '        worktree: custom worktree rule',
+    ].join('\n')
+
+    const parsedV2 = parseTeamConfigYaml(v2Yaml, 1_000)
+    expect(parsedV2.version).toBe(2)
+    expect(parsedV2.prompts?.turns?.executor?.sections?.identity).toBe('global {{ticket.id}}')
+    expect(parsedV2.pipelines[0]?.prompt?.sections?.artifacts).toBe('pipeline artifacts {{env.scratchDir}}')
+    expect(parsedV2.pipelines[0]?.stages[0]?.prompt?.sections?.skills).toBe('stage skills {{skills.list}}')
+
+    // Serializing doc with prompt overrides writes version: 2
+    const serialized = serializeTeamConfigYaml({ ...parsedV2, version: 1 })
+    expect(serialized).toContain('version: 2')
+
+    // Downgrading version to 1 while retaining prompts still loads cleanly
+    const downgraded = parseTeamConfigYaml(serialized.replace('version: 2', 'version: 1'), 1_000)
+    expect(downgraded.prompts?.turns?.executor?.sections?.identity).toBe('global {{ticket.id}}')
+
+    // v1 without prompt overrides stays version: 1
+    const v1Plain = parseTeamConfigYaml('version: 1\ncrew: []\npipelines: []\nroutes: []\n', 1_000)
+    expect(serializeTeamConfigYaml(v1Plain)).toContain('version: 1')
+  })
+
+  test('rejects unknown turns, unknown sections, locked sections, and unknown variables in YAML', () => {
+    expect(() => parseTeamConfigYaml([
+      'prompts:',
+      '  turns:',
+      '    nope:',
+      '      sections:',
+      '        identity: hi',
+    ].join('\n'))).toThrow('unknown prompt turn "nope"')
+
+    expect(() => parseTeamConfigYaml([
+      'prompts:',
+      '  turns:',
+      '    executor:',
+      '      sections:',
+      '        unknownSec: hi',
+    ].join('\n'))).toThrow('prompt turn "executor" has unknown section "unknownSec"')
+
+    expect(() => parseTeamConfigYaml([
+      'prompts:',
+      '  turns:',
+      '    executor:',
+      '      sections:',
+      '        report: bypass',
+    ].join('\n'))).toThrow('prompt section "report" is locked and cannot be overridden')
+
+    expect(() => parseTeamConfigYaml([
+      'prompts:',
+      '  turns:',
+      '    executor:',
+      '      sections:',
+      '        identity: Hello {{nope}}',
+    ].join('\n'))).toThrow('prompt turn "executor" section "identity" uses unknown variable "nope"')
+
+    expect(() => parseTeamConfigYaml([
+      'crew:',
+      '  - id: c1',
+      '    name: C1',
+      '    role: role',
+      'pipelines:',
+      '  - id: p1',
+      '    name: P1',
+      '    stages:',
+      '      - memberId: c1',
+      '        prompt:',
+      '          sections:',
+      '            approval: bypass',
+    ].join('\n'))).toThrow('prompt section "approval" is locked and cannot be overridden')
+  })
 })

@@ -159,3 +159,29 @@ _Avoid_: 自动关停别人分支、静默丢弃无记录
 **自适应落地（Adaptive Landing）**:
 交付环节不依赖静态 `projects:` 配置文件，而是按目标仓库实时发现 `AGENTS.md` / `CLAUDE.md`、项目局部 PR/发布 Skill 与远端/分支事实决定落地动作（`check_branch_rebase`、`local_merge_branch`、`push_branch`、`create_mr_or_pr`），高风险写操作继续经由 `Approval` 审批，并受同项目串行锁保护；规则缺失或存在歧义时默认安全停留在已验证的当前分支等待人工指示。
 _Avoid_: 静态项目配置表、自动强推 main、跳过冲突恢复
+
+## 提示词模板与流程预设
+
+**提示词模板（Prompt Template）**:
+按轮次注册的段落化模板定义，支持 `builtin` ← `global` ← `pipeline` ← `stage` 三级覆盖与 `{{var}}` 变量插值；实际渲染全文在派工/管家执行时保留可追溯原文。
+_Avoid_: 字符串硬编码拼接、脚本式模板引擎
+
+**段落（Prompt Section）**:
+轮次提示词内带稳定 ID 的最小可覆盖单元，在注册表中顺序固定，支持查看来源徽标并按层恢复继承或恢复默认。
+_Avoid_: 可随意拖拽重排的片段
+
+**契约段（Locked Section）**:
+承载系统确定性边界与工具调用契约的只读段落（`scope`、`report`、`ask`、`approval`、`deliver`、`headless`、`tool`），在 UI、YAML 热加载与 Agent 工具三条写入路径均禁止覆盖。
+_Avoid_: 可配置提示词块
+
+**变量上下文（Prompt Context）**:
+在派工或实时预览时由代码从工单、流水线、环节、队员、项目事实与环境变量组装的只读键值集合；缺失值使对应整行省略，未知变量在保存前拦截。
+_Avoid_: 独立手工维护的环境变量表
+
+**轮次（Turn）**:
+模型交互的顶层提示词入口，共 8 个：`executor`、`external-cli` 与 `steward.{batch-eval,eval,route,skip,review,end-suggestion}`。
+_Avoid_: 提示词文件、Prompt Preset
+
+**项目事实（Project Facts）**:
+派工或预览时直接从目标项目目录与 `workspaceRegistry` 动态读取的 `AGENTS.md` / `CLAUDE.md`、`docs/git-flow.md`、`docs/verify/README.md`、技能列表与落地模式，保证流程配置零仓库硬编码。
+_Avoid_: 静态项目片段文件

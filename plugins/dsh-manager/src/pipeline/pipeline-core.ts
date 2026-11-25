@@ -11,6 +11,13 @@ import { z } from 'zod'
 export const STAGE_MODES = ['execute', 'review'] as const
 export type StageMode = (typeof STAGE_MODES)[number]
 
+/** Optional per-pipeline or per-stage prompt section overrides (`sections: { [sectionId]: text }`). */
+export const promptScopeOverrideSchema = z.object({
+  sections: z.record(z.string().trim().min(1), z.string()).optional(),
+})
+
+export type PromptScopeOverride = z.infer<typeof promptScopeOverrideSchema>
+
 /** One pipeline stage: who does it, with what instruction, and how it may skip. */
 export const pipelineStage = z.object({
   /** The referenced crew member's id. */
@@ -23,6 +30,8 @@ export const pipelineStage = z.object({
   skipLogic: z.string().trim().max(2000).optional(),
   /** Optional stage mode; `'review'` runs read-only against code and returns failures to the prior implementation stage. */
   mode: z.enum(STAGE_MODES).optional(),
+  /** Optional stage-level prompt section overrides. */
+  prompt: promptScopeOverrideSchema.optional(),
 })
 
 export type PipelineStage = z.infer<typeof pipelineStage>
@@ -32,6 +41,8 @@ export const pipelineRecord = z.object({
   id: z.string(),
   name: z.string().trim().min(1).max(40),
   stages: z.array(pipelineStage),
+  /** Optional pipeline-level prompt section overrides. */
+  prompt: promptScopeOverrideSchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 })

@@ -7,7 +7,8 @@ import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { AGENT_KINDS, crewMember, type CrewMember } from '../crew/crew-core.ts'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
-import { pipelineRecord, STAGE_MODES, type PipelineRecord, type PipelineStage } from '../pipeline/pipeline-core.ts'
+import { pipelineRecord, STAGE_MODES, type PipelineRecord, type PipelineStage, type PromptScopeOverride } from '../pipeline/pipeline-core.ts'
+import type { GlobalPromptsConfig } from '../prompt/prompt-resolve.ts'
 import { routeRule, type RouteRule } from '../route/route-core.ts'
 import {
   parseTeamConfigYaml,
@@ -21,6 +22,16 @@ export interface TeamConfigToolPort {
   snapshot(): TeamConfigDocument
   status(): TeamConfigStatusView
   mutate(transform: (current: TeamConfigDocument) => TeamConfigDocument): Promise<TeamConfigDocument>
+}
+
+function normalizePromptScopeOverride(raw: unknown): PromptScopeOverride | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const parsed = raw as PromptScopeOverride
+  const sections = parsed.sections
+  if (typeof sections !== 'object' || sections === null || Object.keys(sections).length === 0) {
+    return undefined
+  }
+  return parsed
 }
 
 function errorMessage(error: unknown): string {
@@ -54,6 +65,7 @@ function teamConfigGetTool(store: TeamConfigToolPort): ToolDefinition {
           crew: { type: 'array', items: { type: 'object', additionalProperties: true } },
           pipelines: { type: 'array', items: { type: 'object', additionalProperties: true } },
           routes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          prompts: { type: 'object', additionalProperties: true },
           yaml: { type: 'string' },
         },
       },
@@ -77,6 +89,7 @@ function teamConfigGetTool(store: TeamConfigToolPort): ToolDefinition {
         crew: toJsonRecordArray(doc.crew),
         pipelines: toJsonRecordArray(doc.pipelines),
         routes: toJsonRecordArray(doc.routes),
+        ...(doc.prompts === undefined ? {} : { prompts: toJsonRecord(doc.prompts) }),
         ...(args.includeYaml === true ? { yaml: serializeTeamConfigYaml(doc) } : {}),
       })
     },
@@ -106,6 +119,11 @@ function teamConfigReplaceTool(store: TeamConfigToolPort): ToolDefinition {
         type: 'array',
         description: 'Replacement route rule array when updating structurally.',
         items: { type: 'object', additionalProperties: true },
+      },
+      prompts: {
+        type: 'object',
+        description: 'Optional global prompt overrides (`{ turns: { <turnId>: { sections: { <id>: text } } } }`).',
+        additionalProperties: true,
       },
     },
     output: {
@@ -137,15 +155,19 @@ function teamConfigReplaceTool(store: TeamConfigToolPort): ToolDefinition {
             counts: { crew: saved.crew.length, pipelines: saved.pipelines.length, routes: saved.routes.length },
           }
         }
-        if (args.crew === undefined && args.pipelines === undefined && args.routes === undefined) {
-          return { ok: false, error: 'provide either `yaml` or at least one of `crew`, `pipelines`, `routes`' }
+        if (args.crew === undefined && args.pipelines === undefined && args.routes === undefined && args.prompts === undefined) {
+          return { ok: false, error: 'provide either `yaml` or at least one of `crew`, `pipelines`, `routes`, `prompts`' }
         }
         const saved = await store.mutate((current) => {
+          const nextPrompts = args.prompts === undefined
+            ? current.prompts
+            : (args.prompts as GlobalPromptsConfig)
           const mergedYaml = serializeTeamConfigYaml({
-            version: 1,
+            version: current.version,
             crew: (args.crew as readonly CrewMember[] | undefined) ?? current.crew,
             pipelines: (args.pipelines as readonly PipelineRecord[] | undefined) ?? current.pipelines,
             routes: (args.routes as readonly RouteRule[] | undefined) ?? current.routes,
+            ...(nextPrompts === undefined ? {} : { prompts: nextPrompts }),
           })
           return parseTeamConfigYaml(mergedYaml)
         })
@@ -293,6 +315,11 @@ function flowConfigUpsertTool(store: TeamConfigToolPort): ToolDefinition {
       action: { type: 'string', required: true, enum: ['add', 'update', 'remove'], description: 'Operation to perform.' },
       id: { type: 'string', description: 'Pipeline or route id (optional readable slug on add; required on update/remove).' },
       name: { type: 'string', description: 'Pipeline display name (when target is pipeline).' },
+      prompt: {
+        type: 'object',
+        description: 'Optional pipeline-level prompt section overrides (`{ sections: { <id>: text } }`).',
+        additionalProperties: true,
+      },
       stages: {
         type: 'array',
         description: 'Ordered pipeline stages (when target is pipeline).',
@@ -305,6 +332,7 @@ function flowConfigUpsertTool(store: TeamConfigToolPort): ToolDefinition {
             skippable: { type: 'boolean' },
             skipLogic: { type: 'string' },
             mode: { type: 'string', enum: [...STAGE_MODES] },
+            prompt: { type: 'object', additionalProperties: true },
           },
         },
       },
@@ -347,25 +375,31 @@ function flowConfigUpsertTool(store: TeamConfigToolPort): ToolDefinition {
             const rawStages = Array.isArray(args.stages) ? args.stages : []
             if (rawStages.length === 0) throw new Error('stages must contain at least one stage')
             const now = Date.now()
-            const stages: PipelineStage[] = rawStages.map(stage => ({
-              memberId: String((stage as { memberId?: unknown }).memberId ?? ''),
-              instruction: typeof (stage as { instruction?: unknown }).instruction === 'string'
-                ? (stage as { instruction: string }).instruction
-                : '',
-              skippable: (stage as { skippable?: unknown }).skippable === true,
-              ...(typeof (stage as { skipLogic?: unknown }).skipLogic === 'string'
-                && (stage as { skipLogic: string }).skipLogic.trim() !== ''
-                ? { skipLogic: (stage as { skipLogic: string }).skipLogic }
-                : {}),
-              ...(typeof (stage as { mode?: unknown }).mode === 'string'
-                && (STAGE_MODES as readonly string[]).includes((stage as { mode: string }).mode)
-                ? { mode: (stage as { mode: PipelineStage['mode'] }).mode }
-                : {}),
-            }))
+            const stages: PipelineStage[] = rawStages.map(stage => {
+              const stagePrompt = normalizePromptScopeOverride((stage as { prompt?: unknown }).prompt)
+              return {
+                memberId: String((stage as { memberId?: unknown }).memberId ?? ''),
+                instruction: typeof (stage as { instruction?: unknown }).instruction === 'string'
+                  ? (stage as { instruction: string }).instruction
+                  : '',
+                skippable: (stage as { skippable?: unknown }).skippable === true,
+                ...(typeof (stage as { skipLogic?: unknown }).skipLogic === 'string'
+                  && (stage as { skipLogic: string }).skipLogic.trim() !== ''
+                  ? { skipLogic: (stage as { skipLogic: string }).skipLogic }
+                  : {}),
+                ...(typeof (stage as { mode?: unknown }).mode === 'string'
+                  && (STAGE_MODES as readonly string[]).includes((stage as { mode: string }).mode)
+                  ? { mode: (stage as { mode: PipelineStage['mode'] }).mode }
+                  : {}),
+                ...(stagePrompt === undefined ? {} : { prompt: stagePrompt }),
+              }
+            })
+            const pipelinePrompt = normalizePromptScopeOverride(args.prompt)
             const next = pipelineRecord.parse({
               id,
               name: args.name,
               stages,
+              ...(pipelinePrompt === undefined ? {} : { prompt: pipelinePrompt }),
               createdAt: now,
               updatedAt: now,
             })
@@ -383,25 +417,34 @@ function flowConfigUpsertTool(store: TeamConfigToolPort): ToolDefinition {
               if (existing === undefined) throw new Error(`pipeline "${id}" does not exist`)
               const stages = args.stages === undefined
                 ? existing.stages
-                : args.stages.map(stage => ({
-                  memberId: String((stage as { memberId?: unknown }).memberId ?? ''),
-                  instruction: typeof (stage as { instruction?: unknown }).instruction === 'string'
-                    ? (stage as { instruction: string }).instruction
-                    : '',
-                  skippable: (stage as { skippable?: unknown }).skippable === true,
-                  ...(typeof (stage as { skipLogic?: unknown }).skipLogic === 'string'
-                    && (stage as { skipLogic: string }).skipLogic.trim() !== ''
-                    ? { skipLogic: (stage as { skipLogic: string }).skipLogic }
-                    : {}),
-                  ...(typeof (stage as { mode?: unknown }).mode === 'string'
-                    && (STAGE_MODES as readonly string[]).includes((stage as { mode: string }).mode)
-                    ? { mode: (stage as { mode: PipelineStage['mode'] }).mode }
-                    : {}),
-                }))
+                : args.stages.map(stage => {
+                  const stagePrompt = normalizePromptScopeOverride((stage as { prompt?: unknown }).prompt)
+                  return {
+                    memberId: String((stage as { memberId?: unknown }).memberId ?? ''),
+                    instruction: typeof (stage as { instruction?: unknown }).instruction === 'string'
+                      ? (stage as { instruction: string }).instruction
+                      : '',
+                    skippable: (stage as { skippable?: unknown }).skippable === true,
+                    ...(typeof (stage as { skipLogic?: unknown }).skipLogic === 'string'
+                      && (stage as { skipLogic: string }).skipLogic.trim() !== ''
+                      ? { skipLogic: (stage as { skipLogic: string }).skipLogic }
+                      : {}),
+                    ...(typeof (stage as { mode?: unknown }).mode === 'string'
+                      && (STAGE_MODES as readonly string[]).includes((stage as { mode: string }).mode)
+                      ? { mode: (stage as { mode: PipelineStage['mode'] }).mode }
+                      : {}),
+                    ...(stagePrompt === undefined ? {} : { prompt: stagePrompt }),
+                  }
+                })
+              const pipelinePrompt = args.prompt === undefined
+                ? existing.prompt
+                : normalizePromptScopeOverride(args.prompt)
+              const { prompt: _droppedPrompt, ...existingBase } = existing
               updated = pipelineRecord.parse({
-                ...existing,
+                ...existingBase,
                 ...(typeof args.name === 'string' ? { name: args.name } : {}),
                 stages,
+                ...(pipelinePrompt === undefined ? {} : { prompt: pipelinePrompt }),
                 updatedAt: Date.now(),
               })
               return {

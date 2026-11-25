@@ -21,6 +21,7 @@ import { createPipelineSource } from './pipeline-source.ts'
 import { createPolicySource } from './policy-source.ts'
 import { createRouteSource } from './route-source.ts'
 import { createTeamConfigSource } from './team-config-source.ts'
+import { createPromptSource } from './prompt-source.ts'
 import { createNotificationsSource } from './notifications-source.ts'
 import { createStewardSource } from './steward-source.ts'
 import { createTriggersSource } from './triggers-source.ts'
@@ -200,6 +201,9 @@ export function registerUi(ctx: ClientContext): void {
     status: async () => (typeof dsh.stewardStatus === 'function'
       ? await dsh.stewardStatus()
       : { ok: false }),
+    readPrompt: async promptId => (typeof dsh.stewardPrompt === 'function'
+      ? await dsh.stewardPrompt({ promptId })
+      : { ok: false }),
     // The status rides a faster cadence than the feeds: the busy dot is the
     // steward's live "working or resting" signal.
     pollMs: 3000,
@@ -241,6 +245,31 @@ export function registerUi(ctx: ClientContext): void {
     referencesOfPipeline: async pipelineId => await dsh.ruleReferencesOfPipeline({ pipelineId }),
     subscribeReset: listener => ctx.on('connection/reset', listener),
   })
+  const promptSource = createPromptSource({
+    ...(typeof dsh.promptRegistry === 'function'
+      ? { registry: async () => await dsh.promptRegistry() }
+      : {}),
+    ...(typeof dsh.promptSave === 'function'
+      ? { save: async input => await dsh.promptSave(input) }
+      : {}),
+    ...(typeof dsh.teamConfigImportYaml === 'function'
+      ? { importYaml: async yaml => await dsh.teamConfigImportYaml({ yaml }) }
+      : {}),
+    ...(typeof dsh.promptRenderPreview === 'function'
+      ? { preview: async input => await dsh.promptRenderPreview(input) }
+      : {}),
+    ...(typeof dsh.presetApply === 'function'
+      ? { applyPreset: async input => await dsh.presetApply(input) }
+      : {}),
+    projects: async () => await dsh.projectList(),
+    tickets: async () => await dsh.ticketList({}),
+    subscribeReset: listener => ctx.on('connection/reset', listener),
+    onMutated: () => {
+      crewSource.invalidate()
+      pipelineSource.invalidate()
+      routeSource.invalidate()
+    },
+  })
   const teamConfigSource = createTeamConfigSource({
     ...(typeof dsh.teamConfigStatus === 'function'
       ? { readStatus: async () => await dsh.teamConfigStatus() }
@@ -253,6 +282,7 @@ export function registerUi(ctx: ClientContext): void {
       crewSource.invalidate()
       pipelineSource.invalidate()
       routeSource.invalidate()
+      promptSource.invalidate()
     },
     pollMs: 2000,
   })
@@ -281,6 +311,7 @@ export function registerUi(ctx: ClientContext): void {
       ...pipelineSource,
       ...routeSource,
       ...teamConfigSource,
+      ...promptSource,
       ...policySource,
       // The sources each carry a `hooks` seat; the merge keeps all of them.
       hooks: {
@@ -297,6 +328,7 @@ export function registerUi(ctx: ClientContext): void {
         ...pipelineSource.hooks,
         ...routeSource.hooks,
         ...teamConfigSource.hooks,
+        ...promptSource.hooks,
         ...policySource.hooks,
       },
     }),
