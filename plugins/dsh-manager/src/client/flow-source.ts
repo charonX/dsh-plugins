@@ -5,6 +5,7 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   AgentKindOption,
+  DiscoveredPlaybook,
   DiscoveredSkill,
   FlowDef,
   FlowImportPlaybookInput,
@@ -19,6 +20,7 @@ export interface FlowSnapshot {
   readonly status: 'loading' | 'ready' | 'error'
   readonly flows?: readonly FlowDef[]
   readonly skills?: readonly DiscoveredSkill[]
+  readonly playbooks?: readonly DiscoveredPlaybook[]
   readonly busy?: boolean
   readonly actionError?: string
 }
@@ -41,6 +43,7 @@ export interface FlowInjected {
   readonly onFlowImportPlaybook: (input: FlowImportPlaybookInput) => Promise<PlaybookCompileOutcome>
   readonly onFlowSyncPlaybook: (flowId: string) => Promise<PlaybookCompileOutcome>
   readonly onSkillCatalogRefresh: () => Promise<void>
+  readonly onPlaybookCatalogRefresh: () => Promise<void>
   readonly onAgentKindOptions: (refresh?: boolean) => Promise<readonly AgentKindOption[]>
   readonly onModelOptions: () => Promise<readonly ModelProviderOptions[]>
   readonly onTeamConfigExportYaml: () => Promise<string | undefined>
@@ -64,6 +67,7 @@ export interface FlowSourceDependencies {
     error?: unknown
   }>
   readonly skillCatalog?: () => Promise<{ ok: boolean; value?: { readonly skills: readonly DiscoveredSkill[] } }>
+  readonly playbookCatalog?: () => Promise<{ ok: boolean; value?: { readonly playbooks: readonly DiscoveredPlaybook[] } }>
   readonly agentKindOptions?: (input?: { readonly refresh?: boolean }) => Promise<{ ok: boolean; value?: { readonly kinds: readonly AgentKindOption[] } }>
   readonly modelOptions?: () => Promise<{ ok: boolean; value?: { readonly providers: readonly ModelProviderOptions[] } }>
   readonly exportYaml?: () => Promise<{ ok: boolean; value?: { readonly yaml: string } }>
@@ -95,16 +99,19 @@ export function createFlowSource(
 
   const read = async (): Promise<void> => {
     try {
-      const [flowRes, skillRes] = await Promise.all([
+      const [flowRes, skillRes, playbookRes] = await Promise.all([
         deps.list(),
         deps.skillCatalog?.().catch(() => ({ ok: false, value: undefined })),
+        deps.playbookCatalog?.().catch(() => ({ ok: false, value: undefined })),
       ])
       const skills = skillRes?.ok && skillRes.value !== undefined ? skillRes.value.skills : snapshot.skills
+      const playbooks = playbookRes?.ok && playbookRes.value !== undefined ? playbookRes.value.playbooks : snapshot.playbooks
       if (flowRes.ok && flowRes.value !== undefined) {
         publish({
           status: 'ready',
           flows: flowRes.value.flows,
           ...(skills === undefined ? {} : { skills }),
+          ...(playbooks === undefined ? {} : { playbooks }),
           busy: false,
         })
       } else {
@@ -112,6 +119,7 @@ export function createFlowSource(
           status: snapshot.flows === undefined ? 'error' : 'ready',
           ...(snapshot.flows === undefined ? {} : { flows: snapshot.flows }),
           ...(skills === undefined ? {} : { skills }),
+          ...(playbooks === undefined ? {} : { playbooks }),
           busy: false,
           ...(flowRes.error === undefined ? {} : { actionError: errorText(flowRes.error) }),
         })
@@ -121,6 +129,7 @@ export function createFlowSource(
         status: snapshot.flows === undefined ? 'error' : 'ready',
         ...(snapshot.flows === undefined ? {} : { flows: snapshot.flows }),
         ...(snapshot.skills === undefined ? {} : { skills: snapshot.skills }),
+        ...(snapshot.playbooks === undefined ? {} : { playbooks: snapshot.playbooks }),
         busy: false,
         actionError: errorText(error),
       })
@@ -165,6 +174,17 @@ export function createFlowSource(
         }
       } catch {
         // Leave existing skill list intact on transient failure.
+      }
+    },
+    async onPlaybookCatalogRefresh() {
+      if (deps.playbookCatalog === undefined) return
+      try {
+        const res = await deps.playbookCatalog()
+        if (res.ok && res.value !== undefined) {
+          publish({ ...snapshot, playbooks: res.value.playbooks })
+        }
+      } catch {
+        // Leave existing playbook catalog intact on transient failure.
       }
     },
     async onFlowAdd(input) {

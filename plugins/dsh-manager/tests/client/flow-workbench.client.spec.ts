@@ -4,7 +4,7 @@ import { fireEvent, screen } from '@testing-library/react'
 import { describe, expect, test, vi } from 'vitest'
 import { SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { DiscoveredSkill, FlowDef } from '../../src/flow/flow-ir.ts'
+import type { DiscoveredPlaybook, DiscoveredSkill, FlowDef } from '../../src/flow/flow-ir.ts'
 import { registerUi, PANEL_ID, UI_INJECT } from '../../src/client/register.ts'
 import { settingsStubs } from './settings-stubs.ts'
 
@@ -145,8 +145,22 @@ describe('FlowWorkbench & SkillCatalog UI', () => {
       return { ok: true, value: { flow, status: { filePath: '/tmp/team-config.yaml', revision: 2, loadedAt: 2 } } }
     })
 
+    const playbooks: DiscoveredPlaybook[] = [
+      {
+        id: 'knowledge-creation',
+        name: '知识创作',
+        when: 'Writing articles and outlines',
+        workspaceMode: 'in-place',
+        source: 'workspace',
+        ref: 'skills/playbooks/knowledge-creation.md',
+        path: 'skills/playbooks/knowledge-creation.md',
+        hash: 'feedface12345678',
+      },
+    ]
+
     const { runtime, view } = await mountTeamPage({
       flowList: vi.fn().mockImplementation(async () => ({ ok: true, value: { flows: [...flows] } })),
+      playbookCatalog: vi.fn().mockResolvedValue({ ok: true, value: { playbooks } }),
       flowPresetApply,
     })
 
@@ -155,7 +169,8 @@ describe('FlowWorkbench & SkillCatalog UI', () => {
     })
     fireEvent.click(view.view.getByRole('button', { name: 'Copy from preset' }))
     await vi.waitFor(() => {
-      expect(screen.getByText('知识创作与内容生产')).toBeTruthy()
+      expect(screen.getByText('知识创作')).toBeTruthy()
+      expect(screen.getByText('Workspace')).toBeTruthy()
     })
     const copyButtons = screen.getAllByRole('button', { name: 'Copy as flow' })
     fireEvent.click(copyButtons[copyButtons.length - 1]!)

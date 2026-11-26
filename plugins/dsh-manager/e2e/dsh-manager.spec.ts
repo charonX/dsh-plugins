@@ -243,15 +243,23 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     await page.locator('#dsh-manager-tab-team').click()
     await expect(page.locator('#dsh-manager-panel-team')).toBeVisible()
 
-    // Apply knowledge-creation preset
+    // Fresh DSH_HOME automatically compiles and displays the default Playbook flows.
+    await page.locator('#dsh-team-workbench-mode-list').click()
+    await expect(page.locator('#dsh-team-flows')).toContainText(/通用功能开发/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/通用缺陷修复/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/知识创作/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/架构重构/)
+    await expect(page.locator('#dsh-team-flows')).toContainText('/writing')
+
+    // Apply preset from discovered Playbook catalog (creates an editable `(2)` copy).
     await page.getByRole('button', { name: /从预设复制|Copy from preset/ }).click()
     const presetDialog = page.getByRole('dialog')
     await expect(presetDialog).toBeVisible()
+    await expect(presetDialog).toContainText(/知识创作|Knowledge/)
     await presetDialog.getByRole('button', { name: /一键复制为流程|Copy as flow/ }).last().click()
     await expect(presetDialog).toBeHidden()
 
-    await page.locator('#dsh-team-workbench-mode-list').click()
-    await expect(page.locator('#dsh-team-flows')).toContainText(/知识创作|Knowledge Creation/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/\(2\)/)
 
     // Import & compile a Markdown Playbook once into Flow IR
     await page.getByRole('button', { name: /从 Playbook 识别|Import Playbook/ }).click()
@@ -295,8 +303,8 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
       await page.locator('#dsh-team-workbench-mode-list').click()
     }
 
-    // Clean up both flows
-    for (const label of ['E2E Poteto Flow', '知识创作']) {
+    // Clean up only the E2E-added flows, keeping auto-seeded defaults intact.
+    for (const label of ['E2E Poteto Flow', '(2)']) {
       const card = page.locator('#dsh-team-flows article', { hasText: label }).first()
       if ((await card.count()) > 0) {
         await card.getByRole('button', { name: /^(删除|Remove)$/ }).click()

@@ -58,6 +58,7 @@ import {
   flowSyncPlaybookInputSchema,
   flowUpdateInputSchema,
   type AgentKindOption,
+  type DiscoveredPlaybook,
   type DiscoveredSkill,
   type FlowDef,
   type FlowIdInput,
@@ -156,6 +157,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly status: TeamConfigStatusView
     }>>
     skillCatalog: (input?: { readonly cwd?: string }) => Promise<RemoteResult<{ readonly skills: readonly DiscoveredSkill[] }>>
+    playbookCatalog: (input?: { readonly cwd?: string }) => Promise<RemoteResult<{ readonly playbooks: readonly DiscoveredPlaybook[] }>>
     modelOptions: () => Promise<RemoteResult<{ readonly providers: readonly ModelProviderOptions[] }>>
     agentKindOptions: (input?: { readonly refresh?: boolean }) => Promise<RemoteResult<{ readonly kinds: readonly AgentKindOption[] }>>
     teamConfigStatus: () => Promise<RemoteResult<TeamConfigStatusView>>
@@ -1253,6 +1255,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
         parameters: [{
           name: 'rawInput',
           source: 'json',
+          acceptsUndefined: true,
           codec: { mode: 'strict', typeSymbol: 'SkillCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
           strictCodec: { mode: 'strict', typeSymbol: 'SkillCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
         }],
@@ -1261,6 +1264,23 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           typeSymbol: 'SkillCatalogResult',
           create: () => z.any(),
           decode: value => value as { readonly skills: readonly DiscoveredSkill[] },
+        },
+      },
+      'dshManager/playbookCatalog': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          acceptsUndefined: true,
+          codec: { mode: 'strict', typeSymbol: 'PlaybookCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
+          strictCodec: { mode: 'strict', typeSymbol: 'PlaybookCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'PlaybookCatalogResult',
+          create: () => z.any(),
+          decode: value => value as { readonly playbooks: readonly DiscoveredPlaybook[] },
         },
       },
       'dshManager/modelOptions': {
@@ -1280,6 +1300,7 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
         parameters: [{
           name: 'rawInput',
           source: 'json',
+          acceptsUndefined: true,
           codec: { mode: 'strict', typeSymbol: 'AgentKindOptionsInput', create: () => z.object({ refresh: z.boolean().optional() }).optional() },
           strictCodec: { mode: 'strict', typeSymbol: 'AgentKindOptionsInput', create: () => z.object({ refresh: z.boolean().optional() }).optional() },
         }],

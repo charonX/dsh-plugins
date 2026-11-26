@@ -16,7 +16,9 @@ import { bootTestProfile } from './boot-test-profile.ts'
 
 const migrateHome = await mkdtemp(join(tmpdir(), 'dsh-team-migrate-'))
 const watchHome = await mkdtemp(join(tmpdir(), 'dsh-team-watch-'))
-const dirsToClean = [migrateHome, watchHome]
+const seedHome = await mkdtemp(join(tmpdir(), 'dsh-team-seed-'))
+const seedWs = await mkdtemp(join(tmpdir(), 'dsh-team-ws-'))
+const dirsToClean = [migrateHome, watchHome, seedHome, seedWs]
 
 async function writeOverlay(home: string, port: number): Promise<string> {
   const overlayPath = join(home, 'team-config.patch.yml')
@@ -248,5 +250,90 @@ test('hot reloads external YAML edits, keeps last valid state on errors, and rec
     expect(ctx.dshManagerFlow.require('standard').steps[1]?.onFail).toBe('draft')
   } finally {
     await ctx.fiber.dispose()
+  }
+}, 300_000)
+
+test('auto-seeds default Playbooks on fresh boot with workspace priority and never overwrites user clears', async () => {
+  await mkdir(join(seedWs, 'skills', 'playbooks'), { recursive: true })
+  await mkdir(join(seedWs, 'skills', 'writing'), { recursive: true })
+  await writeFile(join(seedWs, 'skills', 'writing', 'SKILL.md'), '---\nname: writing\ndescription: writing skill\n---\n', 'utf8')
+  await writeFile(join(seedWs, 'skills', 'playbooks', 'bug-fix.md'), [
+    '---',
+    'id: bug-fix',
+    'name: 工作区覆盖缺陷修复',
+    'when: workspace overridden bug fix criteria',
+    'workspaceMode: in-place',
+    '---',
+    '1. **复现确认** {#repro} (`bug-fix`, 只读): reproduce reliably.',
+    '2. **修复补测** {#fix} (`tdd`): fix cleanly.',
+    '3. **复验关闭** {#verify} (`verify`, 只读, 失败回退: fix): check green.',
+  ].join('\n'), 'utf8')
+
+  const overlayPath = join(seedHome, 'seed.patch.yml')
+  await writeFile(overlayPath, [
+    '- id: webserver',
+    '  config:',
+    '    host: 127.0.0.1',
+    '    port: 3112',
+    '    compression: gzip',
+    '    compressionLevel: 1',
+    '    compressionThresholdBytes: 1024',
+    '- insert:',
+    '    - id: dsh-manager',
+    '      name: "@charonx/dsh-manager"',
+    '      config:',
+    '        steward:',
+    '          tickMs: 3600000',
+    '        executor:',
+    '          tickMs: 3600000',
+    `          cwd: ${JSON.stringify(seedWs)}`,
+    '',
+  ].join('\n'), 'utf8')
+
+  // Boot 1: brand-new home auto-seeds 4 default Playbooks, preferring workspace bug-fix override.
+  const first = await bootTestProfile({
+    binName: 'dsh-manager-test',
+    profile: 'web',
+    overlayPaths: [overlayPath],
+    home: seedHome,
+  })
+  let yamlPath = ''
+  try {
+    await waitUntilService(first, 'dshManagerFlow')
+    yamlPath = first.dshManagerTeamConfig.status().filePath
+    const flows = first.dshManagerFlow.list()
+    expect(flows.map(f => f.id)).toEqual(['code-dev', 'bug-fix', 'knowledge-creation', 'refactoring'])
+
+    const wsBugFix = flows.find(f => f.id === 'bug-fix')!
+    expect(wsBugFix.name).toBe('工作区覆盖缺陷修复')
+    expect(wsBugFix.workspaceMode).toBe('in-place')
+    expect(wsBugFix.source?.ref).toBe('skills/playbooks/bug-fix.md')
+    expect(wsBugFix.steps.find(s => s.id === 'verify')?.onFail).toBe('fix')
+
+    const builtinKnowledge = flows.find(f => f.id === 'knowledge-creation')!
+    expect(builtinKnowledge.source?.ref).toBe('builtin:knowledge-creation.md')
+
+    // User removes all flows (opts into single-step generic execution).
+    for (const f of [...flows]) {
+      await first.dshManagerFlow.flowRemove({ flowId: f.id })
+    }
+    expect(first.dshManagerFlow.list()).toEqual([])
+  } finally {
+    await first.fiber.dispose()
+  }
+
+  // Boot 2: existing `team-config.yaml` with `flows: []` is respected and never re-seeded.
+  const second = await bootTestProfile({
+    binName: 'dsh-manager-test',
+    profile: 'web',
+    overlayPaths: [overlayPath],
+    home: seedHome,
+  })
+  try {
+    await waitUntilService(second, 'dshManagerFlow')
+    expect(second.dshManagerFlow.list()).toEqual([])
+    expect(await readFile(yamlPath, 'utf8')).toContain('flows: []')
+  } finally {
+    await second.fiber.dispose()
   }
 }, 300_000)

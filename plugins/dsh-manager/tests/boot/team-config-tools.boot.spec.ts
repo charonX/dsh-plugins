@@ -62,6 +62,9 @@ test('global MCP tools inspect and atomically replace Flow IR config while guard
     expect(getTool).toBeDefined()
     expect(replaceTool).toBeDefined()
 
+    const seededIds = ctx.dshManagerFlow.list().map(f => f.id)
+    expect(seededIds).toEqual(['code-dev', 'bug-fix', 'knowledge-creation', 'refactoring'])
+
     // 1. Add a Flow IR entry via service API with third-party agent + skill mounts.
     const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Dev Line',
@@ -74,7 +77,7 @@ test('global MCP tools inspect and atomically replace Flow IR config while guard
       ],
     })
     expect(flow).toMatchObject({ name: 'Dev Line', workspaceMode: 'worktree' })
-    expect(ctx.dshManagerFlow.list()).toHaveLength(1)
+    expect(ctx.dshManagerFlow.list()).toHaveLength(seededIds.length + 1)
 
     // 2. Replace with broken Flow IR (dangling onFail step id) fails atomically without losing existing valid state.
     const badReplace = await replaceTool!.execute({
@@ -94,7 +97,7 @@ test('global MCP tools inspect and atomically replace Flow IR config while guard
       ].join('\n'),
     }, {} as never)
     expect(badReplace).toMatchObject({ ok: false })
-    expect(ctx.dshManagerFlow.list().map(f => f.id)).toEqual([flow.id])
+    expect(ctx.dshManagerFlow.list().map(f => f.id)).toEqual([...seededIds, flow.id])
 
     // 3. Replace structurally with valid flows array succeeds and persists to disk.
     const goodReplace = await replaceTool!.execute({

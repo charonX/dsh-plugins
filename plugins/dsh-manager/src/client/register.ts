@@ -230,10 +230,13 @@ export function registerUi(ctx: ClientContext): void {
       ? { syncPlaybook: async input => await dsh.flowSyncPlaybook(input) }
       : {}),
     ...(typeof dsh.skillCatalog === 'function'
-      ? { skillCatalog: async () => await dsh.skillCatalog() }
+      ? { skillCatalog: async () => await dsh.skillCatalog({}) }
+      : {}),
+    ...(typeof dsh.playbookCatalog === 'function'
+      ? { playbookCatalog: async () => await dsh.playbookCatalog({}) }
       : {}),
     ...(typeof dsh.agentKindOptions === 'function'
-      ? { agentKindOptions: async input => await dsh.agentKindOptions(input) }
+      ? { agentKindOptions: async input => await dsh.agentKindOptions(input ?? {}) }
       : {}),
     ...(typeof dsh.modelOptions === 'function'
       ? { modelOptions: async () => await dsh.modelOptions() }

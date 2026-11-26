@@ -651,13 +651,22 @@ export class DshManagerBundle extends Service {
     await this.ctx.plugin(DshManagerPolicy)
     // The UI settings (panel display name) persist independently of the board.
     await this.ctx.plugin(DshManagerSettings)
+    const playbookCwd = this.config.executor?.cwd
     // Declarative YAML SSOT for Flow IR (hot-reloading).
     await this.ctx.plugin(
       DshManagerTeamConfig,
-      this.config.teamConfigPath === undefined ? undefined : { filePath: this.config.teamConfigPath },
+      this.config.teamConfigPath === undefined && playbookCwd === undefined
+        ? undefined
+        : {
+            ...(this.config.teamConfigPath === undefined ? {} : { filePath: this.config.teamConfigPath }),
+            ...(playbookCwd === undefined ? {} : { playbookCwd }),
+          },
     )
     // Flow IR management, Skill catalog discovery, and Playbook compilation.
-    await this.ctx.plugin(DshManagerFlow)
+    await this.ctx.plugin(
+      DshManagerFlow,
+      playbookCwd === undefined ? undefined : { playbookCwd },
+    )
     await this.ctx.plugin(DshManagerBoard, this.config.executor?.cwd === undefined ? undefined : { flowsCwd: this.config.executor.cwd })
     // The Steward drives evals through the agent runtime; it reads the board's
     // eval store and the sources' trigger facts (both mounted above).

@@ -160,121 +160,23 @@ export const flowUpdateInputSchema = z.object({
 })
 export type FlowUpdateInput = z.infer<typeof flowUpdateInputSchema>
 
-export const PRESET_IDS = ['code-dev', 'bug-fix', 'knowledge-creation'] as const
-export type PresetId = (typeof PRESET_IDS)[number]
+/** Workflow Playbook / preset identifier (e.g. `code-dev`, `bug-fix`, `knowledge-creation`, `refactoring`, or any workspace `*.md`). */
+export type PresetId = string
 
-export interface FlowPresetDef {
-  readonly id: PresetId
+/** Discovered Playbook metadata exported to client & steward without filesystem paths leaking into client code. */
+export interface DiscoveredPlaybook {
+  readonly id: string
   readonly name: string
-  readonly summary: string
   readonly when: string
   readonly workspaceMode: WorkspaceMode
-  readonly steps: readonly FlowStepDef[]
+  readonly source: 'workspace' | 'builtin'
+  readonly ref: string
+  readonly path: string
+  readonly hash: string
 }
 
-/** Built-in domain-agnostic starter presets (coding + knowledge creation). */
-export const FLOW_PRESETS: readonly FlowPresetDef[] = [
-  {
-    id: 'code-dev',
-    name: '通用代码开发',
-    summary: '梳理边界 → TDD 实现 → 只读审查(失败打回) → 交付确认',
-    when: '新功能开发、模块重构、架构调整或代码改造任务',
-    workspaceMode: 'worktree',
-    steps: [
-      {
-        id: 'align',
-        name: '边界梳理',
-        skills: ['how', 'align'],
-        goal: '理清模块边界、接缝与行为级验收标准',
-        readOnly: true,
-      },
-      {
-        id: 'implement',
-        name: '实现与测试',
-        skills: ['tdd', 'verify'],
-        goal: '先写行为测试再最小实现，并实跑验证通过',
-      },
-      {
-        id: 'review',
-        name: '只读审查',
-        skills: ['code-review', 'verify'],
-        goal: '只读核验 Spec/Standards 与门禁实跑结果',
-        readOnly: true,
-        onFail: 'implement',
-      },
-      {
-        id: 'deliver',
-        name: '交付收口',
-        skills: ['ship-pr'],
-        goal: '按目标仓库规范整理提交与交付说明',
-        humanConfirm: true,
-      },
-    ],
-  },
-  {
-    id: 'bug-fix',
-    name: '通用缺陷修复',
-    summary: '真实复现 → 根因修复 → 独立回归验证(失败打回)',
-    when: '线上故障、异常报错、功能回归或测试失败问题修复',
-    workspaceMode: 'worktree',
-    steps: [
-      {
-        id: 'repro',
-        name: '真实表面复现',
-        skills: ['bug-fix', 'verify'],
-        goal: '在真实表面稳定复现缺陷并核查测试盲区',
-        readOnly: true,
-      },
-      {
-        id: 'fix',
-        name: '根因修复',
-        skills: ['bug-fix', 'tdd'],
-        goal: '先补红灯回归测试，再实施最小根因修复',
-      },
-      {
-        id: 'verify',
-        name: '独立回归验证',
-        skills: ['code-review', 'verify'],
-        goal: '只读复测确认原问题已解决且无阻塞回归',
-        readOnly: true,
-        onFail: 'fix',
-      },
-    ],
-  },
-  {
-    id: 'knowledge-creation',
-    name: '知识创作与内容生产',
-    summary: '资料梳理 → 撰写正文 → 质量与规范自检(失败打回)',
-    when: '知识库笔记整理、主题调研综述、文章或内容草稿创作',
-    workspaceMode: 'in-place',
-    steps: [
-      {
-        id: 'research',
-        name: '资料梳理与立意',
-        skills: ['how'],
-        goal: '检索既有笔记与相关资料，梳理结构化大纲与核心论点',
-        readOnly: true,
-      },
-      {
-        id: 'draft',
-        name: '撰写正文',
-        skills: [],
-        goal: '遵循目录与行文规范撰写正文、补充元数据与关联链接',
-      },
-      {
-        id: 'check',
-        name: '质量与规范自检',
-        skills: [],
-        goal: '核查事实准确性、结构清晰度与知识库写作禁忌',
-        readOnly: true,
-        onFail: 'draft',
-      },
-    ],
-  },
-]
-
 export const flowPresetApplyInputSchema = z.object({
-  presetId: z.enum(PRESET_IDS),
+  presetId: z.string().trim().min(1).max(80),
 })
 export type FlowPresetApplyInput = z.infer<typeof flowPresetApplyInputSchema>
 
@@ -294,10 +196,6 @@ export const flowSyncPlaybookInputSchema = z.object({
 })
 export type FlowSyncPlaybookInput = z.infer<typeof flowSyncPlaybookInputSchema>
 
-export function getFlowPreset(presetId: string): FlowPresetDef | undefined {
-  return FLOW_PRESETS.find(preset => preset.id === presetId)
-}
-
 function uniqueFlowName(baseName: string, existingNames: ReadonlySet<string>): string {
   if (!existingNames.has(baseName)) return baseName
   let idx = 2
@@ -307,25 +205,20 @@ function uniqueFlowName(baseName: string, existingNames: ReadonlySet<string>): s
   return `${baseName} (${idx})`
 }
 
-/** Materialize one read-only preset onto `flows[]` as an independent editable flow. */
-export function materializeFlowPreset(
+/** Materialize an independent editable `FlowDef` copy from a compiled Playbook flow. */
+export function materializeCompiledPlaybook(
   existingFlows: readonly FlowDef[],
-  presetId: PresetId,
+  compiled: FlowDef,
   now = Date.now(),
   idFactory: (prefix: string) => string = prefix => `${prefix}-${crypto.randomUUID()}`,
 ): FlowDef {
-  const preset = getFlowPreset(presetId)
-  if (preset === undefined) {
-    throw new Error(`unknown preset "${presetId}"`)
-  }
   const existingNames = new Set(existingFlows.map(flow => flow.name))
   return flowDefSchema.parse({
+    ...compiled,
     id: idFactory('flow'),
-    name: uniqueFlowName(preset.name, existingNames),
+    name: uniqueFlowName(compiled.name, existingNames),
     enabled: true,
-    when: preset.when,
-    workspaceMode: preset.workspaceMode,
-    steps: preset.steps.map(step => ({ ...step, skills: [...step.skills] })),
+    steps: compiled.steps.map(step => ({ ...step, skills: [...step.skills] })),
     createdAt: now,
     updatedAt: now,
   })
