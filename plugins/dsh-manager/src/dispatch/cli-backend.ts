@@ -8,8 +8,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentKind } from '../crew/crew-core.ts'
-import type { AgentKindOption } from '../crew/wire-types.ts'
+import type { AgentKind, AgentKindOption } from '../flow/flow-ir.ts'
 import type { ReportActivity, ReportActivityCategory } from './dispatch-core.ts'
 
 /** External CLI backends (every `AgentKind` except the harness `builtin` session). */

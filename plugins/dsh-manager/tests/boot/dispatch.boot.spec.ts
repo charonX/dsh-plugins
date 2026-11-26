@@ -203,12 +203,13 @@ test(
     const source = await ctx.dshManagerSources.sourceAdd({ connectionId: connection.id })
     await ctx.dshManagerSources.sourcePoll({ id: source.id })
     await ctx.dshManagerSteward.runPending()
-    const jiraTickets = (await ctx.dshManagerBoard.ticketList()).tickets
+    const jiraTickets = [...(await ctx.dshManagerBoard.ticketList()).tickets].sort((a, b) => a.createdAt - b.createdAt)
     expect(jiraTickets, 'jira tickets minted').toHaveLength(2)
 
-    // Dispatch the first ticket: the effects queue starts its Executor Session.
-    const dispatchA = await ctx.dshManagerExecutor.dispatchTicket({ ticketId: jiraTickets[0]!.id })
-    expect(dispatchA.state).toBe('queued')
+    // First ticket is queued/running (auto-dispatched by single-step fallback or explicit dispatch).
+    const existingA = (await dispatchesOf(ctx, jiraTickets[0]!.id))[0]
+    const dispatchA = existingA ?? await ctx.dshManagerExecutor.dispatchTicket({ ticketId: jiraTickets[0]!.id })
+    expect(['queued', 'running']).toContain(dispatchA.state)
     await vi.waitFor(async () => {
       const running = await dispatchesOf(ctx, jiraTickets[0]!.id)
       expect(running[0]?.state).toBe('running')
@@ -216,7 +217,9 @@ test(
     })
 
     // The second dispatch exceeds the ceiling (1) and queues behind it.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: jiraTickets[1]!.id })
+    if ((await dispatchesOf(ctx, jiraTickets[1]!.id)).length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: jiraTickets[1]!.id })
+    }
     await ctx.dshManagerExecutor.pump()
     expect((await dispatchesOf(ctx, jiraTickets[1]!.id))[0]?.state).toBe('queued')
 
@@ -268,7 +271,9 @@ test(
     const manualTicket = (await ctx.dshManagerBoard.ticketList()).tickets
       .find(ticket => ticket.externalKey?.startsWith('manual-'))
     expect(manualTicket).toBeDefined()
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: manualTicket!.id })
+    if ((await dispatchesOf(ctx, manualTicket!.id)).length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: manualTicket!.id })
+    }
     await vi.waitFor(async () => {
       expect((await dispatchesOf(ctx, manualTicket!.id))[0]?.state).toBe('running')
     })

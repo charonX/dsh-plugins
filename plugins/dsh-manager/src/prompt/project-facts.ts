@@ -1,12 +1,20 @@
 /**
- * Host-only project documentation probe for dynamic prompt template variables
- * (`project.agentsMd`, `project.gitFlow`, `project.verifyDocs`).
+ * Host-only project documentation probe for dynamic prompt context
+ * (`AGENTS.md`/`CLAUDE.md`, `docs/git-flow.md`, `docs/verify/README.md`).
  */
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { ProjectLandingFacts } from '../dispatch/landing-discovery.ts'
-import type { ProjectFactsSnapshot } from './prompt-vars.ts'
+
+/** Probed documentation and repository facts for one target workspace. */
+export interface ProjectFactsSnapshot {
+  readonly root: string
+  readonly agentsMd?: string
+  readonly gitFlow?: string
+  readonly verifyDocs?: string
+  readonly landingFacts?: ProjectLandingFacts
+}
 
 const MAX_VAR_DOC_CHARS = 2000
 

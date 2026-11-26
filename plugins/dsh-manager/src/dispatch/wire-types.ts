@@ -4,7 +4,7 @@
  */
 import { z as zod } from 'zod'
 import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchPromptRecord, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
-import type { AgentKind } from '../crew/crew-core.ts'
+import type { AgentKind } from '../flow/flow-ir.ts'
 import type { TicketView } from '../board-domain.ts'
 
 /** One executor report as the wire sees it. */

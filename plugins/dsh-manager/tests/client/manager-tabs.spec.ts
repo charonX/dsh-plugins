@@ -73,7 +73,7 @@ describe('ManagerPage 5-tab navigation', () => {
   test('renders exactly 5 top-level tabs without briefings', async () => {
     const { runtime, view } = await mountManager()
     const tabs = view.view.getAllByRole('tab').map(el => el.textContent?.trim())
-    expect(tabs).toEqual(['Board', 'Team', 'Policy', 'Monitor', 'Settings'])
+    expect(tabs).toEqual(['Board', 'Team & Flows', 'Policy', 'Monitor', 'Settings'])
     expect(view.container.querySelector('#dsh-manager-tab-briefings')).toBeNull()
     expect(view.container.querySelector('#dsh-manager-tab-monitor')).not.toBeNull()
     await runtime.dispose()

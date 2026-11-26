@@ -1,9 +1,8 @@
 /**
- * Boot-tier integration spec for conversational & MCP team-config tools (Slice 3):
- * verifies `dsh_manager_team_config_get`, `dsh_manager_team_member_upsert`,
- * `dsh_manager_flow_config_upsert`, and `dsh_manager_team_config_replace`
- * mutate `team-config.yaml` atomically, reject invalid writes cleanly, and
- * hot-apply into DshManagerCrew / DshManagerPipeline / DshManagerRoute.
+ * Boot-tier integration spec for global Flow IR config MCP tools:
+ * - `dsh_manager_team_config_get`
+ * - `dsh_manager_team_config_replace`
+ * Plus `ctx.dshManagerFlow` CRUD persisting to `team-config.yaml`.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -13,10 +12,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '../../src/index.ts'
 import { bootTestProfile } from './boot-test-profile.ts'
 
-const toolsHome = await mkdtemp(join(tmpdir(), 'dsh-team-tools-'))
+const toolsHome = await mkdtemp(join(tmpdir(), 'dsh-team-config-tools-'))
 
 async function writeOverlay(home: string, port: number): Promise<string> {
-  const overlayPath = join(home, 'team-tools.patch.yml')
+  const overlayPath = join(home, 'tools.patch.yml')
   await writeFile(overlayPath, [
     '- id: webserver',
     '  config:',
@@ -28,11 +27,7 @@ async function writeOverlay(home: string, port: number): Promise<string> {
     '- insert:',
     '    - id: dsh-manager',
     '      name: "@charonx/dsh-manager"',
-    '      config:',
-    '        steward:',
-    '          tickMs: 3600000',
-    '        executor:',
-    '          tickMs: 3600000',
+    '      config: {}',
     '',
   ].join('\n'))
   return overlayPath
@@ -51,8 +46,8 @@ afterAll(async () => {
   await rm(toolsHome, { recursive: true, force: true }).catch(() => {})
 })
 
-test('global dsh_manager_* team/flow tools read, upsert, replace atomically, and write team-config.yaml', async () => {
-  const overlayPath = await writeOverlay(toolsHome, 3101)
+test('global MCP tools inspect and atomically replace Flow IR config while guarding broken updates', async () => {
+  const overlayPath = await writeOverlay(toolsHome, 3106)
   const ctx = await bootTestProfile({
     binName: 'dsh-manager-test',
     profile: 'web',
@@ -60,73 +55,76 @@ test('global dsh_manager_* team/flow tools read, upsert, replace atomically, and
     home: toolsHome,
   })
   try {
-    await waitUntilService(ctx, 'dshManagerRoute')
+    await waitUntilService(ctx, 'dshManagerFlow')
 
     const getTool = ctx.tools.get('dsh_manager_team_config_get')
-    const memberTool = ctx.tools.get('dsh_manager_team_member_upsert')
-    const flowTool = ctx.tools.get('dsh_manager_flow_config_upsert')
     const replaceTool = ctx.tools.get('dsh_manager_team_config_replace')
     expect(getTool).toBeDefined()
-    expect(memberTool).toBeDefined()
-    expect(flowTool).toBeDefined()
     expect(replaceTool).toBeDefined()
 
-    // 1. Add crew member via tool with custom slug.
-    const addedMember = await memberTool!.execute({
-      action: 'add',
-      memberId: 'coder-1',
-      name: 'Coder One',
-      role: 'write clean vertical slices',
-      agentKind: 'claude-code',
-    }, {} as never)
-    expect(addedMember).toMatchObject({ ok: true, action: 'add', member: { id: 'coder-1', agentKind: 'claude-code' } })
-
-    // 2. Add pipeline + route rule via flow tool.
-    const addedPipe = await flowTool!.execute({
-      target: 'pipeline',
-      action: 'add',
-      id: 'pipe-dev',
+    // 1. Add a Flow IR entry via service API with third-party agent + skill mounts.
+    const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Dev Line',
-      stages: [{ memberId: 'coder-1', instruction: 'implement feature' }],
-    }, {} as never)
-    expect(addedPipe).toMatchObject({ ok: true, target: 'pipeline', record: { id: 'pipe-dev' } })
+      when: 'new feature requests',
+      workspaceMode: 'worktree',
+      steps: [
+        { id: 'plan', name: 'Plan', skills: ['how'], readOnly: true },
+        { id: 'implement', name: 'Implement', skills: ['tdd'], agent: { kind: 'claude-code' } },
+        { id: 'review', name: 'Review', skills: ['code-review'], readOnly: true, onFail: 'implement' },
+      ],
+    })
+    expect(flow).toMatchObject({ name: 'Dev Line', workspaceMode: 'worktree' })
+    expect(ctx.dshManagerFlow.list()).toHaveLength(1)
 
-    const addedRoute = await flowTool!.execute({
-      target: 'route',
-      action: 'add',
-      id: 'route-dev',
-      condition: 'new feature requests',
-      pipelineId: 'pipe-dev',
-    }, {} as never)
-    expect(addedRoute).toMatchObject({ ok: true, target: 'route', record: { id: 'route-dev' } })
-
-    // 3. Guard: removing referenced member without force is rejected cleanly.
-    const blockedRemove = await memberTool!.execute({ action: 'remove', memberId: 'coder-1' }, {} as never)
-    expect(blockedRemove).toMatchObject({ ok: false })
-    expect(ctx.dshManagerCrew.list()).toHaveLength(1)
-
-    // 4. Replace with broken YAML fails atomically without losing existing valid state.
+    // 2. Replace with broken Flow IR (dangling onFail step id) fails atomically without losing existing valid state.
     const badReplace = await replaceTool!.execute({
-      yaml: 'crew: []\npipelines:\n  - id: p\n    name: P\n    stages:\n      - memberId: missing\n',
+      yaml: [
+        'version: 3',
+        'flows:',
+        '  - id: broken',
+        '    name: Broken',
+        '    when: any',
+        '    workspaceMode: in-place',
+        '    steps:',
+        '      - id: s1',
+        '        name: Step 1',
+        '        skills: []',
+        '        onFail: nonexistent',
+        '',
+      ].join('\n'),
     }, {} as never)
     expect(badReplace).toMatchObject({ ok: false })
-    expect(ctx.dshManagerCrew.list().map(m => m.id)).toEqual(['coder-1'])
+    expect(ctx.dshManagerFlow.list().map(f => f.id)).toEqual([flow.id])
 
-    // 5. Read back full snapshot + YAML.
+    // 3. Replace structurally with valid flows array succeeds and persists to disk.
+    const goodReplace = await replaceTool!.execute({
+      flows: [
+        {
+          id: 'flow-knowledge',
+          name: 'Knowledge Writing',
+          when: 'essay and docs creation',
+          workspaceMode: 'in-place',
+          enabled: true,
+          steps: [
+            { id: 'outline', name: 'Outline', skills: ['how'], readOnly: true },
+            { id: 'draft', name: 'Draft', skills: [] },
+          ],
+        },
+      ],
+    }, {} as never)
+    expect(goodReplace).toMatchObject({ ok: true, counts: { flows: 1 } })
+
+    // 4. Read back full snapshot + YAML.
     const snapshot = await getTool!.execute({ includeYaml: true }, {} as never) as {
-      crew: unknown[]
-      pipelines: unknown[]
-      routes: unknown[]
+      flows: unknown[]
       yaml: string
     }
-    expect(snapshot.crew).toHaveLength(1)
-    expect(snapshot.pipelines).toHaveLength(1)
-    expect(snapshot.routes).toHaveLength(1)
-    expect(snapshot.yaml).toContain('coder-1')
+    expect(snapshot.flows).toHaveLength(1)
+    expect(snapshot.yaml).toContain('flow-knowledge')
 
     const onDisk = await readFile(ctx.dshManagerTeamConfig.status().filePath, 'utf8')
-    expect(onDisk).toContain('pipe-dev')
-    expect(onDisk).toContain('route-dev')
+    expect(onDisk).toContain('flow-knowledge')
+    expect(onDisk).toContain('in-place')
   } finally {
     await ctx.fiber.dispose()
   }

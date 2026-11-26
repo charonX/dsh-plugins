@@ -1,21 +1,27 @@
-/** Unit tests for workspace skill discovery and prompt formatting. */
+/** Unit tests for unified workspace + host `ctx.skills` discovery and prompt formatting. */
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { discoverWorkspaceSkills, formatSkillPromptLines } from '../../src/dispatch/workspace-skills.ts'
+import { discoverWorkspaceSkills, formatSkillPromptLines, loadSkillMarkdown } from '../../src/dispatch/workspace-skills.ts'
 
 describe('workspace-skills', () => {
-  test('discovers skills from .agents/skills and .claude/skills without duplicates', async () => {
+  test('discovers skills from .dsh/skills, .agents/skills, .claude/skills, and host ctx.skills without duplicates', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-skills-'))
     try {
+      await mkdir(join(root, '.dsh', 'skills', 'how'), { recursive: true })
+      await writeFile(join(root, '.dsh', 'skills', 'how', 'SKILL.md'), [
+        '---',
+        'name: how',
+        'description: Read-only codebase exploration.',
+        '---',
+      ].join('\n'))
       await mkdir(join(root, '.agents', 'skills', 'tdd'), { recursive: true })
       await writeFile(join(root, '.agents', 'skills', 'tdd', 'SKILL.md'), [
         '---',
         'name: tdd',
         'description: Test-driven red-green-refactor workflow.',
         '---',
-        '# TDD',
       ].join('\n'))
       await mkdir(join(root, '.claude', 'skills', 'tdd'), { recursive: true })
       await writeFile(join(root, '.claude', 'skills', 'tdd', 'SKILL.md'), [
@@ -24,26 +30,53 @@ describe('workspace-skills', () => {
         'description: Duplicate entry should be ignored.',
         '---',
       ].join('\n'))
-      await mkdir(join(root, '.claude', 'skills', 'grill-me'), { recursive: true })
-      await writeFile(join(root, '.claude', 'skills', 'grill-me', 'SKILL.md'), '# Grill\nStress-test a plan before coding.\n')
 
-      const skills = await discoverWorkspaceSkills(root)
+      const skills = await discoverWorkspaceSkills(root, {
+        async list() {
+          return [
+            { name: 'tdd', description: 'Host duplicate should be ignored.' },
+            { name: 'writing-style', description: 'Knowledge base writing rules.' },
+          ]
+        },
+        async get(name) {
+          return name === 'writing-style'
+            ? { name, content: '# Writing Style\n1. Outline\n2. Draft\n' }
+            : undefined
+        },
+      })
+
       expect(skills).toEqual([
+        {
+          name: 'how',
+          description: 'Read-only codebase exploration.',
+          path: '.dsh/skills/how/SKILL.md',
+          source: 'workspace',
+        },
         {
           name: 'tdd',
           description: 'Test-driven red-green-refactor workflow.',
           path: '.agents/skills/tdd/SKILL.md',
+          source: 'workspace',
         },
         {
-          name: 'grill-me',
-          description: 'Stress-test a plan before coding.',
-          path: '.claude/skills/grill-me/SKILL.md',
+          name: 'writing-style',
+          description: 'Knowledge base writing rules.',
+          path: 'ctx.skills:writing-style',
+          source: 'host',
         },
       ])
-      const lines = formatSkillPromptLines(skills)
-      expect(lines[0]).toContain('Workspace skills available')
-      expect(lines[1]).toBe('- tdd (.agents/skills/tdd/SKILL.md): Test-driven red-green-refactor workflow.')
-      expect(lines[2]).toBe('- grill-me (.claude/skills/grill-me/SKILL.md): Stress-test a plan before coding.')
+
+      const lines = formatSkillPromptLines(skills, ['tdd'])
+      expect(lines[0]).toContain('Required step skills')
+      expect(lines[1]).toContain('- tdd (.agents/skills/tdd/SKILL.md)')
+      expect(lines[2]).toContain('Other available skills')
+      expect(lines.some(l => l.includes('writing-style'))).toBe(true)
+
+      const loaded = await loadSkillMarkdown('skill', 'writing-style', root, {
+        async list() { return [{ name: 'writing-style', description: 'Knowledge base writing rules.' }] },
+        async get(name) { return name === 'writing-style' ? { name, content: '# Writing Style\n' } : undefined },
+      })
+      expect(loaded.content).toContain('# Writing Style')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -78,6 +111,7 @@ describe('workspace-skills', () => {
           name: 'bug-fix',
           description: 'Repro first behavioral bug-fix loop.',
           path: join(root, 'skills', 'bug-fix', 'SKILL.md'),
+          source: 'workspace',
         },
       ])
     } finally {

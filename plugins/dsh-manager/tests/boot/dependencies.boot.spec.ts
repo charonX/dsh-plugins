@@ -124,15 +124,11 @@ test('blocks dependent tickets until prerequisite ends or dependency is manually
     ctx.llm.registerAdapter(['mock'], adapter)
 
     const now = Date.now()
-    const crew = await ctx.dshManagerCrew.crewAdd({
-      name: 'Implementer',
-      role: 'Implement approved work',
-      provider: 'mock',
-      model: 'executor-test',
-    })
-    const pipeline = await ctx.dshManagerPipeline.pipelineAdd({
+    const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Dev Flow',
-      stages: [{ memberId: crew.member.id, instruction: 'Implement and report ready.' }],
+      when: 'Implement approved work',
+      workspaceMode: 'in-place',
+      steps: [{ id: 'impl', name: 'Implementer', skills: [], goal: 'Implement and report ready.' }],
     })
     const ticketA = await ctx.dshManagerBoard.mintDirectTicket({
       title: 'Cleanup legacy settings',
@@ -149,14 +145,14 @@ test('blocks dependent tickets until prerequisite ends or dependency is manually
       dependsOn: [ticketB.id],
     }, now + 2)
     await ctx.dshManagerBoard.annotateFlow(ticketB.id, {
-      pipelineId: pipeline.pipeline.id,
-      pipelineName: pipeline.pipeline.name,
+      pipelineId: flow.id,
+      pipelineName: flow.name,
       stageIndex: 0,
       stageCount: 1,
     })
     await ctx.dshManagerBoard.annotateFlow(ticketC.id, {
-      pipelineId: pipeline.pipeline.id,
-      pipelineName: pipeline.pipeline.name,
+      pipelineId: flow.id,
+      pipelineName: flow.name,
       stageIndex: 0,
       stageCount: 1,
     })

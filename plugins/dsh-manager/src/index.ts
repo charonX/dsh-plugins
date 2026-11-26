@@ -21,9 +21,7 @@ import { createDomainReviewStore } from './review/storage-store.ts'
 import { DshManagerConnections } from './connections-service.ts'
 import { DshManagerChannel } from './channel-service.ts'
 import { DshManagerTeamConfig } from './team-config-service.ts'
-import { DshManagerCrew } from './crew-service.ts'
-import { DshManagerPipeline } from './pipeline-service.ts'
-import { DshManagerRoute } from './route-service.ts'
+import { DshManagerFlow } from './flow-service.ts'
 import { DshManagerEffects } from './effects-service.ts'
 import { pendingBacklog, POLICY_VERSION } from './evals/eval-core.ts'
 import { fanInViewOf } from './evals/subscription.ts'
@@ -545,13 +543,13 @@ export class DshManagerBoard extends TypertRemoteService {
     return this.projectTicket(record, batch, this.pendingAttentionTicketIds(), this.runningDispatchTicketIds(), this.ticketRecords())
   }
 
-  /** Resolve live pipeline name and stage count for in-flight projections; falls back cleanly if removed. */
+  /** Resolve live flow name and step count for in-flight projections; falls back cleanly if removed. */
   private resolveLivePipeline(pipelineId: string): { readonly name: string; readonly stageCount: number } | undefined {
-    const svc = this.ctx.get('dshManagerPipeline')
+    const svc = this.ctx.get('dshManagerFlow')
     if (svc === undefined) return undefined
     try {
-      const pipeline = svc.require(pipelineId)
-      return { name: pipeline.name, stageCount: pipeline.stages.length }
+      const flow = svc.require(pipelineId)
+      return { name: flow.name, stageCount: flow.steps.length }
     } catch {
       return undefined
     }
@@ -653,18 +651,13 @@ export class DshManagerBundle extends Service {
     await this.ctx.plugin(DshManagerPolicy)
     // The UI settings (panel display name) persist independently of the board.
     await this.ctx.plugin(DshManagerSettings)
-    // Declarative YAML SSOT for crew, pipelines, and routes (hot-reloading).
+    // Declarative YAML SSOT for Flow IR (hot-reloading).
     await this.ctx.plugin(
       DshManagerTeamConfig,
       this.config.teamConfigPath === undefined ? undefined : { filePath: this.config.teamConfigPath },
     )
-    // The crew's role cards back the pipeline stages (mounted before the
-    // facilities that will reference them).
-    await this.ctx.plugin(DshManagerCrew)
-    // The pipelines reference the crew and validate stage members on write.
-    await this.ctx.plugin(DshManagerPipeline)
-    // The route rules reference the pipelines and validate them on write.
-    await this.ctx.plugin(DshManagerRoute)
+    // Flow IR management, Skill catalog discovery, and Playbook compilation.
+    await this.ctx.plugin(DshManagerFlow)
     await this.ctx.plugin(DshManagerBoard, this.config.executor?.cwd === undefined ? undefined : { flowsCwd: this.config.executor.cwd })
     // The Steward drives evals through the agent runtime; it reads the board's
     // eval store and the sources' trigger facts (both mounted above).

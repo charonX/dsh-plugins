@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { IconAgentPresetOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { AgentSlashCommand } from '../crew/wire-types.ts'
+import type { AgentSlashCommand } from '../flow/flow-ir.ts'
 import css from './SlashInput.module.css'
 
 export interface SlashCommandGroup {

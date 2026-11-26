@@ -175,7 +175,9 @@ test(
       const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
       expect(tickets).toHaveLength(1)
       const ticket = tickets[0]!.id
-      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket })
+      if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket })).dispatches.length === 0) {
+        await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket })
+      }
       await vi.waitFor(async () => {
         const view = (await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket })).dispatches[0]
         expect(view?.state).toBe('running')
@@ -244,7 +246,9 @@ test(
       await ctx.dshManagerSources.manualInput({ title: 'Abortable silent run', description: 'Cancel on stall' })
       await ctx.dshManagerSteward.runPending()
       const ticket2 = (await ctx.dshManagerBoard.ticketList()).tickets.find(view => view.id !== ticket)!.id
-      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket2 })
+      if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket2 })).dispatches.length === 0) {
+        await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket2 })
+      }
       let stallToAbortId = ''
       await vi.waitFor(async () => {
         const stall = (await ctx.dshManagerExecutor.attentionList({ ticketId: ticket2 })).attentions

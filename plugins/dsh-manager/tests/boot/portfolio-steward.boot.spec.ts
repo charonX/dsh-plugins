@@ -117,12 +117,12 @@ class PortfolioAdapter extends LlmAdapter {
       }])) yield c
       return
     }
-    if (tail.includes('Route the accepted ticket')) {
+    if (tail.includes('Route ticket ')) {
       this.seenRoutePrompts.push(tail)
       for (const c of toolCallsResponse([{
         name: 'record_route',
         args: {
-          ruleId: this.routeRuleId,
+          flowId: this.routeRuleId,
           dependsOn: [this.existingTicketId],
           worktree: {
             mode: 'worktree',
@@ -179,22 +179,14 @@ test('Steward Eval records supersededBy for duplicates and Route sets dependsOn 
     }, Date.now())
     adapter.existingTicketId = existing.id
 
-    // Seed crew, single-stage pipeline, and route rule for direct ticket routing.
-    const crew = await ctx.dshManagerCrew.crewAdd({
-      name: 'Dev',
-      role: 'Implement board changes',
-      provider: 'mock',
-      model: 'executor-test',
-    })
-    const pipeline = await ctx.dshManagerPipeline.pipelineAdd({
+    // Seed Flow IR rule for direct ticket routing.
+    const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Direct Dev',
-      stages: [{ memberId: crew.member.id, instruction: 'Implement and verify.' }],
+      when: 'All confirmed feature tasks',
+      workspaceMode: 'worktree',
+      steps: [{ id: 'dev', name: 'Dev', skills: [], goal: 'Implement and verify.' }],
     })
-    const rule = await ctx.dshManagerRoute.ruleAdd({
-      condition: 'All confirmed feature tasks',
-      pipelineId: pipeline.pipeline.id,
-    })
-    adapter.routeRuleId = rule.rule.id
+    adapter.routeRuleId = flow.id
 
     // 1) Duplicate bug report arrives via inbox -> Steward Eval sees existing ticket and records ignore + supersededBy.
     await ctx.dshManagerSources.manualInput({

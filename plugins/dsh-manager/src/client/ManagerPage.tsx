@@ -18,13 +18,11 @@ import {
 } from './manager-tabs.ts'
 import type { BoardInjected } from './board-source.ts'
 import type { ConnectionsInjected } from './connections-source.ts'
-import type { CrewInjected } from './crew-source.ts'
 import type { EvalsInjected } from './evals-source.ts'
+import type { FlowInjected } from './flow-source.ts'
 import type { MappingsInjected } from './mappings-source.ts'
 import type { NotificationsInjected } from './notifications-source.ts'
-import type { PipelineInjected } from './pipeline-source.ts'
 import type { PolicyInjected } from './policy-source.ts'
-import type { RouteInjected } from './route-source.ts'
 import type { TeamConfigInjected } from './team-config-source.ts'
 import type { StewardInjected } from './steward-source.ts'
 import type { TriggersInjected } from './triggers-source.ts'
@@ -36,7 +34,7 @@ import css from './ManagerPage.module.css'
 /** Every source the tabbed panel reads, merged into one slot injection. */
 export type ManagerInjected = BoardInjected & NotificationsInjected & ConnectionsInjected
   & MappingsInjected & TriggersInjected & EvalsInjected & StewardInjected
-  & UiSettingsInjected & ImSettingsInjected & CrewInjected & PipelineInjected & RouteInjected & TeamConfigInjected & PolicyInjected
+  & UiSettingsInjected & ImSettingsInjected & FlowInjected & TeamConfigInjected & PolicyInjected
 
 /** Manager panel props derived from the framework and the merged sources. */
 export type ManagerPageProps = PropsRuntime<'main'> & InjectFace<ManagerInjected> & PropsLocale<'dshManager'>

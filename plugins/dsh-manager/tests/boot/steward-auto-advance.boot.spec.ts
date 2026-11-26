@@ -1,11 +1,12 @@
 /**
- * Boot-tier integration spec for Steward auto-skip & automatic review advancement:
- * 1) A direct aligned ticket (with `acceptanceCriteria`) routed onto a pipeline
- *    whose stage 0 is skippable auto-skips stage 0 and dispatches stage 1 directly.
- * 2) With normal Steward tickMs (< 60s), once stage 1 completes with `ready`,
- *    Steward automatically reviews and advances to stage 2 without manual `reviewPending()` calls.
+ * Boot-tier integration spec for Flow IR Playbook caching, non-git in-place execution,
+ * Steward auto-advancement without intermediate gate LLMs, and onFail review rework:
+ * 1) Playbook compiles once and hits SHA-256 cache on repeat; knowledge flow runs `in-place`
+ *    inside a non-git folder and Steward auto-advances Step 1 -> Step 2 without manual `reviewPending`.
+ * 2) Review step with `onFail` returns rework to the prior implementation step, preserves
+ *    `acceptanceCriteria` / `scratchDir`, and reuses the review ticket.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, expect, test } from 'vitest'
@@ -108,10 +109,10 @@ afterAll(async () => {
   }
 })
 
-test('aligned direct ticket auto-skips skippable stage 0 and Steward auto-advances stages on tick without manual reviewPending', async () => {
+test('compiles Playbook once (hash cache hit), runs non-git in-place knowledge flow, and auto-advances on tick', async () => {
   const overlayPath = await writeOverlay(autoHome, 3102)
-  const skipPrompts: string[] = []
   const executorPrompts: string[] = []
+  let targetFlowId = ''
 
   const adapter = new ScriptedAdapter((options) => {
     const last = options.messages.at(-1)
@@ -119,86 +120,78 @@ test('aligned direct ticket auto-skips skippable stage 0 and Steward auto-advanc
     const tail = JSON.stringify(options.messages.slice(-2))
     if (JSON.stringify(last).includes('Generate the session title')) return textResponse('Title')
     if (last.role !== 'user') return textResponse('done')
-    if (tail.includes('Route the accepted ticket')) {
-      return toolCallsResponse([{ name: 'record_route', args: { ruleId: 'r-auto', rationale: 'matched dev pipeline' } }])
-    }
-    if (tail.includes('Decide whether pipeline stage')) {
-      skipPrompts.push(tail)
-      // Skip stage 1 (align) since acceptance criteria are already agreed; run stage 2 (dev) & stage 3 (review).
-      const shouldSkip = tail.includes('stage 1')
-      return toolCallsResponse([{
-        name: 'decide_skip',
-        args: { skip: shouldSkip, rationale: shouldSkip ? 'already aligned with acceptance criteria' : 'implementation needed' },
-      }])
+    if (tail.includes('Route ticket ')) {
+      return toolCallsResponse([{ name: 'record_route', args: { flowId: targetFlowId, rationale: 'matched compiled flow' } }])
     }
     if (tail.includes('executor dispatched for ticket')) {
       executorPrompts.push(tail)
-      return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'stage done' } }])
+      return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'step done' } }])
     }
-    if (tail.includes('review')) {
+    if (tail.includes('Review the finished work on ticket')) {
       return toolCallsResponse([{ name: 'record_review', args: { verdict: 'pass', feedback: 'pass', dispatchId: 'unknown' } }])
     }
     return textResponse('done')
   })
 
+  // Seed a workspace skill inside non-git autoCwd before booting.
+  const skillDir = join(autoCwd, '.dsh', 'skills', 'knowledge-notes')
+  await mkdir(skillDir, { recursive: true })
+  await writeFile(join(skillDir, 'SKILL.md'), [
+    '---',
+    'name: knowledge-notes',
+    'description: Write structured knowledge articles cleanly',
+    '---',
+    '# Knowledge Notes Playbook',
+    '',
+    '1. Research and outline key theses via `how`.',
+    '2. Draft the article body in markdown.',
+    '3. Fact review against `verify`.',
+    '',
+  ].join('\n'), 'utf8')
+
   const ctx = await bootTestProfile({ binName: 'dsh-manager-test', profile: 'web', overlayPaths: [overlayPath], home: autoHome })
   try {
     await waitUntilService(ctx, 'dshManagerSteward')
     ctx.llm.registerAdapter(['mock'], adapter)
-    const yamlPath = ctx.dshManagerTeamConfig.status().filePath
 
-    await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: aligner',
-      '    name: Requirement Aligner',
-      '    role: clarify ambiguous requirements',
-      '  - id: dev',
-      '    name: TDD Developer',
-      '    role: implement code with vertical slices',
-      '  - id: reviewer',
-      '    name: Code Reviewer',
-      '    role: review code quality',
-      'pipelines:',
-      '  - id: dev-flow',
-      '    name: Dev Flow',
-      '    stages:',
-      '      - memberId: aligner',
-      '        instruction: clarify requirements',
-      '        skippable: true',
-      '        skipLogic: skip when acceptance criteria are already aligned',
-      '      - memberId: dev',
-      '        instruction: implement feature',
-      '        skippable: false',
-      '      - memberId: reviewer',
-      '        instruction: review implementation',
-      '        skippable: false',
-      'routes:',
-      '  - id: r-auto',
-      '    condition: feature work',
-      '    pipelineId: dev-flow',
-      '',
-    ].join('\n'), 'utf8')
-    await ctx.dshManagerTeamConfig.reloadFromDisk()
+    // E2E-1: compile once, verify second call hits SHA-256 hash cache without re-parsing.
+    const compiled = await ctx.dshManagerFlow.flowImportPlaybook({
+      kind: 'skill',
+      ref: 'knowledge-notes',
+      cwd: autoCwd,
+    })
+    expect(compiled.cacheHit).toBe(false)
+    expect(compiled.method).toBe('markdown')
+    expect(compiled.flow.workspaceMode).toBe('in-place')
+    expect(compiled.flow.steps).toHaveLength(3)
+    expect(compiled.flow.steps[2]?.onFail).toBe(compiled.flow.steps[1]?.id)
 
-    // Hand off an aligned direct ticket via the global tool.
+    const cached = await ctx.dshManagerFlow.flowImportPlaybook({
+      kind: 'skill',
+      ref: 'knowledge-notes',
+      cwd: autoCwd,
+    })
+    expect(cached.cacheHit).toBe(true)
+    expect(cached.method).toBe('cache')
+    expect(cached.flow.id).toBe(compiled.flow.id)
+    targetFlowId = compiled.flow.id
+
+    // Hand off a direct knowledge task in the non-git directory.
     const createTool = ctx.tools.get('dsh_manager_create_ticket')
     expect(createTool).toBeDefined()
     const created = await createTool!.execute({
-      title: 'Aligned Task',
-      description: 'Implement feature X',
-      acceptanceCriteria: '1) All tests pass; 2) Clean UI.',
+      title: 'Draft RAG Architecture Essay',
+      description: 'Write essay in non-git notes directory',
+      acceptanceCriteria: 'Clean outline, draft, and verified claims.',
       mode: 'direct',
     }, {} as never) as { ticketId: string; routed: boolean }
     expect(created.routed).toBe(true)
 
-    // Stage 0 (Requirement Aligner) was skipped automatically; root ticket starts on stageIndex 1 (TDD Developer).
     const root = ctx.dshManagerBoard.ticketRecord(created.ticketId)
-    expect(root?.flow?.stageIndex).toBe(1)
-    expect(root?.flow?.skipped).toEqual([{ stageIndex: 0, reason: 'already aligned with acceptance criteria' }])
-    expect(skipPrompts[0]).toContain('1) All tests pass')
+    expect(root?.worktree).toEqual({ mode: 'in-place' })
+    expect(root?.flow?.stageIndex).toBe(0)
 
-    // Without calling `reviewPending()` manually, Steward automatically reviews stage 1 and advances to stage 2!
+    // Without calling `reviewPending()` manually, Steward automatically advances Step 0 -> Step 1 -> Step 2!
     const stage3 = await waitFor(async () =>
       (await ctx.dshManagerBoard.ticketList()).tickets.find(t => t.flow?.stageIndex === 2), 'auto-advanced stage 3 ticket')
     expect(stage3.flow?.stageIndex).toBe(2)
@@ -207,9 +200,9 @@ test('aligned direct ticket auto-skips skippable stage 0 and Steward auto-advanc
       (await ctx.dshManagerExecutor.attentionList({ ticketId: stage3.id })).attentions
         .find(a => a.status === 'pending' && a.kind === 'review'), 'auto-minted final acceptance')
     expect(acceptance.question).toContain('acceptance requested')
-    expect(executorPrompts).toHaveLength(2)
-    expect(executorPrompts[0]).toContain('TDD Developer')
-    expect(executorPrompts[1]).toContain('Code Reviewer')
+    expect(executorPrompts).toHaveLength(3)
+    expect(executorPrompts[0]).toContain('how')
+    expect(executorPrompts[2]).toContain('verify')
   } finally {
     await ctx.fiber.dispose()
   }
@@ -230,8 +223,8 @@ test('review stage rework returns to the prior implementation stage, preserves p
       const tail = JSON.stringify(options.messages.slice(-2))
       if (JSON.stringify(last).includes('Generate the session title')) return textResponse('Title')
       if (last.role !== 'user') return textResponse('done')
-      if (tail.includes('Route the accepted ticket')) {
-        return toolCallsResponse([{ name: 'record_route', args: { ruleId: 'r-bug', rationale: 'matched bug pipeline' } }])
+      if (tail.includes('Route ticket ')) {
+        return toolCallsResponse([{ name: 'record_route', args: { flowId: 'bug-flow', rationale: 'matched bug flow' } }])
       }
       if (tail.includes('executor dispatched for ticket')) {
         if (tail.includes('Bug Fixer')) {
@@ -271,29 +264,26 @@ test('review stage rework returns to the prior implementation stage, preserves p
       const yamlPath = ctx.dshManagerTeamConfig.status().filePath
 
       await writeFile(yamlPath, [
-        'version: 1',
-        'crew:',
-        '  - id: fixer',
-        '    name: Bug Fixer',
-        '    role: reproduce and fix bugs with E2E regression tests',
-        '  - id: reviewer',
-        '    name: Read-Only Reviewer',
-        '    role: review read-only against review-report.md',
-        'pipelines:',
+        'version: 3',
+        'flows:',
         '  - id: bug-flow',
         '    name: Bug Flow',
-        '    stages:',
-        '      - memberId: fixer',
-        '        instruction: fix bug and run tests',
-        '        skippable: false',
-        '      - memberId: reviewer',
-        '        instruction: read-only review',
-        '        skippable: false',
-        '        mode: review',
-        'routes:',
-        '  - id: r-bug',
-        '    condition: bug fix',
-        '    pipelineId: bug-flow',
+        '    when: bug fix',
+        '    workspaceMode: in-place',
+        '    enabled: true',
+        '    steps:',
+        '      - id: fixer',
+        '        name: Bug Fixer',
+        '        skills:',
+        '          - tdd',
+        '        goal: reproduce and fix bug and run tests',
+        '      - id: reviewer',
+        '        name: Read-Only Reviewer',
+        '        skills:',
+        '          - code-review',
+        '        readOnly: true',
+        '        onFail: fixer',
+        '        goal: read-only review against review-report.md',
         '',
       ].join('\n'), 'utf8')
       await ctx.dshManagerTeamConfig.reloadFromDisk()
