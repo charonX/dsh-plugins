@@ -58,6 +58,7 @@ import {
   type WorktreeInspectionView,
 } from './dispatch/wire-types.ts'
 import { flowChain, flowTimelineOf, type FlowTimelineView } from './flow/flow-core.ts'
+import { backfillTimeline, type TimelineEvent } from './timeline/timeline-core.ts'
 import { unresolvedDependencies } from './board/dependency-core.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -316,7 +317,7 @@ export class DshManagerExecutor extends TypertRemoteService {
           feedback: opinion,
           origin: 'human',
         }, Date.now())
-        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId)
+        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId, { reason: opinion, author: 'user' })
         await this.dispatchIfIdleAndUnblocked(targetTicketId)
       }
       return this.attentionViewOf(answered)
@@ -442,7 +443,7 @@ export class DshManagerExecutor extends TypertRemoteService {
           feedback: opinion,
           origin: 'human',
         }, Date.now())
-        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId)
+        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId, { reason: opinion, author: 'user' })
         await this.dispatchIfIdleAndUnblocked(targetTicketId)
       }
       return this.attentionViewOf(answered)
@@ -614,7 +615,25 @@ export class DshManagerExecutor extends TypertRemoteService {
       }
       return this.viewOf(record, session)
     })
-    return { ticket, dispatches, deliverables, changes, ...this.followUpLinks(input.ticketId) }
+    const events = await this.eventsOfTicket(input.ticketId, rawDispatches)
+    return { ticket, dispatches, deliverables, changes, events, ...this.followUpLinks(input.ticketId) }
+  }
+
+  /**
+   * The ticket's ledger in chronological order. A ticket created before the
+   * ledger existed has its history folded in from dispatches and attentions on
+   * first read — deterministic ids keep the fold idempotent, and later appends
+   * continue the same sequence.
+   */
+  private async eventsOfTicket(ticketId: string, dispatches: readonly DispatchRecord[]): Promise<readonly TimelineEvent[]> {
+    const store = this.ctx.dshManagerBoard.timelineStore()
+    const existing = store.getTimeline(ticketId)
+    if (existing !== undefined) return existing.events
+    const attentions = this.ctx.dshManagerBoard.attentionStore().listAttentions().filter(record => record.ticketId === ticketId)
+    if (dispatches.length === 0 && attentions.length === 0) return []
+    const folded = backfillTimeline(ticketId, dispatches, attentions, Date.now())
+    await store.putTimeline(folded)
+    return folded.events
   }
 
   /** The follow-up chain of one ticket, for the detail view. */

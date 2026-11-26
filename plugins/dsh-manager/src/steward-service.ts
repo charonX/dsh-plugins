@@ -1552,11 +1552,11 @@ export class DshManagerSteward extends TypertRemoteService {
           feedback: verdict.feedback,
         }, now)
         this.note('review', `return → ${targetStage.id}`)
-        await this.ctx.dshManagerBoard.reopenStageTicket(targetStage.id)
+        await this.ctx.dshManagerBoard.reopenStageTicket(targetStage.id, { reason: verdict.feedback, author: 'steward' })
         await this.ctx.dshManagerExecutor.dispatchTicket({ ticketId: targetStage.id })
         return
       }
-      await this.ctx.dshManagerBoard.reopenStageTicket(entry.ticketId)
+      await this.ctx.dshManagerBoard.reopenStageTicket(entry.ticketId, { reason: verdict.feedback, author: 'steward' })
       await this.ctx.dshManagerExecutor.dispatchTicket({ ticketId: entry.ticketId })
       return
     }

@@ -6,6 +6,7 @@ import { z as zod } from 'zod'
 import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchPromptRecord, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
 import type { AgentKind } from '../flow/flow-ir.ts'
 import type { TicketView } from '../board-domain.ts'
+import type { TimelineEvent } from '../timeline/timeline-core.ts'
 
 /** One executor report as the wire sees it. */
 export interface ReportView {
@@ -93,6 +94,8 @@ export interface TicketDetailView {
   readonly deliverables: readonly DeliverableRef[]
   /** The executor sessions' workspace changes, per turn with actual edits. */
   readonly changes: readonly ChangesRef[]
+  /** The ticket's ledger, oldest first; independent of any Executor Session. */
+  readonly events: readonly TimelineEvent[]
   /** The ticket this one follows up, when it is a follow-up itself. */
   readonly followUpOf?: TicketLinkView
   /** The follow-up tickets minted after this one, oldest first. */

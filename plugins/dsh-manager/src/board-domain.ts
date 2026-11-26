@@ -4,6 +4,7 @@ import type { Branded } from '@deepseek-ai/dsh-brand'
 import { attentionRecord, type AttentionRecord } from './attention/attention-core.ts'
 import { dispatchRecord, type DispatchRecord } from './dispatch/dispatch-core.ts'
 import { reviewRecord, type ReviewRecord } from './review/review-core.ts'
+import { ticketTimelineRecord, type TicketTimelineRecord } from './timeline/timeline-core.ts'
 
 /** Stable ticket identity. */
 export type TicketId = Branded<'TicketId'>
@@ -148,17 +149,23 @@ export type EvalRecord = z.infer<typeof evalRecord>
  * Durable board state. Ticket records carry lifecycle state; board columns
  * are never stored — every column derives from ticket state. Evals record
  * the batching and decisions that produced tickets; dispatches record the
- * Executor Sessions working tickets.
+ * Executor Sessions working tickets; timelines record the business history
+ * of a ticket independently of any Session.
+ *
+ * Version 2 adds the `timelines` table. Version 1 records keep their schemas
+ * unchanged, so the older format stays readable and is admitted explicitly.
  */
 export const boardDomain = defineDomain({
   name: 'dsh_manager_board',
-  version: 1,
+  version: 2,
+  compatibleVersions: [1],
   tables: {
     tickets: domainTable<TicketId, TicketRecord>(ticketRecord),
     evals: domainTable<EvalId, EvalRecord>(evalRecord),
     dispatches: domainTable<Branded<'DispatchId'>, DispatchRecord>(dispatchRecord),
     attentions: domainTable<Branded<'AttentionId'>, AttentionRecord>(attentionRecord),
     reviews: domainTable<Branded<'ReviewId'>, ReviewRecord>(reviewRecord),
+    timelines: domainTable<TicketId, TicketTimelineRecord>(ticketTimelineRecord),
   },
 })
 
