@@ -780,6 +780,47 @@ describe('board page', () => {
     await runtime.dispose()
   })
 
+  test('turn boundaries hide bookkeeping rows and collapse a repeated message', async () => {
+    const sentence = 'Stage 4/4 is closed out'
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          {
+            id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', outcome: 'ready',
+            sessionId: 'sess-9', reports: [], createdAt: 1, updatedAt: 9,
+          },
+        ],
+        deliverables: [], changes: [], followUps: [],
+        events: [
+          { id: 'started', seq: 0, kind: 'system', author: 'system', at: 1, turnId: 'dispatch-1', code: 'turn-started', body: '' },
+          { id: 'spoken-1', seq: 1, kind: 'assistant', author: 'executor', at: 2, turnId: 'dispatch-1', body: sentence },
+          { id: 'spoken-2', seq: 2, kind: 'assistant', author: 'executor', at: 3, turnId: 'dispatch-1', body: sentence },
+          { id: 'ended', seq: 3, kind: 'system', author: 'system', at: 9, turnId: 'dispatch-1', code: 'turn-ended:ready', body: '' },
+        ],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] },
+      }),
+      { ticketDetail },
+    )
+    await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+    fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+    await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Stage 4/4 is closed out') })
+    const text = dialogEl().textContent ?? ''
+    // The bookkeeping codes never reach the reader.
+    expect(text).not.toContain('turn-started')
+    expect(text).not.toContain('turn-ended')
+    // The executor said it once; a re-emitted copy is not a second sentence.
+    expect(text.split(sentence).length - 1).toBe(1)
+    await runtime.dispose()
+  })
+
   test('a failed detail read shows the failure copy instead of the panel body', async () => {
     const ticketDetail = vi.fn().mockResolvedValue({ ok: false, error: { code: 'gateway/internal', message: 'boom' } })
     const { runtime, view } = await mountBoard(

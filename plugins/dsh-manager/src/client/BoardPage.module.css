@@ -1306,7 +1306,7 @@ a.cardTitle:hover {
 .timelineWrap {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 14px;
 }
 
 .timelineEmpty {
@@ -1327,8 +1327,15 @@ a.cardTitle:hover {
 .timelineTurn {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px 0 10px;
+  gap: 10px;
+  padding: 4px 0 12px;
+}
+
+/* Each turn is a block: a solid rule plus its own vertical rhythm, so the eye
+   finds the boundary before it reads the rows. */
+.timelineTurn + .timelineTurn {
+  border-top: 1px solid var(--dsw-alias-border-l3);
+  padding-top: 14px;
 }
 
 .timelineTurnHead {
@@ -1337,8 +1344,6 @@ a.cardTitle:hover {
   gap: 8px;
   font-size: 11px;
   color: var(--dsw-alias-label-tertiary);
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
-  padding-top: 8px;
 }
 
 .timelineTurnIndex { font-weight: 500; color: var(--dsw-alias-label-secondary); }
@@ -1384,8 +1389,15 @@ a.cardTitle:hover {
 .timelineAssistant {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 2px 0;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-card-fill);
+}
+
+.timelineAssistant + .timelineAssistant {
+  margin-top: -2px;
 }
 
 .timelineAssistantHead {
