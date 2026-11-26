@@ -4,6 +4,7 @@ import type { AttentionRecord } from '../../src/attention/attention-core.ts'
 import type { DispatchRecord, ReportRecord } from '../../src/dispatch/dispatch-core.ts'
 import {
   appendTimelineEvent,
+  artifactsOf,
   backfillTimeline,
   eventOfReport,
   recordAttentionTimeline,
@@ -226,6 +227,19 @@ describe('backfill of pre-ledger tickets', () => {
 
   test('a ticket with no history folds to an empty ledger', () => {
     expect(backfillTimeline('ticket-x', [], [], 1).events).toEqual([])
+  })
+
+  test('ledger artifacts recover deliverables and change counts for a cold drawer', () => {
+    const events: TimelineEvent[] = [
+      { id: 'd1', seq: 0, kind: 'artifact', author: 'executor', at: 100, code: 'deliverable', body: '分析笔记', sessionId: 'sess-1', turn: 3, activity: { category: 'file', target: 'finding-1.md' } },
+      { id: 'c1', seq: 1, kind: 'artifact', author: 'executor', at: 200, code: 'change', body: '4', sessionId: 'sess-1', turn: 3, sourceSeq: 7 },
+      { id: 'd2', seq: 2, kind: 'artifact', author: 'executor', at: 300, code: 'deliverable', body: '', activity: { category: 'file', target: 'orphan.md' } },
+      { id: 'c2', seq: 3, kind: 'artifact', author: 'executor', at: 400, code: 'change', body: 'nope', sessionId: 'sess-1' },
+    ]
+    expect(artifactsOf(events)).toEqual({
+      deliverables: [{ sessionId: 'sess-1', turn: 3, path: 'finding-1.md', description: '分析笔记' }],
+      changes: [{ sessionId: 'sess-1', seq: 7, turn: 3, files: 4 }],
+    })
   })
 
   test('activity summary prefers a human-facing event over tool traffic', () => {

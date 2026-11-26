@@ -250,10 +250,13 @@ export function TicketTimeline({ detail, attentions, t, markdownLabels, cancelli
                 )
               }
               if (event.kind === 'artifact') {
+                const artifact = event.code === 'change'
+                  ? t('board.timeline.changeFiles', { count: Number(event.body) || 0 })
+                  : event.activity?.target ?? event.body
                 return (
                   <div key={event.id} className={css.timelineArtifact}>
                     <Tag tone="success">{t('board.timeline.artifact')}</Tag>
-                    <span>{event.body}</span>
+                    <span title={artifact}>{artifact}</span>
                   </div>
                 )
               }

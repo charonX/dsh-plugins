@@ -680,6 +680,45 @@ describe('board page', () => {
     await runtime.dispose()
   })
 
+  test('ledger artifacts render on the timeline without a live session', async () => {
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          {
+            id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', outcome: 'ready',
+            sessionId: 'sess-9', reports: [], createdAt: 1, updatedAt: 2,
+          },
+        ],
+        deliverables: [],
+        changes: [],
+        events: [
+          { id: 'deliverable-1', seq: 0, kind: 'artifact', author: 'executor', at: 1, code: 'deliverable', body: 'Notes', sessionId: 'sess-9', turn: 1, turnId: 'dispatch-1', activity: { category: 'file', target: 'finding-9.md' } },
+          { id: 'change-1', seq: 1, kind: 'artifact', author: 'executor', at: 2, code: 'change', body: '3', sessionId: 'sess-9', turn: 1, turnId: 'dispatch-1', sourceSeq: 4 },
+        ],
+        followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] },
+      }),
+      { ticketDetail },
+    )
+    await vi.waitFor(() => {
+      expect(view.container.textContent).toContain('Fix the login flow')
+    })
+    fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+    await vi.waitFor(() => {
+      expect(view.container.textContent).toContain('finding-9.md')
+      expect(view.container.textContent).toContain('3 files')
+    })
+    await runtime.dispose()
+  })
+
   test('a failed detail read shows the failure copy instead of the panel body', async () => {
     const ticketDetail = vi.fn().mockResolvedValue({ ok: false, error: { code: 'gateway/internal', message: 'boom' } })
     const { runtime, view } = await mountBoard(

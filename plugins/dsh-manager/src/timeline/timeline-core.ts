@@ -58,6 +58,12 @@ export const timelineEventRecord = z.object({
   reportId: z.string().optional(),
   /** Structured activity for tool/command/file events. */
   activity: timelineActivity.optional(),
+  /** The executor Session that produced the event, when it came from one. */
+  sessionId: z.string().optional(),
+  /** The numeric turn inside that Session, when the source carries one. */
+  turn: z.number().int().min(0).optional(),
+  /** The source event seq inside that Session (workspace change reads use it). */
+  sourceSeq: z.number().int().min(0).optional(),
   /** True when the event was derived from historical records on first read. */
   backfilled: z.boolean().optional(),
 })
@@ -96,6 +102,9 @@ export interface AppendTimelineEventInput {
   readonly attentionId?: string
   readonly reportId?: string
   readonly activity?: TimelineActivity
+  readonly sessionId?: string
+  readonly turn?: number
+  readonly sourceSeq?: number
   readonly backfilled?: boolean
 }
 
@@ -131,6 +140,9 @@ function eventOf(input: AppendTimelineEventInput, id: string, seq: number): Time
     ...(input.attentionId === undefined ? {} : { attentionId: input.attentionId }),
     ...(input.reportId === undefined ? {} : { reportId: input.reportId }),
     ...(input.activity === undefined ? {} : { activity: input.activity }),
+    ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
+    ...(input.turn === undefined ? {} : { turn: input.turn }),
+    ...(input.sourceSeq === undefined ? {} : { sourceSeq: input.sourceSeq }),
     ...(input.backfilled === undefined ? {} : { backfilled: input.backfilled }),
   }
 }
@@ -275,6 +287,56 @@ export function backfillTimeline(
 }
 
 /** Read one ticket's events in ledger order; an absent ledger reads as empty. */
+/** One deliverable recovered from the ledger. */
+export interface DeliverableArtifact {
+  readonly sessionId: string
+  readonly turn: number
+  readonly path: string
+  readonly description?: string
+}
+
+/** One workspace-change record recovered from the ledger. */
+export interface ChangeArtifact {
+  readonly sessionId: string
+  readonly seq: number
+  readonly turn: number
+  readonly files: number
+}
+
+/**
+ * Recover deliverable and change chips from ledger events, so a drawer opened
+ * after the host restarted still lists what a ticket produced.
+ * @param events - the ticket's ordered timeline events.
+ * @returns ledger-backed artifact refs, in timeline order.
+ */
+export function artifactsOf(events: readonly TimelineEvent[]): {
+  readonly deliverables: readonly DeliverableArtifact[]
+  readonly changes: readonly ChangeArtifact[]
+} {
+  const deliverables: DeliverableArtifact[] = []
+  const changes: ChangeArtifact[] = []
+  for (const event of events) {
+    if (event.kind !== 'artifact' || event.sessionId === undefined) continue
+    if (event.code === 'deliverable') {
+      const path = event.activity?.target
+      if (path === undefined || path === '') continue
+      deliverables.push({
+        sessionId: event.sessionId,
+        turn: event.turn ?? 0,
+        path,
+        ...(event.body === '' ? {} : { description: event.body }),
+      })
+      continue
+    }
+    if (event.code === 'change' && event.sourceSeq !== undefined) {
+      const files = Number.parseInt(event.body, 10)
+      if (!Number.isFinite(files) || files <= 0) continue
+      changes.push({ sessionId: event.sessionId, seq: event.sourceSeq, turn: event.turn ?? 0, files })
+    }
+  }
+  return { deliverables, changes }
+}
+
 /** The compact newest-activity line shown on a board card. */
 export interface TimelineActivitySummary {
   readonly at: number
