@@ -108,6 +108,25 @@ export const dispatchTicketInputSchema = zod.object({
 
 export type DispatchTicketInput = zod.infer<typeof dispatchTicketInputSchema>
 
+/** How a continued instruction reached the ticket's current turn. */
+export type ContinueTicketMode = 'delivered' | 'queued' | 'started' | 'resumed' | 'new-session'
+
+/** One continuation outcome as the wire sees it. */
+export interface ContinueTicketResult {
+  readonly ok: boolean
+  readonly mode: ContinueTicketMode
+  readonly dispatchId?: string
+}
+
+export const continueTicketInputSchema = zod.object({
+  ticketId: zod.string().min(1),
+  text: zod.string().min(1),
+  /** Start a fresh Executor Session instead of resuming the ticket's last one. */
+  newSession: zod.boolean().optional(),
+})
+
+export type ContinueTicketInput = zod.infer<typeof continueTicketInputSchema>
+
 export const dispatchListInputSchema = zod.object({
   ticketId: zod.string().min(1).optional(),
 })

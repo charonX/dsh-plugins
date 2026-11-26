@@ -181,3 +181,15 @@ _Avoid_: 可配置提示词块
 **项目事实（Project Facts）**:
 派工时直接从目标项目目录与 `workspaceRegistry` 动态读取的 `AGENTS.md` / `CLAUDE.md`、`docs/git-flow.md`、`docs/verify/README.md`、可用技能列表与落地模式，保证 Flow 配置零仓库硬编码。
 _Avoid_: 静态项目片段文件
+
+**续做（Continuation）**:
+把一句话追加到一张工单的执行会话里，而不是新开工单。运行中的工单插进当前轮或排到下一轮；已结束的工单先拉回 `todo`，再 `resume` 原 `Executor Session`。
+_Avoid_: 评论、重试、后续工单
+
+**轮次（Turn）**:
+一次派工的执行区间。指令、回复、工具调用、汇报、待决定都挂在轮次下，时间线以它分隔。
+_Avoid_: 会话、消息流
+
+**时间线（Timeline）**:
+由 Dsh Manager 账本持久化的工单级记录（`ticket events`），与 Session 日志解耦；Session 只是事件的来源之一。
+_Avoid_: 聊天记录、面板历史

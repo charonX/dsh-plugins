@@ -86,6 +86,8 @@ export const dispatchRecord = z.object({
   outcome: z.enum(DISPATCH_OUTCOMES).optional(),
   /** The Executor Session id, set once the session starts. */
   sessionId: z.string().optional(),
+  /** The ended dispatch this one continues; marks a resume into its session. */
+  resumeOf: z.string().optional(),
   /** Execution backend kind (`builtin`, `claude-code`, `codex`, `agy`). */
   agentKind: z.enum(AGENT_KINDS).optional(),
   /** Sticky external CLI session id captured from stream-json for rework `--resume`. */
@@ -107,13 +109,20 @@ export interface DispatchStorePort {
   listDispatches(): readonly DispatchRecord[]
 }
 
-/** Create one queued dispatch for a ticket. */
-export async function enqueueDispatch(store: DispatchStorePort, ticketId: string, now: number): Promise<DispatchRecord> {
+/** Create one queued dispatch for a ticket, optionally continuing a prior session. */
+export async function enqueueDispatch(
+  store: DispatchStorePort,
+  ticketId: string,
+  now: number,
+  options: { readonly sessionId?: string; readonly resumeOf?: string } = {},
+): Promise<DispatchRecord> {
   const record: DispatchRecord = {
     id: `dispatch-${crypto.randomUUID()}`,
     ticketId,
     state: 'queued',
     reports: [],
+    ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+    ...(options.resumeOf === undefined ? {} : { resumeOf: options.resumeOf }),
     createdAt: now,
     updatedAt: now,
   }

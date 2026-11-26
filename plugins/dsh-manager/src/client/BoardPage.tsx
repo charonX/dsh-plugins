@@ -123,7 +123,7 @@ function BoardStewardChip({ useSteward, onOpenMonitor, t }: {
 }
 
 /** Render the six board columns with their ticket cards, inbox candidates, and the rework pool. */
-export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotifications, useSteward, onOpenMonitor, onMarkSeen, onFilter, onAcceptCandidate, onEvalRequeue, onManualInput, onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onTicketWorktree, onTicketWorktreeRemove, onSetTicketDependencies, onCloseTicket, onAnswerAttention, onBoardRetry, t } = props
+export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotifications, useSteward, onOpenMonitor, onMarkSeen, onFilter, onAcceptCandidate, onEvalRequeue, onManualInput, onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onContinueTicket, onOpenSession, onTicketWorktree, onTicketWorktreeRemove, onSetTicketDependencies, onCloseTicket, onAnswerAttention, onBoardRetry, t } = props
   const [openTicketId, setOpenTicketId] = useState<string | undefined>()
   const [search, setSearch] = useState('')
   const snapshot = useBoard(snapshot => snapshot)
@@ -256,7 +256,7 @@ export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotific
             onClose={() => { setOpenTicketId(undefined) }}
             onOpenTicket={setOpenTicketId}
             onAnswerAttention={onAnswerAttention}
-            actions={{ onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onTicketWorktree, onTicketWorktreeRemove, ...(onSetTicketDependencies === undefined ? {} : { onSetTicketDependencies }), ...(onCloseTicket === undefined ? {} : { onCloseTicket }) }}
+            actions={{ onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onContinueTicket, onOpenSession, onTicketWorktree, onTicketWorktreeRemove, ...(onSetTicketDependencies === undefined ? {} : { onSetTicketDependencies }), ...(onCloseTicket === undefined ? {} : { onCloseTicket }) }}
           />
         )
         : null}

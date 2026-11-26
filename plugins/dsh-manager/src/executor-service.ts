@@ -13,13 +13,13 @@ import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
@@ -47,17 +47,19 @@ import { discoverProjectLandingFacts, type ProjectLandingFacts } from './dispatc
 import { checkBranchRebaseStatus, createMrOrPr, localMergeBranch, pushBranch } from './dispatch/landing-ops.ts'
 import { recordReview, type ReviewStorePort } from './review/review-core.ts'
 import {
+  continueTicketInputSchema,
   dispatchCancelInputSchema,
   dispatchListInputSchema,
   dispatchTicketInputSchema,
   ticketChangeDiffInputSchema,
   ticketDetailInputSchema,
-  type ChangesRef, type DeliverableRef, type DispatchCancelInput, type DispatchListInput, type DispatchMessageView,
+  type ChangesRef, type ContinueTicketInput, type ContinueTicketResult, type DeliverableRef, type DispatchCancelInput, type DispatchListInput, type DispatchMessageView,
   type DispatchTicketInput, type DispatchView, type FileDiffView, type ReportView,
   type TicketChangeDiffInput, type TicketDetailInput, type TicketDetailView, type TicketLinkView,
   type WorktreeInspectionView,
 } from './dispatch/wire-types.ts'
 import { flowChain, flowTimelineOf, type FlowTimelineView } from './flow/flow-core.ts'
+import { appendTimelineEvent } from './timeline/timeline-core.ts'
 import { backfillTimeline, type TimelineEvent } from './timeline/timeline-core.ts'
 import { unresolvedDependencies } from './board/dependency-core.ts'
 
@@ -80,6 +82,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'dshManager/dispatch-not-found': { readonly id: string }
     /** The addressed attention is missing or no longer pending. */
     'dshManager/attention-not-found': { readonly id: string }
+    /** The ticket still has a pending attention; answer it before continuing. */
+    'dshManager/attention-pending': { readonly id: string }
+    /** The continuation instruction was empty. */
+    'dshManager/empty-instruction': Record<string, never>
   }
 }
 
@@ -147,6 +153,8 @@ export class DshManagerExecutor extends TypertRemoteService {
   private ticker?: ReturnType<typeof setInterval>
   /** The live executor agents by dispatch id; answer delivery follows up here. */
   private liveAgents = new Map<string, Agent>()
+  /** The owning handles by dispatch id; a resumed turn disposes its predecessor first. */
+  private liveHandles = new Map<string, AgentHandle>()
   /** Abort controllers for active dispatches (external CLIs and built-in turns). */
   private activeControllers = new Map<string, AbortController>()
   /** The parked approval decisions by attention id; the board's answer resolves them. */
@@ -238,6 +246,118 @@ export class DshManagerExecutor extends TypertRemoteService {
     await this.ctx.dshManagerEffects.enqueue(DISPATCH_EFFECT_KIND, { dispatchId: record.id })
     void this.pump()
     return this.viewOf(record)
+  }
+
+  /**
+   * Continue one ticket from the board: deliver the instruction into a running
+   * turn, queue it behind a busy turn, or reopen an ended ticket and resume its
+   * Executor Session. The ticket's timeline records the instruction either way.
+   */
+  @Remote
+  async continueTicket(rawInput: ContinueTicketInput): Promise<ContinueTicketResult> {
+    const input = continueTicketInputSchema.parse(rawInput)
+    const text = input.text.trim()
+    if (text === '') {
+      throw new RemoteError('dshManager/empty-instruction', 'the instruction is empty', {})
+    }
+    const board = this.ctx.dshManagerBoard
+    const ticket = board.ticketRecord(input.ticketId)
+    if (ticket === undefined) {
+      throw new RemoteError('dshManager/ticket-not-found', `ticket ${input.ticketId} does not exist`, { id: input.ticketId })
+    }
+    const pending = this.attentionStore().listAttentions()
+      .filter(record => record.ticketId === ticket.id && record.status === 'pending')
+    if (pending.length > 0) {
+      throw new RemoteError('dshManager/attention-pending', `ticket ${ticket.id} has a pending attention`, { id: ticket.id })
+    }
+    if (ticket.state === 'attention') {
+      throw new RemoteError('dshManager/attention-pending', `ticket ${ticket.id} is waiting for an answer`, { id: ticket.id })
+    }
+    const now = Date.now()
+    const store = board.dispatchStore()
+    const dispatches = store.listDispatches()
+      .filter(record => record.ticketId === ticket.id)
+      .sort((left, right) => right.createdAt - left.createdAt)
+    const running = dispatches.filter(record => record.state === 'running')
+    // A live built-in executor takes the instruction mid-turn; the harness
+    // queues it into the current loop when it cannot interrupt.
+    const live = running
+      .map(record => [record, this.liveAgents.get(record.id)] as const)
+      .find(([, agent]) => agent !== undefined)
+    if (live !== undefined) {
+      const [prior, agent] = live
+      if (agent !== undefined) {
+        await this.appendEvent(ticket.id, 'instruction', 'user', 'sent', text, now, prior.id)
+        agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+        return { ok: true, mode: 'delivered', dispatchId: prior.id }
+      }
+    }
+    // A running external CLI (or a built-in turn without a live agent) cannot
+    // take text now: queue one turn that resumes the same session when it ends.
+    if (running.length > 0) {
+      const prior = running[0]!
+      const queued = await enqueueDispatch(store, ticket.id, now, {
+        ...(prior.sessionId === undefined ? {} : { sessionId: prior.sessionId }),
+        resumeOf: prior.id,
+      })
+      await this.appendEvent(ticket.id, 'instruction', 'user', 'queued', text, now, queued.id)
+      void this.pump()
+      return { ok: true, mode: 'queued', dispatchId: queued.id }
+    }
+    if (ticket.state === 'todo') {
+      const waitingOn = unresolvedDependencies(board.ticketRecords(), ticket)
+      if (waitingOn.length > 0) {
+        throw new RemoteError(
+          'dshManager/ticket-blocked',
+          `ticket ${ticket.id} is waiting on unresolved dependencies (${waitingOn.map(dep => dep.id).join(', ')})`,
+          { id: ticket.id, waitingOn: waitingOn.map(dep => dep.id) },
+        )
+      }
+    }
+    const last = dispatches.find(record => record.sessionId !== undefined && record.sessionId !== '')
+    const resume = input.newSession !== true && last !== undefined
+    if (ticket.state === 'ended') {
+      await board.reopenStageTicket(ticket.id, { reason: text, author: 'user' })
+    }
+    const record = await enqueueDispatch(store, ticket.id, now, resume
+      ? { sessionId: last!.sessionId!, resumeOf: last!.id }
+      : {})
+    await this.appendEvent(ticket.id, 'instruction', 'user', resume ? 'resumed' : 'started', text, now, record.id)
+    await settleMatchingPendingAttentions(
+      this.attentionStore(),
+      att => isEscalationAttention(att) || (att.details?.startsWith('watchdog:stall:') ?? false),
+      're-dispatched',
+      now,
+      ticket.id,
+    )
+    await this.ctx.dshManagerEffects.enqueue(DISPATCH_EFFECT_KIND, { dispatchId: record.id })
+    void this.pump()
+    return { ok: true, mode: resume ? 'resumed' : 'started', dispatchId: record.id }
+  }
+
+  /** Append one ticket-ledger event, best effort so a ledger hiccup never blocks work. */
+  private async appendEvent(
+    ticketId: string,
+    kind: 'instruction' | 'system' | 'attention' | 'artifact',
+    author: 'user' | 'executor' | 'steward' | 'system',
+    code: string,
+    body: string,
+    at: number,
+    turnId?: string,
+  ): Promise<void> {
+    try {
+      await appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+        ticketId,
+        kind,
+        author,
+        code,
+        body,
+        at,
+        ...(turnId === undefined ? {} : { turnId }),
+      })
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline append failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /** The dispatch store the executor drives; the board owns the domain. */
@@ -771,7 +891,14 @@ export class DshManagerExecutor extends TypertRemoteService {
         if (slots <= 0 || this.disposed) break
         const targetTicket = byTicket.get(next.ticketId)
         if (targetTicket !== undefined && unresolvedDependencies(tickets, targetTicket).length > 0) continue
-        const sessionId = `dsh-manager-exec-${next.id}` as SessionId
+        // A resumed turn reuses the predecessor's session; never start it while
+        // that session still has a running dispatch (one live agent per session).
+        if (next.resumeOf !== undefined) {
+          const prior = records.find(record => record.id === next.resumeOf)
+          if (prior !== undefined && prior.state !== 'ended') continue
+        }
+        const sessionId = (next.sessionId ?? `dsh-manager-exec-${next.id}`) as SessionId
+        if (records.some(record => record.id !== next.id && record.state === 'running' && record.sessionId === sessionId)) continue
         const started = await startDispatch(store, next.id, sessionId, Date.now())
         if (started === undefined || this.disposed) continue
         slots--
@@ -881,8 +1008,9 @@ export class DshManagerExecutor extends TypertRemoteService {
           agent.cancel({ kind: 'hook', reason: 'dsh-manager: executor turn timed out' })
         }, this.config.turnTimeoutMs)
     let lastHeartbeatAt = Date.now()
-    const offSessionEvent = this.ctx.on('session/event', (session) => {
+    const offSessionEvent = this.ctx.on('session/event', (session, event) => {
       if (session.id !== executorSessionId) return
+      this.captureSessionEvent(record, event)
       const now = Date.now()
       if (now - lastHeartbeatAt < 15_000) return
       lastHeartbeatAt = now
@@ -904,6 +1032,58 @@ export class DshManagerExecutor extends TypertRemoteService {
       if (timer !== undefined) clearTimeout(timer)
       controller.signal.removeEventListener('abort', onCancel)
       this.activeControllers.delete(record.id)
+    }
+  }
+
+  /**
+   * Mirror one builtin Session event into the ticket ledger. Ids derive from
+   * `(session, seq)`, so a cold resume that replays nothing and a live turn
+   * that emits once both land one row per event.
+   */
+  private captureSessionEvent(record: DispatchRecord, event: SessionEvent): void {
+    try {
+      const at = event.time
+      const id = `session:${record.sessionId ?? record.id}:${event.seq}`
+      if (event.type === 'assistant/message') {
+        const text = event.data.message.content
+          .flatMap(part => (part.type === 'text' ? [part.text] : []))
+          .join('\n')
+          .trim()
+        if (text === '') return
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id,
+          kind: 'assistant',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          body: text,
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: assistant timeline mirror failed: %s', String(error))
+        })
+        return
+      }
+      if (event.type === 'tool/call') {
+        const args = event.data.arguments
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id,
+          kind: 'tool',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          code: 'tool-call',
+          activity: {
+            category: 'tool',
+            toolName: event.data.name,
+            ...(args === '' ? {} : { target: args.length > 80 ? `${args.slice(0, 80)}…` : args }),
+          },
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: tool timeline mirror failed: %s', String(error))
+        })
+      }
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: timeline capture failed: %s', String(error))
     }
   }
 
@@ -1523,13 +1703,26 @@ export class DshManagerExecutor extends TypertRemoteService {
     const sessionMetaCwd = workspace !== undefined && (cwd === workspace.path || workingDirectory?.set !== undefined)
       ? workspace.path
       : cwd
-    const handle = await this.ctx.agents.create({
-      sessionId,
-      agentOptions,
-      meta: { cwd: sessionMetaCwd },
-      setup,
-    })
+    // A continuation turn keeps the same session: dispose the predecessor's
+    // live handle (if any), then reload the persisted session under a fresh
+    // scoped world whose tools bind to THIS dispatch.
+    const priorDispatchId = record.resumeOf
+    const priorHandle = priorDispatchId === undefined ? undefined : this.liveHandles.get(priorDispatchId)
+    if (priorHandle !== undefined) {
+      this.liveHandles.delete(priorDispatchId!)
+      this.liveAgents.delete(priorDispatchId!)
+      await priorHandle.dispose()
+    }
+    const handle = priorDispatchId !== undefined
+      ? await this.ctx.agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+      : await this.ctx.agents.create({
+        sessionId,
+        agentOptions,
+        meta: { cwd: sessionMetaCwd },
+        setup,
+      })
     this.liveAgents.set(record.id, handle.agent)
+    this.liveHandles.set(record.id, handle)
     this.ctx.effect(() => async () => { await handle.dispose() }, `dsh-manager: dispose executor session ${sessionId}`)
     // Sandbox mode and approval policy are durable session state: headless
     // background executors never block on native `ctx.approval` prompts
