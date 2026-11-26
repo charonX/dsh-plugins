@@ -59,7 +59,7 @@ import {
   type WorktreeInspectionView,
 } from './dispatch/wire-types.ts'
 import { flowChain, flowTimelineOf, type FlowTimelineView } from './flow/flow-core.ts'
-import { appendTimelineEvent } from './timeline/timeline-core.ts'
+import { appendTimelineEvent, artifactsOf, type TimelineActivity } from './timeline/timeline-core.ts'
 import { backfillTimeline, type TimelineEvent } from './timeline/timeline-core.ts'
 import { unresolvedDependencies } from './board/dependency-core.ts'
 
@@ -344,6 +344,14 @@ export class DshManagerExecutor extends TypertRemoteService {
     body: string,
     at: number,
     turnId?: string,
+    extra?: {
+      readonly id?: string
+      readonly sessionId?: string
+      readonly turn?: number
+      readonly sourceSeq?: number
+      readonly activity?: TimelineActivity
+      readonly backfilled?: boolean
+    },
   ): Promise<void> {
     try {
       await appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
@@ -354,6 +362,12 @@ export class DshManagerExecutor extends TypertRemoteService {
         body,
         at,
         ...(turnId === undefined ? {} : { turnId }),
+        ...(extra?.id === undefined ? {} : { id: extra.id }),
+        ...(extra?.sessionId === undefined ? {} : { sessionId: extra.sessionId }),
+        ...(extra?.turn === undefined ? {} : { turn: extra.turn }),
+        ...(extra?.sourceSeq === undefined ? {} : { sourceSeq: extra.sourceSeq }),
+        ...(extra?.activity === undefined ? {} : { activity: extra.activity }),
+        ...(extra?.backfilled === undefined ? {} : { backfilled: extra.backfilled }),
       })
     } catch (error) {
       this.ctx.logger?.warn('dsh-manager: ticket timeline append failed: %s', error instanceof Error ? error.message : String(error))
@@ -723,19 +737,47 @@ export class DshManagerExecutor extends TypertRemoteService {
     const rawDispatches = this.ctx.dshManagerBoard.dispatchStore().listDispatches()
       .filter(record => record.ticketId === input.ticketId)
       .sort((left, right) => right.createdAt - left.createdAt)
-    const deliverables: DeliverableRef[] = []
-    const changes: ChangesRef[] = []
+    let events = await this.eventsOfTicket(input.ticketId, rawDispatches)
+    if (rawDispatches.length > 0 && !events.some(event => event.code === 'artifacts-scanned')) {
+      await this.backfillArtifacts(input.ticketId, rawDispatches)
+      events = await this.eventsOfTicket(input.ticketId, rawDispatches)
+    }
+    const ledger = artifactsOf(events)
+    const deliverables: DeliverableRef[] = ledger.deliverables.map((artifact, index) => ({
+      sessionId: artifact.sessionId as SessionId,
+      turn: artifact.turn,
+      index,
+      path: artifact.path,
+      ...(artifact.description === undefined ? {} : { description: artifact.description }),
+    }))
+    const changes: ChangesRef[] = ledger.changes.map(artifact => ({
+      sessionId: artifact.sessionId as SessionId,
+      seq: artifact.seq,
+      turn: artifact.turn,
+      files: artifact.files,
+    }))
+    const seenDeliverables = new Set(deliverables.map(ref => `${String(ref.sessionId)}:${ref.path}`))
+    const seenChanges = new Set(changes.map(ref => `${String(ref.sessionId)}:${ref.seq}`))
     const dispatches: DispatchView[] = rawDispatches.map(record => {
       const session = record.sessionId !== undefined && (record.agentKind === undefined || record.agentKind === 'builtin')
         ? this.ctx.sessions.get(record.sessionId as SessionId)
         : undefined
       if (session !== undefined && record.sessionId !== undefined) {
-        deliverables.push(...this.presentedOf(record.sessionId, session))
-        changes.push(...this.changesOf(record.sessionId, session))
+        for (const ref of this.presentedOf(record.sessionId, session)) {
+          const key = `${record.sessionId}:${ref.path}`
+          if (seenDeliverables.has(key)) continue
+          seenDeliverables.add(key)
+          deliverables.push(ref)
+        }
+        for (const ref of this.changesOf(record.sessionId, session)) {
+          const key = `${record.sessionId}:${ref.seq}`
+          if (seenChanges.has(key)) continue
+          seenChanges.add(key)
+          changes.push(ref)
+        }
       }
       return this.viewOf(record, session)
     })
-    const events = await this.eventsOfTicket(input.ticketId, rawDispatches)
     return { ticket, dispatches, deliverables, changes, events, ...this.followUpLinks(input.ticketId) }
   }
 
@@ -754,6 +796,42 @@ export class DshManagerExecutor extends TypertRemoteService {
     const folded = backfillTimeline(ticketId, dispatches, attentions, Date.now())
     await store.putTimeline(folded)
     return folded.events
+  }
+
+  /**
+   * Fold deliverables from persisted Session logs into the ledger once, so a
+   * drawer opened after a restart still lists them. A terminal marker keeps a
+   * ticket with no deliverables from rescanning on every open; diffs are not
+   * recovered because the host computes them from live workspace state.
+   */
+  private async backfillArtifacts(ticketId: string, dispatches: readonly DispatchRecord[]): Promise<void> {
+    const query = this.ctx.get('sessionQuery') as {
+      inspectSession<T>(sessionId: SessionId, read: (session: Session) => T, signal?: AbortSignal): Promise<T>
+    } | undefined
+    let scanned = 0
+    for (const record of dispatches.slice(0, 10)) {
+      if (record.sessionId === undefined) continue
+      if (record.agentKind !== undefined && record.agentKind !== 'builtin') continue
+      const sessionId = record.sessionId as SessionId
+      if (query !== undefined) {
+        try {
+          const refs = await query.inspectSession(sessionId, session => this.presentedOf(sessionId, session), AbortSignal.timeout(5_000))
+          for (const ref of refs) {
+            await this.appendEvent(ticketId, 'artifact', 'executor', 'deliverable', ref.description ?? '', Date.now(), record.id, {
+              id: `deliverable:${sessionId}:${ref.turn}:${ref.index}`,
+              sessionId,
+              turn: ref.turn,
+              activity: { category: 'file', target: ref.path },
+              backfilled: true,
+            })
+          }
+        } catch (error) {
+          this.ctx.logger?.warn('dsh-manager: deliverable backfill failed: %s', error instanceof Error ? error.message : String(error))
+        }
+      }
+      scanned += 1
+    }
+    await this.appendEvent(ticketId, 'system', 'system', 'artifacts-scanned', String(scanned), Date.now(), undefined, { backfilled: true })
   }
 
   /** The follow-up chain of one ticket, for the detail view. */
@@ -1080,6 +1158,53 @@ export class DshManagerExecutor extends TypertRemoteService {
           },
         }).catch((error: unknown) => {
           this.ctx.logger?.warn('dsh-manager: tool timeline mirror failed: %s', String(error))
+        })
+        return
+      }
+      if (event.type === 'deliverables/presented') {
+        const sessionId = record.sessionId
+        if (sessionId === undefined) return
+        const store = this.ctx.dshManagerBoard.timelineStore()
+        const data = event.data
+        data.files.forEach((file, index) => {
+          void appendTimelineEvent(store, {
+            ticketId: record.ticketId,
+            id: `deliverable:${sessionId}:${data.turn}:${index}`,
+            kind: 'artifact',
+            author: 'executor',
+            at,
+            turnId: record.id,
+            code: 'deliverable',
+            body: file.description ?? '',
+            sessionId,
+            turn: data.turn,
+            activity: { category: 'file', target: file.path },
+          }).catch((error: unknown) => {
+            this.ctx.logger?.warn('dsh-manager: deliverable timeline mirror failed: %s', String(error))
+          })
+        })
+        return
+      }
+      if (event.type === 'workspace/changes') {
+        const sessionId = record.sessionId
+        if (sessionId === undefined) return
+        const summary = this.ctx.workspaceChanges.summary(sessionId as SessionId, event.seq)
+        if (summary === undefined || summary.total === 0) return
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id: `change:${sessionId}:${event.seq}`,
+          kind: 'artifact',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          code: 'change',
+          body: String(summary.total),
+          sessionId,
+          turn: typeof event.data.turn === 'number' ? event.data.turn : 0,
+          sourceSeq: event.seq,
+          activity: { category: 'file' },
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: change timeline mirror failed: %s', String(error))
         })
       }
     } catch (error) {

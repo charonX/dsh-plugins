@@ -22,6 +22,8 @@
 - 事件字段：`id`、`seq`、`kind`（instruction / assistant / tool / report / attention / artifact / system）、`author`（user / executor / steward / system）、`at`、`turnId`、`code`（客户端本地化的稳定机器码）、`body`（原文）、可选的 `attentionId` / `reportId` / `activity` / `backfilled`。
 - 写入点：dispatch 与 attention 的**存储适配器**在写成功后就地镜像（轮次开始、每条 report、轮次结束、提问、回答）；Steward 的返工与结束由 board service 显式追加。事件 id 由来源派生（`report:<dispatchId>:<reportId>`、`attention:<id>:answered`、`dispatch:<id>:started`），重放与重启扫描天然幂等。
 - 读模型：`ticketDetail` 返回 `events`；老工单首次读取时从 dispatch.reports 与 attentions 折叠回填（`backfilled: true`），id 同样派生，重复回填不产生重复事件。
+- 产出与变更也入账：`deliverables/presented` 写 `kind: artifact` + `code: deliverable`（`activity.target` 存路径，`body` 存说明），`workspace/changes` 写 `kind: artifact` + `code: change`（`body` 存文件数、`sourceSeq` 存原始事件序号）。事件额外携带 `sessionId` / `turn` / `sourceSeq`，让 `ticketDetail` 在冷会话下仍能列出产出。变更的 diff 正文不进账本：宿主 `workspaceChanges` 是内存视图，重启后无法还原，点击 diff 只在会话活着时可用。
+- 老工单回填：`ticketDetail` 首次读到没有 `artifacts-scanned` 标记的工单时，用 `ctx.sessionQuery.inspectSession` 读持久会话里的 `deliverables/presented` 补齐产出，然后写一次 `artifacts-scanned` 系统事件，避免每次打开都重扫。
 - 保留策略：文本事件永久保留；工具类事件由 UI 按轮聚合成一条并折叠明细，账本本身不丢原始 report。
 - 域版本升到 2，`compatibleVersions: [1]`：v1 记录 schema 未变，可读；首次写入后 unit 标记为 2。
 
