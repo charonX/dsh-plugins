@@ -10,6 +10,22 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 const MAX_ANCESTOR_HOPS = 4
 
 /**
+ * Find the nearest `scratch` root directory by walking up from `basePath`
+ * (supporting multi-repo workspaces such as `home-repos/repos/<subrepo>` or worktrees).
+ */
+export function findScratchRoot(basePath: string): string | undefined {
+  let cursor = resolve(basePath)
+  for (let hop = 0; hop <= MAX_ANCESTOR_HOPS; hop += 1) {
+    const candidate = join(cursor, 'scratch')
+    if (existsSync(candidate)) return candidate
+    const parent = dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+  return undefined
+}
+
+/**
  * Find the nearest `scratch/tasks` root by walking up from `basePath` (for
  * multi-repo workspaces such as `home-repos/repos/<subrepo>`), or undefined
  * when none exists within {@link MAX_ANCESTOR_HOPS} levels.
@@ -40,6 +56,22 @@ export function extractScratchTaskDirFromText(text: string | undefined, basePath
   if (basePath === undefined) return undefined
   const root = findScratchTasksRoot(basePath)
   return root === undefined ? undefined : join(root, slug)
+}
+
+/**
+ * Extract an explicit `.../scratch/prototypes/<slug>` directory when referenced in
+ * a ticket's scope or acceptance criteria for backward compatibility with standalone prototypes.
+ */
+export function extractScratchPrototypeDirFromText(text: string | undefined, basePath?: string): string | undefined {
+  if (text === undefined || text.trim() === '') return undefined
+  const absMatch = /(\/[^\s"'`<>()]*?\/scratch\/prototypes\/[A-Za-z0-9._-]+)/.exec(text)
+  if (absMatch?.[1] !== undefined) return absMatch[1]
+  const relMatch = /(?:^|[\s"'`([/])(?:home-repos\/)?(scratch\/prototypes\/[A-Za-z0-9._-]+)/.exec(text)
+  if (relMatch?.[1] === undefined) return undefined
+  const slug = relMatch[1].replace(/^scratch\/prototypes\//, '')
+  if (basePath === undefined) return undefined
+  const root = findScratchRoot(basePath)
+  return root === undefined ? undefined : join(root, 'prototypes', slug)
 }
 
 /**
