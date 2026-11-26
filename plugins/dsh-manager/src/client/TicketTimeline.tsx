@@ -99,6 +99,38 @@ export function timelineOf(detail: TicketDetailView, attentions?: readonly Atten
   return events.sort((left, right) => left.at - right.at || left.seq - right.seq)
 }
 
+/**
+ * Rows that only restate the turn header. `turn-started`/`turn-ended` exist so
+ * the ledger knows when a turn began and ended, but the section header already
+ * shows the state and the range, so printing the raw code reads as debug noise.
+ */
+function isNoise(event: TimelineEvent): boolean {
+  if (event.kind !== 'system') return false
+  if (event.code === 'turn-started' || event.code === 'artifacts-scanned') return true
+  return (event.code ?? '').startsWith('turn-ended')
+}
+
+/**
+ * Drop a row whose sentence the previous kept row already said. A retried or
+ * re-emitted assistant message and its report copy land as two events; keeping
+ * both reads as if the executor repeated itself.
+ */
+function collapseRepeats(events: readonly TimelineEvent[]): readonly TimelineEvent[] {
+  const kept: TimelineEvent[] = []
+  for (const event of events) {
+    if (isNoise(event)) continue
+    const previous = kept.at(-1)
+    // An assistant message and its `message` report carry the same sentence.
+    const speech = (kind: string): boolean => kind === 'assistant' || kind === 'report'
+    const repeated = previous !== undefined
+      && previous.turnId === event.turnId
+      && speech(previous.kind) && speech(event.kind)
+      && previous.body === event.body
+    if (!repeated) kept.push(event)
+  }
+  return kept
+}
+
 /** One turn group or one standalone system row. */
 export interface TimelineGroup {
   readonly turnId?: string
@@ -142,7 +174,7 @@ export function TicketTimeline({ detail, attentions, t, markdownLabels, cancelli
   onCancel?: (dispatchId: string) => void
   onAnswerAttention?: (input: { attentionId: string; answer: string }) => Promise<boolean>
 }) {
-  const groups = groupTimeline(timelineOf(detail, attentions))
+  const groups = groupTimeline(collapseRepeats(timelineOf(detail, attentions)))
   const attentionById = new Map((attentions ?? []).map(attention => [attention.id, attention]))
   let turnNumber = 0
   if (groups.length === 0) {

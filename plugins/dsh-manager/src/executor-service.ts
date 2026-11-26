@@ -152,6 +152,8 @@ export class DshManagerExecutor extends TypertRemoteService {
   private readonly activeRuns = new Set<Promise<void>>()
   private ticker?: ReturnType<typeof setInterval>
   /** The live executor agents by dispatch id; answer delivery follows up here. */
+  /** Last assistant sentence mirrored per dispatch; re-emissions of it are not new speech. */
+  private readonly lastAssistantBody = new Map<string, string>()
   private liveAgents = new Map<string, Agent>()
   /** The owning handles by dispatch id; a resumed turn disposes its predecessor first. */
   private liveHandles = new Map<string, AgentHandle>()
@@ -1107,6 +1109,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       this.ctx.logger?.error(error)
     } finally {
       offSessionEvent()
+      this.lastAssistantBody.delete(record.id)
       if (timer !== undefined) clearTimeout(timer)
       controller.signal.removeEventListener('abort', onCancel)
       this.activeControllers.delete(record.id)
@@ -1128,6 +1131,8 @@ export class DshManagerExecutor extends TypertRemoteService {
           .join('\n')
           .trim()
         if (text === '') return
+        if (this.lastAssistantBody.get(record.id) === text) return
+        this.lastAssistantBody.set(record.id, text)
         void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
           ticketId: record.ticketId,
           id,
