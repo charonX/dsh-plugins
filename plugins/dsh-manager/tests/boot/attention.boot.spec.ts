@@ -188,10 +188,12 @@ test(
     const summary = await ctx.dshManagerBoard.summary()
     expect(summary.columns.find(column => column.id === 'attention')?.count).toBe(1)
 
-    // The GUI feed holds the notification with the question as its copy.
-    const feed = (await ctx.dshManagerNotifications.notificationList()).notifications
-    expect(feed.some(notification => notification.kind === 'attention' && notification.attentionId === attention!.id
-      && notification.ticketId === ticketId && notification.title === 'Which database should this target?')).toBe(true)
+    // The GUI feed holds the notification with the question as its copy (notify runs after store persistence).
+    await vi.waitFor(async () => {
+      const feed = (await ctx.dshManagerNotifications.notificationList()).notifications
+      expect(feed.some(notification => notification.kind === 'attention' && notification.attentionId === attention!.id
+        && notification.ticketId === ticketId && notification.title === 'Which database should this target?')).toBe(true)
+    }, { timeout: 5_000, interval: 50 })
 
     // The user answers on the board; the delivery reaches the session.
     const answered = await ctx.dshManagerExecutor.answerAttention({ attentionId: attention!.id, answer: 'Use Postgres' })
