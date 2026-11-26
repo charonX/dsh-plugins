@@ -225,7 +225,9 @@ test(
     const ticketA = tickets[0]!.id
 
     // The first dispatch runs and reports ready.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketA })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticketA })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketA })
+    }
     await awaitReady(ctx, ticketA)
 
     // The Steward reviews: a rework records the verdict and re-dispatches.
@@ -314,7 +316,9 @@ test(
     const ticketB = tickets[0]!.id
 
     // Dispatch once; every later dispatch is the Steward's automatic rework.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketB })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticketB })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketB })
+    }
     for (let round = 1; round <= 3; round++) {
       await awaitReady(ctx, ticketB)
       await ctx.dshManagerSteward.reviewPending()

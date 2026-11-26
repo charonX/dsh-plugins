@@ -51,26 +51,28 @@ import {
   type ImTestSendInput,
 } from './im/wire-types.ts'
 import {
-  agentKindOptionsInputSchema,
-  crewInputSchema, crewMemberIdSchema, crewUpdateInputSchema,
-  type AgentKindOption, type AgentKindOptionsInput,
-  type CrewInput, type CrewMemberIdInput, type CrewMemberView, type CrewUpdateInput, type ModelProviderOptions,
-} from './crew/wire-types.ts'
+  flowIdSchema,
+  flowImportPlaybookInputSchema,
+  flowInputSchema,
+  flowPresetApplyInputSchema,
+  flowSyncPlaybookInputSchema,
+  flowUpdateInputSchema,
+  type AgentKindOption,
+  type DiscoveredSkill,
+  type FlowDef,
+  type FlowIdInput,
+  type FlowImportPlaybookInput,
+  type FlowInput,
+  type FlowPresetApplyInput,
+  type FlowSyncPlaybookInput,
+  type FlowUpdateInput,
+  type ModelProviderOptions,
+} from './flow/flow-ir.ts'
 import type { TeamConfigStatusView } from './team-config/team-config-core.ts'
 import {
-  presetApplyInputSchema,
-  promptPreviewInputSchema,
-  promptSaveInputSchema,
   teamConfigImportYamlInputSchema,
-  type PresetApplyInput,
-  type PromptPreviewInput,
-  type PromptPreviewView,
-  type PromptRegistryView,
-  type PromptSaveInput,
   type TeamConfigImportYamlInput,
 } from './team-config/wire-types.ts'
-import { pipelineIdSchema, pipelineInputSchema, pipelineUpdateInputSchema, type PipelineIdInput, type PipelineInput, type PipelineUpdateInput, type PipelineView } from './pipeline/wire-types.ts'
-import { routeIdSchema, routeInputSchema, routeUpdateInputSchema, type RouteIdInput, type RouteInput, type RouteRuleView, type RouteUpdateInput } from './route/wire-types.ts'
 import { policyDiffInputSchema, policyUpdateInputSchema, type PolicyDiff, type PolicyDiffInput, type PolicyRecord, type PolicyUpdateInput } from './policy/wire-types.ts'
 import type { FlowTimelineView } from './flow/flow-core.ts'
 import {
@@ -136,29 +138,34 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     imSettings: () => Promise<RemoteResult<ImSettingsSnapshotView>>
     imSettingsUpdate: (input: ImSettingsUpdateInput) => Promise<RemoteResult<ImSettingsSnapshotView>>
     imTestSend: (input?: ImTestSendInput) => Promise<RemoteResult<{ readonly sent: boolean; readonly error?: string }>>
-    crewList: () => Promise<RemoteResult<{ readonly members: readonly CrewMemberView[] }>>
+    flowList: () => Promise<RemoteResult<{ readonly flows: readonly FlowDef[] }>>
+    flowAdd: (input: FlowInput) => Promise<RemoteResult<{ readonly flow: FlowDef }>>
+    flowUpdate: (input: FlowUpdateInput) => Promise<RemoteResult<{ readonly flow: FlowDef }>>
+    flowRemove: (input: FlowIdInput) => Promise<RemoteResult<{ readonly removed: boolean }>>
+    flowPresetApply: (input: FlowPresetApplyInput) => Promise<RemoteResult<{ readonly flow: FlowDef; readonly status: TeamConfigStatusView }>>
+    flowImportPlaybook: (input: FlowImportPlaybookInput) => Promise<RemoteResult<{
+      readonly flow: FlowDef
+      readonly cacheHit: boolean
+      readonly method: 'cache' | 'frontmatter' | 'markdown' | 'llm'
+      readonly status: TeamConfigStatusView
+    }>>
+    flowSyncPlaybook: (input: FlowSyncPlaybookInput) => Promise<RemoteResult<{
+      readonly flow: FlowDef
+      readonly cacheHit: boolean
+      readonly method: 'cache' | 'frontmatter' | 'markdown' | 'llm'
+      readonly status: TeamConfigStatusView
+    }>>
+    skillCatalog: (input?: { readonly cwd?: string }) => Promise<RemoteResult<{ readonly skills: readonly DiscoveredSkill[] }>>
+    modelOptions: () => Promise<RemoteResult<{ readonly providers: readonly ModelProviderOptions[] }>>
+    agentKindOptions: (input?: { readonly refresh?: boolean }) => Promise<RemoteResult<{ readonly kinds: readonly AgentKindOption[] }>>
     teamConfigStatus: () => Promise<RemoteResult<TeamConfigStatusView>>
     teamConfigReload: () => Promise<RemoteResult<TeamConfigStatusView>>
-    promptRegistry: () => Promise<RemoteResult<PromptRegistryView>>
-    promptSave: (input: PromptSaveInput) => Promise<RemoteResult<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }>>
-    teamConfigImportYaml: (input: TeamConfigImportYamlInput) => Promise<RemoteResult<{ readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView }>>
-    promptRenderPreview: (input: PromptPreviewInput) => Promise<RemoteResult<PromptPreviewView>>
-    presetApply: (input: PresetApplyInput) => Promise<RemoteResult<{ readonly pipeline: PipelineView; readonly createdMembers: readonly CrewMemberView[]; readonly status: TeamConfigStatusView }>>
-    modelOptions: () => Promise<RemoteResult<{ readonly providers: readonly ModelProviderOptions[] }>>
-    agentKindOptions: (input?: AgentKindOptionsInput) => Promise<RemoteResult<{ readonly kinds: readonly AgentKindOption[] }>>
-    crewAdd: (input: CrewInput) => Promise<RemoteResult<{ readonly member: CrewMemberView }>>
-    crewUpdate: (input: CrewUpdateInput) => Promise<RemoteResult<{ readonly member: CrewMemberView }>>
-    crewRemove: (input: CrewMemberIdInput) => Promise<RemoteResult<{ readonly removed: boolean }>>
-    pipelineList: () => Promise<RemoteResult<{ readonly pipelines: readonly PipelineView[] }>>
-    pipelineAdd: (input: PipelineInput) => Promise<RemoteResult<{ readonly pipeline: PipelineView }>>
-    pipelineUpdate: (input: PipelineUpdateInput) => Promise<RemoteResult<{ readonly pipeline: PipelineView }>>
-    pipelineRemove: (input: PipelineIdInput) => Promise<RemoteResult<{ readonly removed: boolean }>>
-    pipelineReferencesOf: (input: CrewMemberIdInput) => Promise<RemoteResult<{ readonly references: readonly string[] }>>
-    ruleList: () => Promise<RemoteResult<{ readonly rules: readonly RouteRuleView[] }>>
-    ruleAdd: (input: RouteInput) => Promise<RemoteResult<{ readonly rule: RouteRuleView }>>
-    ruleUpdate: (input: RouteUpdateInput) => Promise<RemoteResult<{ readonly rule: RouteRuleView }>>
-    ruleRemove: (input: RouteIdInput) => Promise<RemoteResult<{ readonly removed: boolean }>>
-    ruleReferencesOfPipeline: (input: PipelineIdInput) => Promise<RemoteResult<{ readonly rules: readonly string[] }>>
+    teamConfigExportYaml: () => Promise<RemoteResult<{ readonly yaml: string; readonly status: TeamConfigStatusView }>>
+    teamConfigImportYaml: (input: TeamConfigImportYamlInput) => Promise<RemoteResult<{
+      readonly status: TeamConfigStatusView
+      readonly flows: readonly FlowDef[]
+      readonly yaml: string
+    }>>
     policyList: () => Promise<RemoteResult<{ readonly policies: readonly PolicyRecord[] }>>
     policyDiff: (input: PolicyDiffInput) => Promise<RemoteResult<{ readonly diff: PolicyDiff }>>
     policyUpdate: (input: PolicyUpdateInput) => Promise<RemoteResult<{ readonly policy: PolicyRecord }>>
@@ -1123,19 +1130,141 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           decode: value => value as { readonly sent: boolean; readonly error?: string },
         },
       },
-      'dshManager/crewList': {
-        service: 'dshManagerCrew',
+      'dshManager/flowList': {
+        service: 'dshManagerFlow',
         invocation: { kind: 'direct' },
         parameters: [],
         result: {
           mode: 'strict',
-          typeSymbol: 'CrewList',
+          typeSymbol: 'FlowListResult',
           create: () => z.any(),
-          decode: value => value as { readonly members: readonly CrewMemberView[] },
+          decode: value => value as { readonly flows: readonly FlowDef[] },
+        },
+      },
+      'dshManager/flowAdd': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowInput', create: () => flowInputSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowInput', create: () => flowInputSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowAddResult',
+          create: () => z.any(),
+          decode: value => value as { readonly flow: FlowDef },
+        },
+      },
+      'dshManager/flowUpdate': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowUpdateInput', create: () => flowUpdateInputSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowUpdateInput', create: () => flowUpdateInputSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowUpdateResult',
+          create: () => z.any(),
+          decode: value => value as { readonly flow: FlowDef },
+        },
+      },
+      'dshManager/flowRemove': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowIdInput', create: () => flowIdSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowIdInput', create: () => flowIdSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowRemoveResult',
+          create: () => z.any(),
+          decode: value => value as { readonly removed: boolean },
+        },
+      },
+      'dshManager/flowPresetApply': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowPresetApplyInput', create: () => flowPresetApplyInputSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowPresetApplyInput', create: () => flowPresetApplyInputSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowPresetApplyResult',
+          create: () => z.any(),
+          decode: value => value as { readonly flow: FlowDef; readonly status: TeamConfigStatusView },
+        },
+      },
+      'dshManager/flowImportPlaybook': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowImportPlaybookInput', create: () => flowImportPlaybookInputSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowImportPlaybookInput', create: () => flowImportPlaybookInputSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowImportPlaybookResult',
+          create: () => z.any(),
+          decode: value => value as {
+            readonly flow: FlowDef
+            readonly cacheHit: boolean
+            readonly method: 'cache' | 'frontmatter' | 'markdown' | 'llm'
+            readonly status: TeamConfigStatusView
+          },
+        },
+      },
+      'dshManager/flowSyncPlaybook': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'FlowSyncPlaybookInput', create: () => flowSyncPlaybookInputSchema },
+          strictCodec: { mode: 'strict', typeSymbol: 'FlowSyncPlaybookInput', create: () => flowSyncPlaybookInputSchema },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'FlowSyncPlaybookResult',
+          create: () => z.any(),
+          decode: value => value as {
+            readonly flow: FlowDef
+            readonly cacheHit: boolean
+            readonly method: 'cache' | 'frontmatter' | 'markdown' | 'llm'
+            readonly status: TeamConfigStatusView
+          },
+        },
+      },
+      'dshManager/skillCatalog': {
+        service: 'dshManagerFlow',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: { mode: 'strict', typeSymbol: 'SkillCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
+          strictCodec: { mode: 'strict', typeSymbol: 'SkillCatalogInput', create: () => z.object({ cwd: z.string().optional() }).optional() },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'SkillCatalogResult',
+          create: () => z.any(),
+          decode: value => value as { readonly skills: readonly DiscoveredSkill[] },
         },
       },
       'dshManager/modelOptions': {
-        service: 'dshManagerCrew',
+        service: 'dshManagerFlow',
         invocation: { kind: 'direct' },
         parameters: [],
         result: {
@@ -1146,313 +1275,19 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
         },
       },
       'dshManager/agentKindOptions': {
-        service: 'dshManagerCrew',
+        service: 'dshManagerFlow',
         invocation: { kind: 'direct' },
         parameters: [{
           name: 'rawInput',
           source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'AgentKindOptionsInput',
-            create: () => agentKindOptionsInputSchema.optional(),
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'AgentKindOptionsInput',
-            create: () => agentKindOptionsInputSchema.optional(),
-          },
+          codec: { mode: 'strict', typeSymbol: 'AgentKindOptionsInput', create: () => z.object({ refresh: z.boolean().optional() }).optional() },
+          strictCodec: { mode: 'strict', typeSymbol: 'AgentKindOptionsInput', create: () => z.object({ refresh: z.boolean().optional() }).optional() },
         }],
         result: {
           mode: 'strict',
           typeSymbol: 'AgentKindOptions',
           create: () => z.any(),
           decode: value => value as { readonly kinds: readonly AgentKindOption[] },
-        },
-      },
-      'dshManager/crewAdd': {
-        service: 'dshManagerCrew',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'CrewInput',
-            create: () => crewInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'CrewInput',
-            create: () => crewInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'CrewAddResult',
-          create: () => z.any(),
-          decode: value => value as { readonly member: CrewMemberView },
-        },
-      },
-      'dshManager/crewUpdate': {
-        service: 'dshManagerCrew',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'CrewUpdateInput',
-            create: () => crewUpdateInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'CrewUpdateInput',
-            create: () => crewUpdateInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'CrewUpdateResult',
-          create: () => z.any(),
-          decode: value => value as { readonly member: CrewMemberView },
-        },
-      },
-      'dshManager/crewRemove': {
-        service: 'dshManagerCrew',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'CrewMemberIdInput',
-            create: () => crewMemberIdSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'CrewMemberIdInput',
-            create: () => crewMemberIdSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'CrewRemoveResult',
-          create: () => z.any(),
-          decode: value => value as { readonly removed: boolean },
-        },
-      },
-      'dshManager/pipelineList': {
-        service: 'dshManagerPipeline',
-        invocation: { kind: 'direct' },
-        parameters: [],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PipelineList',
-          create: () => z.any(),
-          decode: value => value as { readonly pipelines: readonly PipelineView[] },
-        },
-      },
-      'dshManager/pipelineAdd': {
-        service: 'dshManagerPipeline',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineInput',
-            create: () => pipelineInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineInput',
-            create: () => pipelineInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PipelineAddResult',
-          create: () => z.any(),
-          decode: value => value as { readonly pipeline: PipelineView },
-        },
-      },
-      'dshManager/pipelineUpdate': {
-        service: 'dshManagerPipeline',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineUpdateInput',
-            create: () => pipelineUpdateInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineUpdateInput',
-            create: () => pipelineUpdateInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PipelineUpdateResult',
-          create: () => z.any(),
-          decode: value => value as { readonly pipeline: PipelineView },
-        },
-      },
-      'dshManager/pipelineRemove': {
-        service: 'dshManagerPipeline',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineIdInput',
-            create: () => pipelineIdSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineIdInput',
-            create: () => pipelineIdSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PipelineRemoveResult',
-          create: () => z.any(),
-          decode: value => value as { readonly removed: boolean },
-        },
-      },
-      'dshManager/pipelineReferencesOf': {
-        service: 'dshManagerPipeline',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'CrewMemberIdInput',
-            create: () => crewMemberIdSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'CrewMemberIdInput',
-            create: () => crewMemberIdSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PipelineReferencesResult',
-          create: () => z.any(),
-          decode: value => value as { readonly references: readonly string[] },
-        },
-      },
-      'dshManager/ruleList': {
-        service: 'dshManagerRoute',
-        invocation: { kind: 'direct' },
-        parameters: [],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'RouteRuleList',
-          create: () => z.any(),
-          decode: value => value as { readonly rules: readonly RouteRuleView[] },
-        },
-      },
-      'dshManager/ruleAdd': {
-        service: 'dshManagerRoute',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'RouteInput',
-            create: () => routeInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'RouteInput',
-            create: () => routeInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'RouteAddResult',
-          create: () => z.any(),
-          decode: value => value as { readonly rule: RouteRuleView },
-        },
-      },
-      'dshManager/ruleUpdate': {
-        service: 'dshManagerRoute',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'RouteUpdateInput',
-            create: () => routeUpdateInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'RouteUpdateInput',
-            create: () => routeUpdateInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'RouteUpdateResult',
-          create: () => z.any(),
-          decode: value => value as { readonly rule: RouteRuleView },
-        },
-      },
-      'dshManager/ruleRemove': {
-        service: 'dshManagerRoute',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'RouteIdInput',
-            create: () => routeIdSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'RouteIdInput',
-            create: () => routeIdSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'RouteRemoveResult',
-          create: () => z.any(),
-          decode: value => value as { readonly removed: boolean },
-        },
-      },
-      'dshManager/ruleReferencesOfPipeline': {
-        service: 'dshManagerRoute',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineIdInput',
-            create: () => pipelineIdSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PipelineIdInput',
-            create: () => pipelineIdSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'RouteReferencesResult',
-          create: () => z.any(),
-          decode: value => value as { readonly rules: readonly string[] },
         },
       },
       'dshManager/policyList': {
@@ -1536,39 +1371,15 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           decode: value => value as TeamConfigStatusView,
         },
       },
-      'dshManager/promptRegistry': {
+      'dshManager/teamConfigExportYaml': {
         service: 'dshManagerTeamConfig',
         invocation: { kind: 'direct' },
         parameters: [],
         result: {
           mode: 'strict',
-          typeSymbol: 'PromptRegistryView',
+          typeSymbol: 'TeamConfigExportYamlResult',
           create: () => z.any(),
-          decode: value => value as PromptRegistryView,
-        },
-      },
-      'dshManager/promptSave': {
-        service: 'dshManagerTeamConfig',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PromptSaveInput',
-            create: () => promptSaveInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PromptSaveInput',
-            create: () => promptSaveInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PromptSaveResult',
-          create: () => z.any(),
-          decode: value => value as { readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView },
+          decode: value => value as { readonly yaml: string; readonly status: TeamConfigStatusView },
         },
       },
       'dshManager/teamConfigImportYaml': {
@@ -1592,58 +1403,10 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           mode: 'strict',
           typeSymbol: 'TeamConfigImportYamlResult',
           create: () => z.any(),
-          decode: value => value as { readonly status: TeamConfigStatusView; readonly registry: PromptRegistryView },
-        },
-      },
-      'dshManager/promptRenderPreview': {
-        service: 'dshManagerTeamConfig',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PromptPreviewInput',
-            create: () => promptPreviewInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PromptPreviewInput',
-            create: () => promptPreviewInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PromptPreviewView',
-          create: () => z.any(),
-          decode: value => value as PromptPreviewView,
-        },
-      },
-      'dshManager/presetApply': {
-        service: 'dshManagerTeamConfig',
-        invocation: { kind: 'direct' },
-        parameters: [{
-          name: 'rawInput',
-          source: 'json',
-          codec: {
-            mode: 'strict',
-            typeSymbol: 'PresetApplyInput',
-            create: () => presetApplyInputSchema,
-          },
-          strictCodec: {
-            mode: 'strict',
-            typeSymbol: 'PresetApplyInput',
-            create: () => presetApplyInputSchema,
-          },
-        }],
-        result: {
-          mode: 'strict',
-          typeSymbol: 'PresetApplyResult',
-          create: () => z.any(),
           decode: value => value as {
-            readonly pipeline: PipelineView
-            readonly createdMembers: readonly CrewMemberView[]
             readonly status: TeamConfigStatusView
+            readonly flows: readonly FlowDef[]
+            readonly yaml: string
           },
         },
       },

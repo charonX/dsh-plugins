@@ -188,7 +188,9 @@ test(
       const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
       expect(tickets).toHaveLength(1)
       const ticket = tickets[0]!.id
-      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket })
+      if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket })).dispatches.length === 0) {
+        await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticket })
+      }
       await awaitReady(ctx, ticket)
       await ctx.dshManagerSteward.reviewPending()
 

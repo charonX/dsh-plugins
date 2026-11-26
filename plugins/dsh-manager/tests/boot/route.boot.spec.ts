@@ -1,12 +1,10 @@
 /**
- * Main-seam spec for routing and the pipeline walk (team tickets 04/05): an
- * accepted ticket is routed through the resident main Session — a matching
- * rule annotates the ticket with its flow and auto-dispatches stage 1, whose
- * executor prompt opens with the crew member's duty and the stage
- * instruction; `none` raises the human's attention with the suggestion to
- * add a rule, and the ticket waits. A three-stage pipeline then walks: a
- * skippable middle stage goes through the steward's skip proposal, and the
- * human's approval or rejection either walks past the stage or runs it.
+ * Main-seam spec for Flow IR routing and step walks:
+ * 1) An accepted ticket routed to a Flow IR annotates the ticket and dispatches Step 1 with skills + goal.
+ * 2) `none: true` (or unmatched flow) falls back immediately to single-step generic execution without raising a blocking Attention.
+ * 3) A 3-step Flow IR with `humanConfirm` on Step 1 pauses cleanly for human approval (`approved`),
+ *    advances deterministically through Step 2, runs Step 3's `onFail` review gate, and asks final acceptance.
+ * 4) Rejecting `humanConfirm` re-dispatches the current step with human feedback before continuing.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -109,9 +107,8 @@ function evalIdOf(options: GenerateOptions): string {
   return evalId
 }
 
-/** One adaptive turn: eval, route, skip, executor, and review prompts share one adapter. */
-function adaptiveTurn(pick: { ruleId?: string; none?: boolean; skip?: { readonly skip: boolean; readonly rationale: string } }): (options: GenerateOptions) => StreamChunk[] {
-  let dispatches = 0
+/** One adaptive turn: eval, route, executor, and review prompts share one adapter. */
+function adaptiveTurn(pick: { flowId?: string; none?: boolean }): (options: GenerateOptions) => StreamChunk[] {
   return options => {
     const last = options.messages.at(-1)
     if (last === undefined) return textResponse('done')
@@ -132,28 +129,19 @@ function adaptiveTurn(pick: { ruleId?: string; none?: boolean; skip?: { readonly
         },
       }])
     }
-    if (tail.includes('Route the accepted ticket')) {
+    if (tail.includes('Route ticket ')) {
       return toolCallsResponse([{
         name: 'record_route',
-        args: { ...(pick.ruleId === undefined ? {} : { ruleId: pick.ruleId }), ...(pick.none === true ? { none: true } : {}), rationale: 'the routed call' },
-      }])
-    }
-    if (tail.includes('Decide whether pipeline stage')) {
-      return toolCallsResponse([{
-        name: 'decide_skip',
-        args: pick.skip === undefined
-          ? { skip: false, rationale: 'the stage is needed' }
-          : { skip: pick.skip.skip, rationale: pick.skip.rationale },
+        args: { ...(pick.flowId === undefined ? {} : { flowId: pick.flowId }), ...(pick.none === true ? { none: true } : {}), rationale: 'the routed call' },
       }])
     }
     if (tail.includes('executor dispatched for ticket')) {
-      dispatches += 1
       return toolCallsResponse([
         { name: 'present', args: { files: [{ path: 'stage-note.md', description: 'The stage note' }] } },
         { name: 'submit_report', args: { kind: 'ready', message: 'the stage work is complete' } },
       ])
     }
-    if (tail.includes('review')) {
+    if (tail.includes('Review the finished work on ticket')) {
       return toolCallsResponse([{ name: 'record_review', args: { verdict: 'pass', feedback: 'meets the mandate', dispatchId: 'unknown' } }])
     }
     return textResponse('done')
@@ -185,42 +173,35 @@ async function waitUntilService(ctx: Context, name: string, timeoutMs = 30_000):
   }
 }
 
-/** Seed one member, one pipeline, and one rule; return the ids. */
-async function seedRoute(ctx: Context): Promise<{ memberId: string; pipelineId: string; ruleId: string }> {
-  const { member } = await ctx.dshManagerCrew.crewAdd({
-    name: 'Stage Worker',
-    role: 'execute the stage work carefully and report what you did',
-  })
-  const { pipeline } = await ctx.dshManagerPipeline.pipelineAdd({
+/** Seed a single-step Flow IR rule; return its id. */
+async function seedRoute(ctx: Context): Promise<{ flowId: string }> {
+  const { flow } = await ctx.dshManagerFlow.flowAdd({
     name: 'Test line',
-    stages: [{ memberId: member.id, instruction: 'produce the stage note' }],
+    when: 'any testing task that needs a stage run',
+    workspaceMode: 'in-place',
+    steps: [{
+      id: 'stage-1',
+      name: 'Stage Worker',
+      skills: ['tdd'],
+      goal: 'produce the stage note',
+    }],
   })
-  const { rule } = await ctx.dshManagerRoute.ruleAdd({
-    condition: 'any testing task that needs a stage run',
-    pipelineId: pipeline.id,
-  })
-  return { memberId: member.id, pipelineId: pipeline.id, ruleId: rule.id }
+  return { flowId: flow.id }
 }
 
-/** Seed one member, one three-stage pipeline (the middle stage is skippable), and one rule; return the ids. */
-async function seedFlow(ctx: Context): Promise<{ memberId: string; pipelineId: string; ruleId: string }> {
-  const { member } = await ctx.dshManagerCrew.crewAdd({
-    name: 'Stage Worker',
-    role: 'execute the stage work carefully and report what you did',
-  })
-  const { pipeline } = await ctx.dshManagerPipeline.pipelineAdd({
+/** Seed a three-step Flow IR (Step 1 requires `humanConfirm`, Step 3 gates Step 2 via `onFail`); return its id. */
+async function seedFlow(ctx: Context): Promise<{ flowId: string }> {
+  const { flow } = await ctx.dshManagerFlow.flowAdd({
     name: 'Test line',
-    stages: [
-      { memberId: member.id, instruction: 'produce the stage note' },
-      { memberId: member.id, instruction: 'write the stage docs', skippable: true, skipLogic: 'skip when the mandate does not mention documentation' },
-      { memberId: member.id, instruction: 'final check of the stage note' },
+    when: 'any testing task that needs a stage run',
+    workspaceMode: 'in-place',
+    steps: [
+      { id: 'plan', name: 'Align & Plan', skills: ['how'], goal: 'produce the outline', readOnly: true, humanConfirm: true },
+      { id: 'draft', name: 'Draft Work', skills: ['tdd'], goal: 'produce the stage note' },
+      { id: 'review', name: 'Review Check', skills: ['verify'], goal: 'final check of the stage note', readOnly: true, onFail: 'draft' },
     ],
   })
-  const { rule } = await ctx.dshManagerRoute.ruleAdd({
-    condition: 'any testing task that needs a stage run',
-    pipelineId: pipeline.id,
-  })
-  return { memberId: member.id, pipelineId: pipeline.id, ruleId: rule.id }
+  return { flowId: flow.id }
 }
 
 /** The accepted ticket of the polled thread, waiting until it exists. */
@@ -259,13 +240,12 @@ async function waitForReview<T>(ctx: Context, poll: () => Promise<T | undefined>
 }
 
 interface FlowPick {
-  ruleId?: string
+  flowId?: string
   none?: boolean
-  skip?: { readonly skip: boolean; readonly rationale: string }
 }
 
-/** Boot one flow scenario: seed the three-stage pipeline, feed one trigger, and let the steward accept and route it. */
-async function bootFlow(home: string, port: number, skip?: { readonly skip: boolean; readonly rationale: string }): Promise<Context> {
+/** Boot one flow scenario: seed the three-step Flow IR, feed one trigger, and let the steward accept and route it. */
+async function bootFlow(home: string, port: number): Promise<Context> {
   const overlayPath = await writeOverlay(home, port)
   let pick: FlowPick = {}
   const adapter = new AdaptiveAdapter(options => adaptiveTurn(pick)(options))
@@ -273,7 +253,7 @@ async function bootFlow(home: string, port: number, skip?: { readonly skip: bool
   await waitUntilService(ctx, 'dshManagerSteward')
   ctx.llm.registerAdapter(['mock'], adapter)
   const ids = await seedFlow(ctx)
-  pick = { ruleId: ids.ruleId, ...(skip === undefined ? {} : { skip }) }
+  pick = { flowId: ids.flowId }
   const connection = await ctx.dshManagerConnections.connectionAdd({
     connector: 'jira', name: 'prod', deployment: 'server-dc', baseUrl, authMethod: 'pat', secret: 'pat-value',
   })
@@ -285,11 +265,10 @@ async function bootFlow(home: string, port: number, skip?: { readonly skip: bool
 }
 
 test(
-  'a matched rule annotates the ticket with its flow and auto-dispatches stage 1 with the member prompt',
+  'a matched flow annotates the ticket and auto-dispatches step 1 with mounted skills and goal',
   async () => {
     const overlayPath = await writeOverlay(hitHome, 3091)
-    // The rule id is generated at seed time, so the pick reads it lazily.
-    let pick: { ruleId?: string; none?: boolean } = { ruleId: '' }
+    let pick: FlowPick = { flowId: '' }
     const adapter = new AdaptiveAdapter((options) => adaptiveTurn(pick)(options))
 
     const ctx = await bootTestProfile({ binName: 'dsh-manager-test', profile: 'web', overlayPaths: [overlayPath], home: hitHome })
@@ -298,7 +277,7 @@ test(
       ctx.llm.registerAdapter(['mock'], adapter)
 
       const ids = await seedRoute(ctx)
-      pick = { ruleId: ids.ruleId }
+      pick = { flowId: ids.flowId }
 
       const connection = await ctx.dshManagerConnections.connectionAdd({
         connector: 'jira', name: 'prod', deployment: 'server-dc', baseUrl, authMethod: 'pat', secret: 'pat-value',
@@ -307,29 +286,23 @@ test(
       await ctx.dshManagerSources.sourcePoll({ id: source.id })
       await ctx.dshManagerSteward.runPending()
 
-      // The accepted ticket carries the flow annotation and auto-dispatched.
       const ticket = await acceptedTicketOf(ctx)
-      expect(ticket.flow).toMatchObject({ pipelineId: ids.pipelineId, pipelineName: 'Test line', stageIndex: 0, stageCount: 1 })
-      // Wait for the dispatch, then read the executor's session log (the
-      // session goes cold after its turn, so read through the query layer).
+      expect(ticket.flow).toMatchObject({ pipelineId: ids.flowId, pipelineName: 'Test line', stageIndex: 0, stageCount: 1 })
       const deadline = Date.now() + 30_000
       let prompt = ''
       for (;;) {
         const dispatches = (await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket.id })).dispatches
         const sessionId = dispatches[0]?.sessionId
         if (sessionId !== undefined) {
-          // The query layer's Context declaration lives in the host's
-          // session-query package, which the manager does not depend on —
-          // read cold sessions through a structural seam instead.
           const query = ctx as unknown as {
             sessionQuery: { observeSession(id: string): Promise<{ readonly events: readonly unknown[] } & AsyncDisposable> }
           }
           await using observation = await query.sessionQuery.observeSession(sessionId)
           prompt = JSON.stringify(observation.events)
           if (prompt.includes('Stage Worker')) {
-            expect(prompt).toContain('execute the stage work carefully')
             expect(prompt).toContain('produce the stage note')
-            expect(prompt).toContain('stage 1 of 1')
+            expect(prompt).toContain('tdd')
+            expect(prompt).toContain('Step 1/1')
             break
           }
         }
@@ -346,7 +319,7 @@ test(
 )
 
 test(
-  'a none pick raises the human attention and the ticket waits without a dispatch',
+  'a none pick falls back directly to single-step generic execution without raising a blocking attention',
   async () => {
     const overlayPath = await writeOverlay(noneHome, 3092)
     const adapter = new AdaptiveAdapter(adaptiveTurn({ none: true }))
@@ -363,23 +336,17 @@ test(
       await ctx.dshManagerSources.sourcePoll({ id: source.id })
       await ctx.dshManagerSteward.runPending()
 
-      // The human's attention asks how to proceed; the ticket stays todo.
-      const deadline = Date.now() + 30_000
-      for (;;) {
-        const attentions = (await ctx.dshManagerExecutor.attentionList({})).attentions
-          .filter(attention => attention.status === 'pending')
-        if (attentions.length > 0) {
-          expect(attentions[0]!.question).toContain('no configured route fits')
-          expect(attentions[0]!.question).toContain('add a route rule')
-          break
-        }
-        if (Date.now() > deadline) throw new Error('the none pick never raised the attention')
-        await new Promise(resolve => { setTimeout(resolve, 200) })
-      }
       const ticket = await acceptedTicketOf(ctx)
       expect(ticket.flow).toBeUndefined()
-      const dispatches = (await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket.id })).dispatches
-      expect(dispatches).toHaveLength(0)
+      const dispatches = await waitFor(async () => {
+        const list = (await ctx.dshManagerExecutor.dispatchList({ ticketId: ticket.id })).dispatches
+        return list.some(d => d.outcome === 'ready') ? list : undefined
+      }, 'single-step fallback dispatch')
+      expect(dispatches).toHaveLength(1)
+
+      const blockingRouteAsks = (await ctx.dshManagerExecutor.attentionList({ ticketId: ticket.id })).attentions
+        .filter(attention => attention.status === 'pending' && attention.dispatchId === 'steward' && attention.question.includes('no configured'))
+      expect(blockingRouteAsks).toHaveLength(0)
     } finally {
       await ctx.fiber.dispose()
     }
@@ -388,47 +355,42 @@ test(
 )
 
 test(
-  'an approved skip walks the pipeline past the middle stage and finishes with the acceptance',
+  'humanConfirm pauses Step 1 until approved, walks Step 2 without gate LLM, and finishes Step 3 with acceptance',
   async () => {
-    const skip = { skip: true, rationale: 'the mandate does not mention documentation' }
-    const ctx = await bootFlow(flowHome, 3093, skip)
+    const ctx = await bootFlow(flowHome, 3093)
     try {
-      // The steward reviews the stage 1 result, walks on, and proposes
-      // skipping stage 2 through its skip logic.
-      const skipAttention = await waitForReview(ctx, async () =>
+      // Wait for Step 1 to finish and ask for `humanConfirm` before minting Step 2.
+      const confirmAttention = await waitForReview(ctx, async () =>
         (await ctx.dshManagerExecutor.attentionList({})).attentions
-          .find(attention => attention.status === 'pending' && attention.question.startsWith('[skip]')), 'the skip proposal')
-      expect(skipAttention.question).toContain('skip stage 2/3')
-      expect(skipAttention.question).toContain('Test line')
-      expect(skipAttention.details).toBe(skip.rationale)
+          .find(attention => attention.status === 'pending' && attention.kind === 'review' && attention.question.includes('confirm step 1/3')),
+        'step 1 humanConfirm gate')
+      expect(confirmAttention.question).toContain('Align & Plan')
+      expect(confirmAttention.question).toContain('Test line')
       const walked = await acceptedTicketOf(ctx)
       expect(walked.flow).toMatchObject({ pipelineId: expect.any(String), stageIndex: 0, stageCount: 3 })
-      // Nothing past stage 1 mints while the skip waits for the human.
       const waiting = (await ctx.dshManagerBoard.ticketList()).tickets
       expect(waiting.filter(ticket => (ticket.flow?.stageIndex ?? 0) >= 1)).toHaveLength(0)
-      // The human approves: the walk resumes past stage 2 and mints stage 3.
-      await ctx.dshManagerExecutor.answerAttention({ attentionId: skipAttention.id, answer: 'confirmed' })
-      const last = await waitFor(async () =>
-        (await ctx.dshManagerBoard.ticketList()).tickets.find(ticket => ticket.flow?.stageIndex === 2), 'the stage 3 ticket')
-      expect(last.flow).toMatchObject({
+
+      // Human approves -> walks Step 2 (no gate LLM) -> Step 3 -> final acceptance!
+      await ctx.dshManagerExecutor.answerAttention({ attentionId: confirmAttention.id, answer: 'approved' })
+      const step3 = await waitForReview(ctx, async () =>
+        (await ctx.dshManagerBoard.ticketList()).tickets.find(ticket => ticket.flow?.stageIndex === 2), 'the step 3 ticket')
+      expect(step3.flow).toMatchObject({
         pipelineName: 'Test line',
         stageIndex: 2,
         stageCount: 3,
-        skipped: [{ stageIndex: 1, reason: skip.rationale }],
       })
-      expect(last.title).toContain('Test line 3/3')
-      // The markdown mirror in the executor cwd reflects the walk: the
-      // pipeline, the approved skip's reason, and the walked stages.
+      expect(step3.title).toContain('Test line 3/3')
+
       const mirror = await readFile(join(execCwd, '.dsh-manager', 'flows', `${walked.id}.md`), 'utf8')
       expect(mirror).toContain('# 流程进度：Test line')
       expect(mirror).toContain(`流程工单：${walked.id}`)
-      expect(mirror).toContain('第 2 环节：the mandate does not mention documentation')
-      expect(mirror).toContain(last.title)
-      // The last stage dispatches, its review passes, and the acceptance asks.
+      expect(mirror).toContain(step3.title)
+
       await waitFor(async () =>
-        (await ctx.dshManagerExecutor.dispatchList({ ticketId: last.id })).dispatches.length > 0 ? true : undefined, 'the stage 3 dispatch')
+        (await ctx.dshManagerExecutor.dispatchList({ ticketId: step3.id })).dispatches.some(d => d.state === 'ended') ? true : undefined, 'the step 3 dispatch')
       const acceptance = await waitForReview(ctx, async () =>
-        (await ctx.dshManagerExecutor.attentionList({ ticketId: last.id })).attentions
+        (await ctx.dshManagerExecutor.attentionList({ ticketId: step3.id })).attentions
           .find(attention => attention.status === 'pending' && attention.kind === 'review'), 'the final acceptance')
       expect(acceptance.question).toContain('acceptance requested')
     } finally {
@@ -439,28 +401,33 @@ test(
 )
 
 test(
-  'a rejected skip runs the middle stage without re-proposing the skip',
+  'rejecting humanConfirm re-runs the current step with feedback before continuing',
   async () => {
-    const ctx = await bootFlow(rejectHome, 3094, { skip: true, rationale: 'documentation seems optional' })
+    const ctx = await bootFlow(rejectHome, 3094)
     try {
-      const skipAttention = await waitForReview(ctx, async () =>
+      const confirmAttention = await waitForReview(ctx, async () =>
         (await ctx.dshManagerExecutor.attentionList({})).attentions
-          .find(attention => attention.status === 'pending' && attention.question.startsWith('[skip]')), 'the skip proposal')
-      // The human refuses: the rejected stage runs, nothing counts as skipped.
-      await ctx.dshManagerExecutor.answerAttention({ attentionId: skipAttention.id, answer: 'rejected: we need the docs' })
-      const middle = await waitFor(async () =>
-        (await ctx.dshManagerBoard.ticketList()).tickets.find(ticket => ticket.flow?.stageIndex === 1), 'the stage 2 ticket')
-      expect(middle.flow).toMatchObject({ pipelineName: 'Test line', stageIndex: 1, stageCount: 3 })
-      expect(middle.flow?.skipped).toBeUndefined()
+          .find(attention => attention.status === 'pending' && attention.kind === 'review' && attention.question.includes('confirm step 1/3')),
+        'step 1 confirmation')
+      const step1TicketId = confirmAttention.ticketId
+
+      // Human rejects Step 1 with feedback -> re-dispatches Step 1 without minting Step 2 yet.
+      await ctx.dshManagerExecutor.answerAttention({ attentionId: confirmAttention.id, answer: 'rejected: add failure mode table' })
       await waitFor(async () =>
-        (await ctx.dshManagerExecutor.dispatchList({ ticketId: middle.id })).dispatches.length > 0 ? true : undefined, 'the stage 2 dispatch')
-      const reProposals = (await ctx.dshManagerExecutor.attentionList({ ticketId: skipAttention.ticketId })).attentions
-        .filter(attention => attention.status === 'pending' && attention.question.startsWith('[skip]'))
-      expect(reProposals).toHaveLength(0)
-      // The walk continues: stage 3 mints after the middle stage passes review.
-      const last = await waitForReview(ctx, async () =>
-        (await ctx.dshManagerBoard.ticketList()).tickets.find(ticket => ticket.flow?.stageIndex === 2), 'the stage 3 ticket')
-      expect(last.flow?.skipped).toBeUndefined()
+        (await ctx.dshManagerExecutor.dispatchList({ ticketId: step1TicketId })).dispatches.length >= 2 ? true : undefined,
+        'step 1 rework dispatch')
+      const noStep2Yet = (await ctx.dshManagerBoard.ticketList()).tickets
+      expect(noStep2Yet.some(t => (t.flow?.stageIndex ?? 0) >= 1)).toBe(false)
+
+      // Approve the second attempt -> flow advances through Step 2 and Step 3.
+      const secondConfirm = await waitForReview(ctx, async () =>
+        (await ctx.dshManagerExecutor.attentionList({ ticketId: step1TicketId })).attentions
+          .find(attention => attention.status === 'pending' && attention.kind === 'review' && attention.question.includes('confirm step 1/3')),
+        'second confirmation after rework')
+      await ctx.dshManagerExecutor.answerAttention({ attentionId: secondConfirm.id, answer: 'approved' })
+      const step3 = await waitForReview(ctx, async () =>
+        (await ctx.dshManagerBoard.ticketList()).tickets.find(ticket => ticket.flow?.stageIndex === 2), 'step 3 ticket after approval')
+      expect(step3.flow?.stageIndex).toBe(2)
     } finally {
       await ctx.fiber.dispose()
     }

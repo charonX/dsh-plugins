@@ -870,319 +870,404 @@
   word-break: break-all;
 }
 
-/* --- Prompt Studio sub-view ----------------------------------------------- */
+/* --- Flow IR Workbench & Skill Catalog ------------------------------------ */
 
-.promptStudio {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.promptToolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 14px;
-  border: 0.5px solid var(--dsw-alias-border-l3);
-  border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-card-fill);
-}
-
-.promptMeta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.promptSavedAt {
-  font-size: 11.5px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.promptToolbarActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.promptGrid {
+.archWorkspace {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 12px;
   align-items: start;
 }
 
-@media (max-width: 860px) {
-  .promptGrid {
-    grid-template-columns: 1fr;
+@media (max-width: 960px) {
+  .archWorkspace {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-.promptTree {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+.mindmapScroll {
+  overflow: auto;
   border: 0.5px solid var(--dsw-alias-border-l3);
   border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-card-fill);
+  background: var(--dsw-alias-bg-layer-2);
+  min-height: 280px;
 }
 
-.promptTreeGroup {
+.mindmapCanvas,
+.mindmapStage {
+  position: relative;
+}
+
+.mindmapSvg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.edgeFlow {
+  stroke: var(--dsw-alias-border-l4);
+  stroke-width: 1.5;
+  color: var(--dsw-alias-border-l4);
+}
+
+.edgeRework {
+  stroke: var(--dsw-alias-state-warn-primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.edgeDimmed {
+  opacity: 0.25;
+}
+
+.edgeLabel {
+  font-size: 10.5px;
+  fill: var(--dsw-alias-state-warn-primary);
+}
+
+.mapNode {
+  position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.promptTreeGroupTitle {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 2px 4px;
-}
-
-.promptTreeList,
-.promptTreeSubList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.promptTreeSubList {
-  padding-left: 12px;
-  margin-top: 2px;
-}
-
-.promptTreePipeline {
-  display: flex;
-  flex-direction: column;
-}
-
-.promptTreeBtn {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 0.5px solid transparent;
-  border-radius: var(--dsw-radius-sm);
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font: inherit;
-  font-size: 12.5px;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px;
   text-align: left;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
   cursor: pointer;
 }
 
-.promptTreeBtn:hover {
-  background: var(--dsw-alias-bg-layer-2);
+.mapNode:hover {
+  border-color: var(--dsw-alias-brand-primary);
 }
 
-.promptTreeBtnActive {
-  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
-  border-color: color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent);
-  font-weight: 500;
+.mapNodeSelected {
+  border: 1.5px solid var(--dsw-alias-brand-primary);
+  box-shadow: var(--dsw-elevation-panel);
 }
 
-.promptWorkspace {
+.mapNodeDimmed {
+  opacity: 0.35;
+}
+
+.mapNode_entry {
+  background: var(--dsw-alias-bg-layer-3);
+}
+
+.mapNode_flow {
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.mapNode_step {
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.mapNodeHead {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   min-width: 0;
 }
 
-.promptPanel {
+.mapNodeTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapNodeBadge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10px;
+}
+
+.mapNodeSub {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspectorBody {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 0.5px solid var(--dsw-alias-border-l3);
-  border-radius: var(--dsw-radius-lg);
-  background: var(--dsw-alias-card-fill);
-}
-
-.promptPanelHeader {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.promptSaveRow,
-.promptPreviewControls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: 8px;
 }
 
-.promptDataBlocks {
+.inspectorBadges {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-bg-layer-2);
-  border: 0.5px solid var(--dsw-alias-border-l1);
 }
 
-.promptDataBlockLabel {
-  font-size: 11.5px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.promptSectionList {
-  list-style: none;
+.inspectorMeta,
+.inspectorHint {
   margin: 0;
-  padding: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+.flowList {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.promptSectionCard {
+.flowCard {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-md);
-  background: var(--dsw-alias-bg-layer-1);
-}
-
-.promptSectionCard[data-locked='true'] {
+  gap: 8px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-layer-2);
 }
 
-.promptSectionHeader {
+.flowCardHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.flowCardTitleGroup,
+.flowCardActions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-.promptSectionTitle {
-  font-size: 13px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.promptSectionActions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.promptSectionDesc {
+.flowWhen {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.promptTextArea {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 8px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-bg-layer-1);
-  color: var(--dsw-alias-label-primary);
-  font-family: var(--dsw-font-mono, monospace);
-  font-size: 12px;
-  line-height: 1.5;
-  resize: vertical;
+.flowStepStrip {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.promptTextArea:focus {
+.flowStepChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: 12px;
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.textarea:focus {
   outline: none;
   border-color: var(--dsw-alias-brand-primary);
 }
 
-.promptLockedPre,
-.promptPreviewPre {
-  margin: 0;
-  padding: 8px 10px;
-  max-height: 300px;
-  overflow: auto;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  font-family: var(--dsw-font-mono, monospace);
-  font-size: 11.5px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.promptWarnBanner {
-  padding: 8px 10px;
-  border-radius: var(--dsw-radius-sm);
-  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-  border: 0.5px solid var(--dsw-alias-state-warn-primary);
-  color: var(--dsw-alias-state-warn-primary);
-  font-size: 12px;
-}
-
-.promptVarsTable {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.promptVarRow {
+.rowSplit {
   display: grid;
-  grid-template-columns: minmax(190px, auto) auto minmax(180px, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--dsw-radius-sm);
-  border: 0.5px solid var(--dsw-alias-border-l1);
-  background: var(--dsw-alias-bg-layer-1);
-  font-size: 12px;
 }
 
-.promptVarName {
-  font-family: var(--dsw-font-mono, monospace);
-  font-size: 11.5px;
+.checkboxField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
   color: var(--dsw-alias-label-primary);
 }
 
-.promptVarDesc {
-  color: var(--dsw-alias-label-secondary);
+.stepsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
 }
 
-.promptVarSource {
-  font-family: var(--dsw-font-mono, monospace);
-  font-size: 11px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.promptConfirmBody {
+.stepsEditorList {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  min-width: min(420px, 100%);
+  max-height: 360px;
+  overflow: auto;
 }
 
-.promptConfirmList {
-  margin: 0;
-  padding-left: 18px;
+.stepEditorCard {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12.5px;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.stepEditorHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.skillPicker,
+.skillChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skillPill,
+.skillPillActive {
+  padding: 3px 8px;
+  border-radius: var(--dsw-radius-sm);
+  font-size: 11.5px;
+  cursor: pointer;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.skillPillActive {
+  border-color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 12%, transparent);
+  color: var(--dsw-alias-brand-primary);
+}
+
+.skillGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.skillCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.skillCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skillName {
+  font-size: 13px;
   color: var(--dsw-alias-label-primary);
+}
+
+.skillDesc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dsw-alias-label-secondary);
+  flex: 1;
+}
+
+.skillPath {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skillActions,
+.presetActions,
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.presetList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.presetCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.presetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.emptyBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  border: 0.5px dashed var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+}
+
+.noticeText {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.errorText {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--dsw-alias-state-error-primary);
 }

@@ -231,7 +231,9 @@ test(
     expect(tickets).toHaveLength(1)
     const ticketA = tickets[0]!.id
 
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketA })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticketA })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketA })
+    }
     const approvalA = await pendingApprovalOf(ctx, ticketA)
     expect(approvalA.kind).toBe('approval')
     expect(approvalA.action?.tool).toBe('post_mr_comment')
@@ -267,7 +269,9 @@ test(
     expect(ticketsAfter).toHaveLength(2)
     const ticketB = ticketsAfter.find(view => view.id !== ticketA)!.id
 
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketB })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: ticketB })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: ticketB })
+    }
     const approvalB = await pendingApprovalOf(ctx, ticketB)
     expect(approvalB.action?.tool).toBe('set_jira_status')
     expect(jira.requests.filter(request => request.method === 'POST')).toHaveLength(0)

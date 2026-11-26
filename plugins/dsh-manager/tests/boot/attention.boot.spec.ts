@@ -162,8 +162,10 @@ test(
     expect(tickets).toHaveLength(1)
     const ticketId = tickets[0]!.id
 
-    // Dispatch: the scripted executor asks on its first turn.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId })
+    // Dispatch: the scripted executor asks on its first turn (auto-dispatched or explicit).
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId })
+    }
     let attention: { id: string; status: string; question: string; answer?: string | undefined } | undefined
     await vi.waitFor(async () => {
       const views = (await ctx.dshManagerExecutor.attentionList({})).attentions

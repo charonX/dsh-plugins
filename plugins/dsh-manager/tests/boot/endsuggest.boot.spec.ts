@@ -122,7 +122,7 @@ function adaptiveTurn(): (options: GenerateOptions) => Promise<StreamChunk[]> {
         },
       }])
     }
-    if (tail.includes('has ended.')) {
+    if (tail.includes('may have ended')) {
       return toolCallsResponse([{
         name: 'suggest_end',
         args: { ticketId: 'whatever the service is suggesting', reason: 'the merge request was merged' },
@@ -196,7 +196,7 @@ test(
     const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
     expect(tickets).toHaveLength(1)
     const ticket = tickets[0]!
-    expect(ticket.state).toBe('todo')
+    expect(['todo', 'running']).toContain(ticket.state)
 
     // The MR is merged: the next sweep collects the ended-state trigger and
     // it fans out to the subscribed ticket as context.

@@ -219,7 +219,9 @@ test(
     await ctx.dshManagerSources.manualInput({ title: 'Fix the login flow', description: 'Investigate and fix' })
     await ctx.dshManagerSteward.runPending()
     const parent = (await ticketIds(ctx))[0]!
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: parent })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: parent })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: parent })
+    }
     await awaitReady(ctx, parent)
 
     // The review passes and the same-scope follow-up mints directly.
@@ -279,7 +281,9 @@ test(
     await ctx.dshManagerSources.manualInput({ title: 'Fix the login flow', description: 'Investigate and fix' })
     await ctx.dshManagerSteward.runPending()
     const parent = (await ticketIds(ctx))[0]!
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: parent })
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId: parent })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: parent })
+    }
     await awaitReady(ctx, parent)
 
     // The widened proposal stops at an Approval; no ticket yet. The pass

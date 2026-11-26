@@ -28,22 +28,15 @@ async function mountSteward(stewardStatus: ReturnType<typeof vi.fn>): Promise<{ 
   runtime.remote.provideNamespaces({
     dshManager: {
       stewardStatus,
-      // The team page reads the roster and pipelines alongside the status;
-      // keep both quiet.
-      crewList: vi.fn().mockResolvedValue({ ok: true, value: { members: [] } }),
-      crewAdd: vi.fn().mockResolvedValue({ ok: false }),
-      crewUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      crewRemove: vi.fn().mockResolvedValue({ ok: true }),
-      pipelineList: vi.fn().mockResolvedValue({ ok: true, value: { pipelines: [] } }),
-      pipelineAdd: vi.fn().mockResolvedValue({ ok: false }),
-      pipelineUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      pipelineRemove: vi.fn().mockResolvedValue({ ok: true }),
-      pipelineReferencesOf: vi.fn().mockResolvedValue({ ok: true, value: { references: [] } }),
-      ruleList: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
-      ruleAdd: vi.fn().mockResolvedValue({ ok: false }),
-      ruleUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      ruleRemove: vi.fn().mockResolvedValue({ ok: true }),
-      ruleReferencesOfPipeline: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
+      // The team page reads flows and skills alongside the status; keep both quiet.
+      flowList: vi.fn().mockResolvedValue({ ok: true, value: { flows: [] } }),
+      flowAdd: vi.fn().mockResolvedValue({ ok: false }),
+      flowUpdate: vi.fn().mockResolvedValue({ ok: false }),
+      flowRemove: vi.fn().mockResolvedValue({ ok: true }),
+      flowPresetApply: vi.fn().mockResolvedValue({ ok: false }),
+      flowImportPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+      flowSyncPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+      skillCatalog: vi.fn().mockResolvedValue({ ok: true, value: { skills: [] } }),
       // The run records section on the team page stays quiet.
       evalList: vi.fn().mockResolvedValue({ ok: true, value: { evals: [] } }),
       connectionList: vi.fn().mockResolvedValue({ ok: true, value: { connections: [] } }),

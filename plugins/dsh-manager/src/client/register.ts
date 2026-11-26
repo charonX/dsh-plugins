@@ -14,14 +14,11 @@ import { ManagerPage } from './ManagerPage.tsx'
 import { BoardNavIcon } from './NavIcon.tsx'
 import { createBoardSource } from './board-source.ts'
 import { createConnectionsSource } from './connections-source.ts'
-import { createCrewSource } from './crew-source.ts'
 import { createEvalsSource } from './evals-source.ts'
+import { createFlowSource } from './flow-source.ts'
 import { createMappingsSource } from './mappings-source.ts'
-import { createPipelineSource } from './pipeline-source.ts'
 import { createPolicySource } from './policy-source.ts'
-import { createRouteSource } from './route-source.ts'
 import { createTeamConfigSource } from './team-config-source.ts'
-import { createPromptSource } from './prompt-source.ts'
 import { createNotificationsSource } from './notifications-source.ts'
 import { createStewardSource } from './steward-source.ts'
 import { createTriggersSource } from './triggers-source.ts'
@@ -218,57 +215,36 @@ export function registerUi(ctx: ClientContext): void {
     save: async input => (typeof dsh.imSettingsUpdate === 'function' ? await dsh.imSettingsUpdate(input) : { ok: false }),
     testSend: async input => (typeof dsh.imTestSend === 'function' ? await dsh.imTestSend(input) : { ok: false }),
   })
-  const crewSource = createCrewSource({
-    list: async () => await dsh.crewList(),
-    modelOptions: async () => await dsh.modelOptions(),
-    agentKindOptions: async input => (typeof dsh.agentKindOptions === 'function'
-      ? await dsh.agentKindOptions(input)
-      : { ok: false }),
-    add: async input => await dsh.crewAdd(input),
-    update: async input => await dsh.crewUpdate(input),
-    remove: async memberId => await dsh.crewRemove({ memberId }),
-    subscribeReset: listener => ctx.on('connection/reset', listener),
-  })
-  const pipelineSource = createPipelineSource({
-    list: async () => await dsh.pipelineList(),
-    add: async input => await dsh.pipelineAdd(input),
-    update: async input => await dsh.pipelineUpdate(input),
-    remove: async pipelineId => await dsh.pipelineRemove({ pipelineId }),
-    referencesOf: async memberId => await dsh.pipelineReferencesOf({ memberId }),
-    subscribeReset: listener => ctx.on('connection/reset', listener),
-  })
-  const routeSource = createRouteSource({
-    list: async () => await dsh.ruleList(),
-    add: async input => await dsh.ruleAdd(input),
-    update: async input => await dsh.ruleUpdate(input),
-    remove: async ruleId => await dsh.ruleRemove({ ruleId }),
-    referencesOfPipeline: async pipelineId => await dsh.ruleReferencesOfPipeline({ pipelineId }),
-    subscribeReset: listener => ctx.on('connection/reset', listener),
-  })
-  const promptSource = createPromptSource({
-    ...(typeof dsh.promptRegistry === 'function'
-      ? { registry: async () => await dsh.promptRegistry() }
+  const flowSource = createFlowSource({
+    list: async () => await dsh.flowList(),
+    add: async input => await dsh.flowAdd(input),
+    update: async input => await dsh.flowUpdate(input),
+    remove: async input => await dsh.flowRemove(input),
+    ...(typeof dsh.flowPresetApply === 'function'
+      ? { applyPreset: async input => await dsh.flowPresetApply(input) }
       : {}),
-    ...(typeof dsh.promptSave === 'function'
-      ? { save: async input => await dsh.promptSave(input) }
+    ...(typeof dsh.flowImportPlaybook === 'function'
+      ? { importPlaybook: async input => await dsh.flowImportPlaybook(input) }
+      : {}),
+    ...(typeof dsh.flowSyncPlaybook === 'function'
+      ? { syncPlaybook: async input => await dsh.flowSyncPlaybook(input) }
+      : {}),
+    ...(typeof dsh.skillCatalog === 'function'
+      ? { skillCatalog: async () => await dsh.skillCatalog() }
+      : {}),
+    ...(typeof dsh.agentKindOptions === 'function'
+      ? { agentKindOptions: async input => await dsh.agentKindOptions(input) }
+      : {}),
+    ...(typeof dsh.modelOptions === 'function'
+      ? { modelOptions: async () => await dsh.modelOptions() }
+      : {}),
+    ...(typeof dsh.teamConfigExportYaml === 'function'
+      ? { exportYaml: async () => await dsh.teamConfigExportYaml() }
       : {}),
     ...(typeof dsh.teamConfigImportYaml === 'function'
-      ? { importYaml: async yaml => await dsh.teamConfigImportYaml({ yaml }) }
+      ? { importYaml: async input => await dsh.teamConfigImportYaml(input) }
       : {}),
-    ...(typeof dsh.promptRenderPreview === 'function'
-      ? { preview: async input => await dsh.promptRenderPreview(input) }
-      : {}),
-    ...(typeof dsh.presetApply === 'function'
-      ? { applyPreset: async input => await dsh.presetApply(input) }
-      : {}),
-    projects: async () => await dsh.projectList(),
-    tickets: async () => await dsh.ticketList({}),
     subscribeReset: listener => ctx.on('connection/reset', listener),
-    onMutated: () => {
-      crewSource.invalidate()
-      pipelineSource.invalidate()
-      routeSource.invalidate()
-    },
   })
   const teamConfigSource = createTeamConfigSource({
     ...(typeof dsh.teamConfigStatus === 'function'
@@ -279,10 +255,7 @@ export function registerUi(ctx: ClientContext): void {
       : {}),
     subscribeReset: listener => ctx.on('connection/reset', listener),
     onInvalidate: () => {
-      crewSource.invalidate()
-      pipelineSource.invalidate()
-      routeSource.invalidate()
-      promptSource.invalidate()
+      flowSource.invalidate()
     },
     pollMs: 2000,
   })
@@ -307,11 +280,8 @@ export function registerUi(ctx: ClientContext): void {
       ...stewardSource,
       ...uiSettingsSource,
       ...imSettingsSource,
-      ...crewSource,
-      ...pipelineSource,
-      ...routeSource,
+      ...flowSource,
       ...teamConfigSource,
-      ...promptSource,
       ...policySource,
       // The sources each carry a `hooks` seat; the merge keeps all of them.
       hooks: {
@@ -324,11 +294,8 @@ export function registerUi(ctx: ClientContext): void {
         ...stewardSource.hooks,
         ...uiSettingsSource.hooks,
         ...imSettingsSource.hooks,
-        ...crewSource.hooks,
-        ...pipelineSource.hooks,
-        ...routeSource.hooks,
+        ...flowSource.hooks,
         ...teamConfigSource.hooks,
-        ...promptSource.hooks,
         ...policySource.hooks,
       },
     }),

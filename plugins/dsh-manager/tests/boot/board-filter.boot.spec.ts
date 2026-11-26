@@ -58,6 +58,7 @@ function stewardTurn(): (options: GenerateOptions) => StreamChunk[] {
     if (last === undefined) return textResponse('done')
     const serialized = JSON.stringify(last)
     if (serialized.includes('Generate the session title')) return textResponse('Steward thread')
+    if (JSON.stringify(options.messages.slice(-2)).includes('executor dispatched')) return textResponse('done')
     if (last.role === 'user') {
       const callId = ToolCallId('call-1')
       const argumentsJson = JSON.stringify({
@@ -115,7 +116,7 @@ test(
       binName: 'dsh-manager-test', profile: 'web', overlayPaths: [overlayPath], home,
     })
     await waitUntilService(ctx, 'dshManagerSteward')
-    const adapter = new ScriptedAdapter(Array.from({ length: 8 }, () => stewardTurn()))
+    const adapter = new ScriptedAdapter(Array.from({ length: 16 }, () => stewardTurn()))
     ctx.llm.registerAdapter(['mock'], adapter)
 
     // The Jira side: one connection, one source, one poll, one accepted ticket.
@@ -168,10 +169,12 @@ test(
     expect((await ctx.dshManagerBoard.ticketList({ connectionId: connection.id, kind: 'manual' })).tickets).toHaveLength(0)
 
     // The summary's column counts follow the same filter.
-    expect((await ctx.dshManagerBoard.summary({ kind: 'jira' })).columns.find(column => column.id === 'todo')?.count).toBe(1)
-    expect((await ctx.dshManagerBoard.summary({ kind: 'manual' })).columns.find(column => column.id === 'todo')?.count).toBe(1)
-    expect((await ctx.dshManagerBoard.summary({ projectId: 'proj-alpha' })).columns.find(column => column.id === 'todo')?.count).toBe(1)
-    expect((await ctx.dshManagerBoard.summary({ connectionId: connection.id, kind: 'manual' })).columns.find(column => column.id === 'todo')?.count).toBe(0)
+    const activeCountOf = (cols: readonly { readonly id: string; readonly count: number }[]): number =>
+      cols.filter(c => c.id === 'todo' || c.id === 'running').reduce((sum, c) => sum + c.count, 0)
+    expect(activeCountOf((await ctx.dshManagerBoard.summary({ kind: 'jira' })).columns)).toBe(1)
+    expect(activeCountOf((await ctx.dshManagerBoard.summary({ kind: 'manual' })).columns)).toBe(1)
+    expect(activeCountOf((await ctx.dshManagerBoard.summary({ projectId: 'proj-alpha' })).columns)).toBe(1)
+    expect(activeCountOf((await ctx.dshManagerBoard.summary({ connectionId: connection.id, kind: 'manual' })).columns)).toBe(0)
 
     await ctx.fiber.dispose()
   },

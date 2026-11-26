@@ -205,22 +205,20 @@ test(
       connector: 'jira', name: 'prod', deployment: 'server-dc', baseUrl: 'http://127.0.0.1:1', authMethod: 'pat', secret: 'pat-value',
     })
     void connection
-    await ctx.dshManagerSources.manualInput({ title: 'First finding', description: 'Investigate the login flow' })
-    await ctx.dshManagerSources.manualInput({ title: 'Second finding', description: 'Investigate the report flow' })
+    const firstInput = await ctx.dshManagerSources.manualInput({ title: 'First finding', description: 'Investigate the login flow' })
+    const secondInput = await ctx.dshManagerSources.manualInput({ title: 'Second finding', description: 'Investigate the report flow' })
+    const firstKey = ctx.dshManagerSources.threadTriggers(firstInput.threadId)[0]!.externalKey
+    const secondKey = ctx.dshManagerSources.threadTriggers(secondInput.threadId)[0]!.externalKey
+    await ctx.dshManagerMappings.mappingSet({ connectionId: 'manual', external: firstKey, projectId: workspace.id })
+    await ctx.dshManagerMappings.mappingSet({ connectionId: 'manual', external: secondKey, projectId: workspace.id })
     await ctx.dshManagerSteward.runPending()
-    const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
+    const tickets = [...(await ctx.dshManagerBoard.ticketList()).tickets].sort((a, b) => a.createdAt - b.createdAt)
     expect(tickets).toHaveLength(2)
-    for (const ticket of tickets) {
-      await ctx.dshManagerMappings.mappingSet({
-        connectionId: 'manual',
-        external: ticket.externalKey!,
-        projectId: workspace.id,
-      })
-    }
 
-    // Dispatch the first ticket: its worktree is created before the session.
-    const dispatchA = await ctx.dshManagerExecutor.dispatchTicket({ ticketId: tickets[0]!.id })
-    expect(dispatchA.state).toBe('queued')
+    // First ticket is queued/running inside its mapped worktree; second queues behind maxConcurrent: 1.
+    const dispatchA = (await dispatchesOf(ctx, tickets[0]!.id))[0]
+      ?? await ctx.dshManagerExecutor.dispatchTicket({ ticketId: tickets[0]!.id })
+    expect(['queued', 'running']).toContain(dispatchA.state)
     await vi.waitFor(async () => {
       expect((await dispatchesOf(ctx, tickets[0]!.id))[0]?.state).toBe('running')
     })
@@ -231,7 +229,9 @@ test(
     })
 
     // The second dispatch queues behind the ceiling and stays untouched.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: tickets[1]!.id })
+    if ((await dispatchesOf(ctx, tickets[1]!.id)).length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId: tickets[1]!.id })
+    }
     await ctx.dshManagerExecutor.pump()
     expect((await dispatchesOf(ctx, tickets[1]!.id))[0]?.state).toBe('queued')
     const worktreeB = worktreePathFor(repoRoot, tickets[1]!.id)

@@ -6,7 +6,7 @@
  * this core in memory (ADR-0003).
  */
 import { z } from 'zod'
-import { AGENT_KINDS, type AgentKind } from '../crew/crew-core.ts'
+import { AGENT_KINDS, type AgentKind } from '../flow/flow-ir.ts'
 
 /** Lifecycle states a dispatch moves through; the ticket's state is untouched. */
 export const DISPATCH_STATES = ['queued', 'running', 'ended'] as const

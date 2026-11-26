@@ -1,31 +1,30 @@
-/** The team & orchestration page: overview strip, hot-reload status banner,
-    and sub-view switch between Orchestration workbench and Crew roster. */
+/** The simplified Team & Flows page: overview strip, YAML hot-reload banner, Flow IR workbench, and Skill catalog. */
 import { useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import { Button, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CrewInjected } from './crew-source.ts'
-import type { PipelineInjected } from './pipeline-source.ts'
-import type { RouteInjected } from './route-source.ts'
+import type { FlowInjected } from './flow-source.ts'
 import type { TeamConfigInjected } from './team-config-source.ts'
-import type { PromptInjected } from './prompt-source.ts'
-import { CrewSection } from './CrewSection.tsx'
-import { OrchestrationWorkbench } from './OrchestrationWorkbench.tsx'
-import { PromptStudio } from './PromptStudio.tsx'
+import { FlowWorkbench } from './FlowWorkbench.tsx'
+import { SkillCatalogSection } from './SkillCatalogSection.tsx'
 import css from './TeamPage.module.css'
 
-export type TeamSubView = 'workbench' | 'crew' | 'prompt'
+export type TeamSubView = 'flows' | 'skills'
 
-/** Narrowed TeamPage props: runtime monitoring (Steward & Evals) lives on MonitorPage. */
 export type TeamPageProps = PropsRuntime<'main'>
-  & InjectFace<CrewInjected & PipelineInjected & RouteInjected & TeamConfigInjected>
-  & Partial<InjectFace<PromptInjected>>
+  & InjectFace<FlowInjected & TeamConfigInjected>
   & PropsLocale<'dshManager'>
 
-/** Render the team overview strip, YAML hot-reload banner, and sub-view panels. */
+/** Render the Flow IR overview strip, YAML hot-reload banner, and Flows / Skills sub-views. */
 export function TeamPage(props: TeamPageProps) {
-  const { t } = props
-  const [subView, setSubView] = useState<TeamSubView>('workbench')
+  const { useFlows, onSkillCatalogRefresh, onFlowImportPlaybook, t } = props
+  const [subView, setSubView] = useState<TeamSubView>('flows')
+  const flowSnapshot = useFlows(s => s)
+
+  const handleCompileSkill = async (skillName: string): Promise<void> => {
+    const res = await onFlowImportPlaybook({ kind: 'skill', ref: skillName })
+    if (res.ok) setSubView('flows')
+  }
 
   return (
     <div className={css.page}>
@@ -38,9 +37,8 @@ export function TeamPage(props: TeamPageProps) {
           onChange={setSubView}
           label={t('team.panel')}
           options={[
-            { value: 'workbench', label: t('team.view.workbench') },
-            { value: 'crew', label: t('team.view.crew') },
-            { value: 'prompt', label: t('team.view.prompt') },
+            { value: 'flows', label: t('team.view.flows') },
+            { value: 'skills', label: t('team.view.skills') },
           ]}
         />
       </div>
@@ -49,31 +47,26 @@ export function TeamPage(props: TeamPageProps) {
         role="tabpanel"
         aria-labelledby={`dsh-team-view-${subView}`}
       >
-        {subView === 'workbench'
+        {subView === 'flows'
           ? (
             <div id="dsh-team-workbench">
-              <OrchestrationWorkbench {...props} />
+              <FlowWorkbench {...props} onGoSkills={() => setSubView('skills')} />
             </div>
           )
-          : subView === 'crew'
-            ? (
-              <section id="dsh-team-crew" className={css.panelSection} aria-label={t('crew.section')}>
-                <CrewSection {...props} />
-              </section>
-            )
-            : props.usePrompts !== undefined && props.onPromptSave !== undefined && props.onPromptPreview !== undefined
-              ? (
-                <PromptStudio
-                  {...(props as TeamPageProps & InjectFace<PromptInjected>)}
-                />
-              )
-              : null}
+          : (
+            <SkillCatalogSection
+              skills={flowSnapshot.skills ?? []}
+              busy={flowSnapshot.busy === true}
+              onRefresh={onSkillCatalogRefresh}
+              onCompileSkill={handleCompileSkill}
+              t={t}
+            />
+          )}
       </div>
     </div>
   )
 }
 
-/** Render an explicit error banner when the last `team-config.yaml` hot-reload failed validation. */
 function TeamConfigErrorBanner({ useTeamConfig, onTeamConfigReload, t }: TeamPageProps) {
   const snapshot = useTeamConfig(s => s)
   const error = snapshot.configStatus?.lastError
@@ -92,26 +85,18 @@ function TeamConfigErrorBanner({ useTeamConfig, onTeamConfigReload, t }: TeamPag
   )
 }
 
-/** Compact summary bar at the top of the team page showing live counts. */
-function TeamOverviewStrip({ useCrew, usePipeline, useRoute, t }: TeamPageProps) {
-  const crew = useCrew(s => s)
-  const pipeline = usePipeline(s => s)
-  const route = useRoute(s => s)
-  if (crew.status !== 'ready' && pipeline.status !== 'ready' && route.status !== 'ready') {
-    return null
-  }
-  const members = crew.members ?? []
-  const pipelines = pipeline.pipelines ?? []
-  const rules = route.rules ?? []
-  const enabledMembers = members.filter(m => m.enabled).length
-  const enabledRules = rules.filter(r => r.enabled).length
+function TeamOverviewStrip({ useFlows, t }: TeamPageProps) {
+  const flowSnapshot = useFlows(s => s)
+  if (flowSnapshot.status !== 'ready') return null
+  const flows = flowSnapshot.flows ?? []
+  const enabledFlows = flows.filter(f => f.enabled).length
+  const skillCount = (flowSnapshot.skills ?? []).length
 
   return (
     <div className={css.overviewStrip}>
       <div className={css.overviewStats}>
-        <Tag tone="info">{t('team.summary.rules', { enabled: enabledRules, total: rules.length })}</Tag>
-        <Tag tone="success">{t('team.summary.pipelines', { count: pipelines.length })}</Tag>
-        <Tag tone="neutral">{t('team.summary.crew', { enabled: enabledMembers, total: members.length })}</Tag>
+        <Tag tone="info">{t('team.summary.flows', { enabled: enabledFlows, total: flows.length })}</Tag>
+        <Tag tone="neutral">{t('team.summary.skills', { count: skillCount })}</Tag>
       </div>
     </div>
   )
