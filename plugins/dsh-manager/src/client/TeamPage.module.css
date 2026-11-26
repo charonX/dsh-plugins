@@ -326,8 +326,11 @@
 .archSidebar {
   display: flex;
   flex-direction: column;
-  border-left: 0.5px solid var(--dsw-alias-border-l3);
-  background: var(--dsw-alias-bg-layer-2);
+  gap: 12px;
+  padding: 14px 16px 18px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
   max-height: 600px;
   overflow: auto;
 }
@@ -353,6 +356,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .inspectorTitle {
@@ -1078,10 +1083,17 @@
   font-size: 12px;
 }
 
+.flowEditorModal.flowEditorModal {
+  width: min(920px, 100%);
+}
+
 .modalBody {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-height: min(68vh, 640px);
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .textarea {

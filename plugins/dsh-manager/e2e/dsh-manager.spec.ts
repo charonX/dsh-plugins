@@ -283,6 +283,18 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     if (evidenceDir !== undefined && evidenceDir !== '') {
       await page.locator('#dsh-team-workbench-mode-graph').click()
       await page.waitForTimeout(300)
+      // Inspector + editor: right-panel padding and the widened dialog.
+      const nodeButtons = page.locator('#dsh-team-flows button[title]')
+      if (await nodeButtons.count() > 1) {
+        await nodeButtons.nth(1).click()
+        await page.waitForTimeout(250)
+        await page.screenshot({ path: `${evidenceDir}/team-inspector-light.png`, fullPage: false })
+        await page.getByRole('button', { name: /^(Edit|编辑)$/ }).first().click()
+        await page.waitForTimeout(300)
+        await page.screenshot({ path: `${evidenceDir}/team-flow-editor-light.png`, fullPage: false })
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(200)
+      }
       await page.emulateMedia({ colorScheme: 'light' })
       await page.waitForTimeout(250)
       await page.screenshot({ path: `${evidenceDir}/team-flows-light.png`, fullPage: false })

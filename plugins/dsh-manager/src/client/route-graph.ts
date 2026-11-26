@@ -195,15 +195,23 @@ export function layoutFlowMap(input: FlowMapInput): RouteMapLayout {
     height: NODE_H,
   })
 
+  const entryRight = entryX + ENTRY_W
+  const entryMidY = entryY + NODE_H / 2
   for (const flowNode of flowNodes) {
+    const flowMidY = flowNode.y + NODE_H / 2
+    // Leave the entry horizontally, drop between the columns, then enter the
+    // flow row horizontally: a diagonal straight line reads as a stray stroke.
+    const elbowX = entryRight + Math.max(24, (flowNode.x - entryRight) / 2)
     edges.push({
       id: `edge-entry-${flowNode.id}`,
       from: entryNodeId,
       to: flowNode.id,
       kind: 'flow',
       points: [
-        { x: entryX + ENTRY_W, y: entryY + NODE_H / 2 },
-        { x: flowNode.x, y: flowNode.y + NODE_H / 2 },
+        { x: entryRight, y: entryMidY },
+        { x: elbowX, y: entryMidY },
+        { x: elbowX, y: flowMidY },
+        { x: flowNode.x, y: flowMidY },
       ],
     })
   }
