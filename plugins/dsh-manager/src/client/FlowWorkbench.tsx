@@ -152,6 +152,7 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
   const [editingFlowId, setEditingFlowId] = useState<string | undefined>()
   const [form, setForm] = useState<FlowForm>(emptyFlowForm)
   const [formError, setFormError] = useState<string | undefined>()
+  const [activeStep, setActiveStep] = useState(0)
   const [agentKinds, setAgentKinds] = useState<readonly AgentKindOption[]>([])
 
   // Presets modal
@@ -211,6 +212,7 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
     setEditingFlowId(undefined)
     setForm(emptyFlowForm())
     setFormError(undefined)
+    setActiveStep(0)
     setEditorOpen(true)
   }
 
@@ -218,7 +220,42 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
     setEditingFlowId(flow.id)
     setForm(flowToForm(flow))
     setFormError(undefined)
+    setActiveStep(0)
     setEditorOpen(true)
+  }
+
+  /** Focus a step tab and keep its card at the top of the scrolled body. */
+  const selectStep = (index: number): void => {
+    setActiveStep(index)
+    requestAnimationFrame(() => {
+      document.getElementById('flow-step-tab-' + String(index))?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      document.getElementById('flow-step-panel')?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
+  /** Append a step after `index` and focus it. */
+  const addStepAfter = (index: number): void => {
+    setForm(prev => {
+      const steps = [...prev.steps]
+      const draft = emptyStep(index + 1)
+      // Inserting twice at the same spot would otherwise mint the same id.
+      let id = draft.id
+      let suffix = 2
+      while (steps.some(step => step.id === id)) {
+        id = `${draft.id}-${suffix}`
+        suffix += 1
+      }
+      steps.splice(index + 1, 0, { ...draft, id })
+      return { ...prev, steps }
+    })
+    selectStep(index + 1)
+  }
+
+  /** Drop one step and keep the tab selection on a neighbour. */
+  const removeStepAt = (index: number): void => {
+    const remaining = form.steps.length - 1
+    setForm(prev => ({ ...prev, steps: prev.steps.filter((_, idx) => idx !== index) }))
+    setActiveStep(current => Math.min(current > index ? current - 1 : current, remaining - 1))
   }
 
   const submitFlow = async (): Promise<void> => {
@@ -661,14 +698,50 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setForm(prev => ({ ...prev, steps: [...prev.steps, emptyStep(prev.steps.length)] }))}
+              onClick={() => addStepAfter(form.steps.length - 1)}
             >
               {t('flow.stepAdd')}
             </Button>
           </div>
 
-          <div className={css.stepsEditorList}>
+          <div
+            className={css.stepTabs}
+            role="tablist"
+            aria-label={t('flow.stepsTitle')}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowRight') {
+                event.preventDefault()
+                setActiveStep(current => Math.min(form.steps.length - 1, current + 1))
+              } else if (event.key === 'ArrowLeft') {
+                event.preventDefault()
+                setActiveStep(current => Math.max(0, current - 1))
+              }
+            }}
+          >
+            {form.steps.map((step, idx) => (
+              <button
+                key={`${step.id}-${idx}`}
+                type="button"
+                role="tab"
+                id={`flow-step-tab-${idx}`}
+                aria-selected={idx === activeStep}
+                aria-controls="flow-step-panel"
+                tabIndex={idx === activeStep ? 0 : -1}
+                className={idx === activeStep ? css.stepTabActive : css.stepTab}
+                onClick={() => selectStep(idx)}
+                title={step.name}
+              >
+                <span className={css.stepTabIndex}>{idx + 1}</span>
+                <span className={css.stepTabName}>{step.name.trim() === '' ? t('flow.stepUntitled') : step.name}</span>
+                {step.readOnly ? <span className={css.stepTabDot} data-kind="readOnly" /> : null}
+                {step.humanConfirm ? <span className={css.stepTabDot} data-kind="confirm" /> : null}
+              </button>
+            ))}
+          </div>
+
+          <div className={css.stepsEditorList} id="flow-step-panel" role="tabpanel" aria-label={t('flow.stepsTitle')}>
             {form.steps.map((step, sIdx) => {
+              if (sIdx !== activeStep) return null
               const toggleSkill = (name: string): void => {
                 setForm(prev => ({
                   ...prev,
@@ -692,20 +765,18 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
                 <div key={`${step.id}-${sIdx}`} className={css.stepEditorCard}>
                   <div className={css.stepEditorHead}>
                     <strong>{t('flow.stepIndex', { n: sIdx + 1 })}</strong>
-                    {form.steps.length > 1
-                      ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setForm(prev => ({
-                            ...prev,
-                            steps: prev.steps.filter((_, idx) => idx !== sIdx),
-                          }))}
-                        >
-                          {t('flow.remove')}
-                        </Button>
-                      )
-                      : null}
+                    <div className={css.stepEditorActions}>
+                      <Button variant="ghost" size="sm" onClick={() => addStepAfter(sIdx)}>
+                        {t('flow.stepInsert')}
+                      </Button>
+                      {form.steps.length > 1
+                        ? (
+                          <Button variant="ghost" size="sm" onClick={() => removeStepAt(sIdx)}>
+                            {t('flow.remove')}
+                          </Button>
+                        )
+                        : null}
+                    </div>
                   </div>
                   <div className={css.rowSplit}>
                     <label className={css.field}>
