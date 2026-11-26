@@ -40,6 +40,7 @@ export function settingsStubs(): Record<string, ReturnType<typeof vi.fn>> {
     flowImportPlaybook: vi.fn().mockResolvedValue({ ok: false }),
     flowSyncPlaybook: vi.fn().mockResolvedValue({ ok: false }),
     skillCatalog: vi.fn().mockResolvedValue({ ok: true, value: { skills: [] } }),
+    playbookCatalog: vi.fn().mockResolvedValue({ ok: true, value: { playbooks: [] } }),
     modelOptions: vi.fn().mockResolvedValue({ ok: true, value: { providers: [] } }),
     agentKindOptions: vi.fn().mockResolvedValue({ ok: true, value: { kinds: [] } }),
     teamConfigStatus: vi.fn().mockResolvedValue({ ok: true, value: { filePath: '/tmp/team-config.yaml', revision: 1, loadedAt: 1 } }),

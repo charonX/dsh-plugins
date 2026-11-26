@@ -79,9 +79,39 @@ describe('playbook-compiler', () => {
     expect(res.flow.steps[1]?.skills).toEqual(['tdd'])
     expect(res.flow.steps[2]?.skills).toEqual(['verify', 'code-review'])
     expect(res.flow.steps[2]?.readOnly).toBe(true)
-    expect(res.flow.steps[2]?.onFail).toBe(res.flow.steps[1]?.id)
-    expect(res.flow.steps[3]?.skills).toEqual(['ship-pr'])
-  })
+      expect(res.flow.steps[2]?.onFail).toBe(res.flow.steps[1]?.id)
+      expect(res.flow.steps[3]?.skills).toEqual(['ship-pr'])
+    })
+
+    test('parses {#id}, parenthesized skills, humanConfirm, and explicit Chinese onFail directives', async () => {
+      const content = [
+        '---',
+        'id: code-dev',
+        'name: 通用功能开发',
+        'when: 新功能开发',
+        'workspaceMode: worktree',
+        '---',
+        '1. **只读调研** {#research} (`how`, 只读): 先摸底。',
+        '2. **方案对齐** {#align} (`align`, 只读, 需人工确认): 对齐方案。',
+        '3. **测试驱动实现** {#implement} (`tdd`, 失败重试): 红绿循环。',
+        '4. **独立双轴审查** {#review} (`code-review`, 只读, 失败回退: implement): 核查代码。',
+      ].join('\n')
+
+      const res = await compilePlaybookToFlow({
+        kind: 'file',
+        ref: 'skills/playbooks/code-dev.md',
+        content,
+        flowId: 'code-dev',
+        now: 300,
+      })
+      expect(res.flow.id).toBe('code-dev')
+      expect(res.flow.steps.map(s => s.id)).toEqual(['research', 'align', 'implement', 'review'])
+      expect(res.flow.steps[0]?.readOnly).toBe(true)
+      expect(res.flow.steps[1]?.readOnly).toBe(true)
+      expect(res.flow.steps[1]?.humanConfirm).toBe(true)
+      expect(res.flow.steps[2]?.onFail).toBe('self')
+      expect(res.flow.steps[3]?.onFail).toBe('implement')
+    })
 
   test('preserves user agent and humanConfirm bindings across source hash updates', async () => {
     const v1 = '### Demo\n1. Gather context (`how`)\n2. Write draft\n'

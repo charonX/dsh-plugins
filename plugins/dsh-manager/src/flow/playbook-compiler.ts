@@ -32,6 +32,7 @@ export interface CompilePlaybookInput {
   readonly kind: 'skill' | 'file'
   readonly ref: string
   readonly content: string
+  readonly flowId?: string
   readonly availableSkillNames?: readonly string[]
   readonly existingFlow?: FlowDef
   readonly compileWithLlm?: (prompt: string) => Promise<string>
@@ -39,10 +40,12 @@ export interface CompilePlaybookInput {
   readonly idFactory?: (prefix: string) => string
 }
 
+export type PlaybookCompileMethod = 'cache' | 'frontmatter' | 'markdown' | 'llm'
+
 export interface CompilePlaybookResult {
   readonly flow: FlowDef
   readonly cacheHit: boolean
-  readonly method: 'cache' | 'frontmatter' | 'markdown' | 'llm'
+  readonly method: PlaybookCompileMethod
 }
 
 export function hashPlaybookContent(content: string): string {
@@ -136,56 +139,109 @@ function stripStepDecoration(raw: string): string {
     .trim()
 }
 
+function extractInlineBacktickSkills(text: string): string[] {
+  const found: string[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(/`([a-z][a-z0-9_-]{1,60})`/g)) {
+    const token = match[1]
+    if (token !== undefined && !seen.has(token)) {
+      seen.add(token)
+      found.push(token)
+    }
+  }
+  return found
+}
+
+function isHumanConfirmText(text: string): boolean {
+  return /\b(human[- ]?confirm)\b|需人工确认|人工确认/i.test(text)
+}
+
+function extractExplicitOnFailTarget(metaBlock: string): string | undefined {
+  if (/失败重试|onFail\s*[:=]\s*self/i.test(metaBlock)) return 'self'
+  const fallbackMatch = /(?:失败回退|onFail)\s*[:：=]\s*([^\s,)，\)]+)/i.exec(metaBlock)
+  return fallbackMatch?.[1]?.trim()
+}
+
 function extractMarkdownSteps(
   body: string,
   availableSkillNames: readonly string[],
 ): FlowStepInput[] {
   const lines = body.split(/\r?\n/)
-  const rawSteps: { readonly title: string; readonly detail: string }[] = []
+  interface RawStepEntry {
+    readonly explicitId?: string
+    readonly title: string
+    readonly metaBlock: string
+    readonly detail: string
+    readonly rawLine: string
+  }
+  const rawSteps: RawStepEntry[] = []
+
+  const parseNumberedHead = (lineBody: string): RawStepEntry => {
+    // Parse structured step header first so colons inside metadata `(skills, 失败回退: step)`
+    // are not mistaken for the separator between step title and step goal.
+    const structuredMatch = /^((?:\*\*[^*]+\*\*|[^:：\(\)（）\{}]+?))(?:\s*\{#([a-z0-9_-]+)\})?(?:\s*[\(（]([^()（）]+)[\)）])?\s*(?:[:：]\s+|\.\s*$|\.\s+|\s+[—–-]+\s+|$)(.*)$/.exec(lineBody)
+    if (structuredMatch !== null) {
+      const headPart = structuredMatch[1]!.trim()
+      const explicitIdRaw = structuredMatch[2]
+      const metaBlock = (structuredMatch[3] ?? '').trim()
+      const tailRaw = (structuredMatch[4] ?? '').trim()
+      const explicitId = explicitIdRaw === undefined ? undefined : slugifyId(explicitIdRaw, explicitIdRaw)
+      const title = stripStepDecoration(headPart).slice(0, 60)
+      const detail = stripStepDecoration(tailRaw !== '' ? tailRaw : lineBody)
+      return {
+        ...(explicitId === undefined ? {} : { explicitId }),
+        title: title || detail.slice(0, 48),
+        metaBlock,
+        detail,
+        rawLine: lineBody,
+      }
+    }
+    const cleaned = stripStepDecoration(lineBody)
+    return {
+      title: cleaned.slice(0, 48),
+      metaBlock: '',
+      detail: cleaned,
+      rawLine: lineBody,
+    }
+  }
 
   // First try numbered list items (`1. ...`, `2. ...`) at top indentation.
-  let currentNumbered: { title: string; details: string[] } | undefined
+  let currentNumbered: { head: RawStepEntry; extraDetails: string[] } | undefined
   for (const line of lines) {
     const numMatch = /^\s*(\d+)\.\s+(.+)$/.exec(line)
     if (numMatch?.[2] !== undefined) {
       if (currentNumbered !== undefined) {
         rawSteps.push({
-          title: currentNumbered.title,
-          detail: currentNumbered.details.join(' ').trim(),
+          ...currentNumbered.head,
+          detail: [currentNumbered.head.detail, ...currentNumbered.extraDetails].filter(Boolean).join(' ').trim(),
         })
       }
-      const cleaned = stripStepDecoration(numMatch[2])
-      // Split title from detail on punctuation (`: `, `：`, `. `) or spaced dashes (` - ` / ` — `),
-      // never on intra-word hyphens such as `ship-pr` or `read-only`.
-      const splitMatch = /^([^:：—–]{2,48}?)(?:[:：]\s*|\.\s+|\s+[—–-]+\s*|[—–]\s+)(.+)$/.exec(cleaned)
-      currentNumbered = splitMatch !== null
-        ? { title: splitMatch[1]!.trim(), details: [splitMatch[2]!.trim()] }
-        : { title: cleaned.slice(0, 48), details: [cleaned] }
+      currentNumbered = { head: parseNumberedHead(numMatch[2]), extraDetails: [] }
       continue
     }
     if (currentNumbered !== undefined) {
       const trimmed = line.trim()
       if (trimmed === '' || /^#{1,4}\s+/.test(trimmed)) {
         rawSteps.push({
-          title: currentNumbered.title,
-          detail: currentNumbered.details.join(' ').trim(),
+          ...currentNumbered.head,
+          detail: [currentNumbered.head.detail, ...currentNumbered.extraDetails].filter(Boolean).join(' ').trim(),
         })
         currentNumbered = undefined
       } else if (/^[-*]\s+/.test(trimmed) || /^\s{2,}/.test(line)) {
-        currentNumbered.details.push(stripStepDecoration(trimmed.replace(/^[-*]\s+/, '')))
+        currentNumbered.extraDetails.push(stripStepDecoration(trimmed.replace(/^[-*]\s+/, '')))
       }
     }
   }
   if (currentNumbered !== undefined) {
     rawSteps.push({
-      title: currentNumbered.title,
-      detail: currentNumbered.details.join(' ').trim(),
+      ...currentNumbered.head,
+      detail: [currentNumbered.head.detail, ...currentNumbered.extraDetails].filter(Boolean).join(' ').trim(),
     })
   }
 
   // If numbered steps were sparse, look for `## Step` / `### Phase` headings.
   if (rawSteps.length < 2) {
-    const headingSteps: { title: string; detail: string }[] = []
+    const headingSteps: RawStepEntry[] = []
     let currentHeading: { title: string; details: string[] } | undefined
     for (const line of lines) {
       const hMatch = /^#{2,3}\s+(.+)$/.exec(line.trim())
@@ -193,7 +249,9 @@ function extractMarkdownSteps(
         if (currentHeading !== undefined) {
           headingSteps.push({
             title: currentHeading.title,
+            metaBlock: '',
             detail: currentHeading.details.join(' ').trim(),
+            rawLine: currentHeading.title,
           })
         }
         const headingText = stripStepDecoration(hMatch[1])
@@ -214,7 +272,9 @@ function extractMarkdownSteps(
     if (currentHeading !== undefined) {
       headingSteps.push({
         title: currentHeading.title,
+        metaBlock: '',
         detail: currentHeading.details.join(' ').trim(),
+        rawLine: currentHeading.title,
       })
     }
     if (headingSteps.length > rawSteps.length) {
@@ -222,28 +282,50 @@ function extractMarkdownSteps(
     }
   }
 
-  const normalized = rawSteps.slice(0, 8).map((entry, idx) => {
-    const combined = `${entry.title} ${entry.detail}`
-    const skills = detectReferencedSkills(combined, availableSkillNames)
-    const id = slugifyId(entry.title, `step-${idx + 1}`)
-    const readOnly = isReadOnlyStepText(entry.title) || (!isWriteLikeStepText(entry.title) && isReadOnlyStepText(combined))
+  const intermediate = rawSteps.slice(0, 8).map((entry, idx) => {
+    const combined = `${entry.title} ${entry.metaBlock} ${entry.detail}`
+    const detected = detectReferencedSkills(combined, availableSkillNames)
+    const inlineMetaSkills = entry.metaBlock !== ''
+      ? extractInlineBacktickSkills(entry.metaBlock)
+      : (availableSkillNames.length === 0 ? extractInlineBacktickSkills(entry.rawLine) : [])
+    const skills = [...new Set([...detected, ...inlineMetaSkills])]
+    const id = entry.explicitId ?? slugifyId(entry.title, `step-${idx + 1}`)
+    const readOnly = isReadOnlyStepText(entry.title)
+      || isReadOnlyStepText(entry.metaBlock)
+      || (!isWriteLikeStepText(entry.title) && isReadOnlyStepText(combined))
+    const humanConfirm = isHumanConfirmText(entry.metaBlock) || isHumanConfirmText(entry.title)
+    const explicitOnFail = entry.metaBlock !== '' ? extractExplicitOnFailTarget(entry.metaBlock) : undefined
     return {
-      id,
-      name: entry.title.slice(0, 60) || `Step ${idx + 1}`,
-      skills,
-      ...(entry.detail !== '' ? { goal: entry.detail.slice(0, 500) } : {}),
-      ...(readOnly ? { readOnly: true } : {}),
-    } satisfies FlowStepInput
+      step: {
+        id,
+        name: entry.title.slice(0, 60) || `Step ${idx + 1}`,
+        skills,
+        ...(entry.detail !== '' ? { goal: entry.detail.slice(0, 500) } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+        ...(humanConfirm ? { humanConfirm: true } : {}),
+      } satisfies FlowStepInput,
+      explicitOnFail,
+    }
   })
 
-  // Wire `onFail` automatically on gate/review steps to the closest preceding writable step.
+  // Resolve explicit `onFail` targets or infer review rework loop to the closest preceding writable step.
   let lastWritableId: string | undefined
-  return normalized.map((step, idx) => {
+  return intermediate.map(({ step, explicitOnFail }, idx) => {
     if (step.readOnly !== true) {
       lastWritableId = step.id ?? `step-${idx + 1}`
-      return step
     }
-    if (lastWritableId !== undefined && isGateStepText(`${step.name} ${step.goal ?? ''}`)) {
+    if (explicitOnFail !== undefined) {
+      if (explicitOnFail === 'self') {
+        return { ...step, onFail: 'self' }
+      }
+      const target = intermediate.find(
+        cand => cand.step.id === explicitOnFail || cand.step.name === explicitOnFail,
+      )
+      if (target !== undefined) {
+        return { ...step, onFail: target.step.id! }
+      }
+    }
+    if (step.readOnly === true && lastWritableId !== undefined && isGateStepText(`${step.name} ${step.goal ?? ''}`)) {
       return { ...step, onFail: lastWritableId }
     }
     return step
@@ -325,7 +407,7 @@ export async function compilePlaybookToFlow(input: CompilePlaybookInput): Promis
     const steps = preserveUserBindings(normalizeStepInputs(parsedFrontmatterSteps.data), input.existingFlow)
     const name = metaName ?? extractTitleFromMarkdown(body, refBase)
     const flow = flowDefSchema.parse({
-      id: input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
+      id: input.flowId ?? input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
       name,
       enabled: input.existingFlow?.enabled ?? true,
       when: metaWhen ?? `${name} 相关任务`,
@@ -353,7 +435,7 @@ export async function compilePlaybookToFlow(input: CompilePlaybookInput): Promis
     const steps = preserveUserBindings(normalizeStepInputs(fallbackStep), input.existingFlow)
     const name = metaName ?? extractTitleFromMarkdown(body, refBase)
     const flow = flowDefSchema.parse({
-      id: input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
+      id: input.flowId ?? input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
       name,
       enabled: input.existingFlow?.enabled ?? true,
       when: metaWhen ?? `${name} 相关任务`,
@@ -387,7 +469,7 @@ export async function compilePlaybookToFlow(input: CompilePlaybookInput): Promis
     }))
     const steps = preserveUserBindings(normalizeStepInputs(safeSteps), input.existingFlow)
     const flow = flowDefSchema.parse({
-      id: input.existingFlow?.id ?? idFactory(`flow-${slugifyId(parsed.name, 'playbook')}`),
+      id: input.flowId ?? input.existingFlow?.id ?? idFactory(`flow-${slugifyId(parsed.name, 'playbook')}`),
       name: metaName ?? parsed.name,
       enabled: input.existingFlow?.enabled ?? true,
       when: metaWhen ?? parsed.when,
@@ -409,7 +491,7 @@ export async function compilePlaybookToFlow(input: CompilePlaybookInput): Promis
       goal: body.trim().slice(0, 500) || `Follow playbook ${input.ref}`,
     }]), input.existingFlow)
     const flow = flowDefSchema.parse({
-      id: input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
+      id: input.flowId ?? input.existingFlow?.id ?? idFactory(`flow-${slugifyId(name, 'playbook')}`),
       name,
       enabled: input.existingFlow?.enabled ?? true,
       when: metaWhen ?? `${name} 相关任务`,

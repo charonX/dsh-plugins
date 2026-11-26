@@ -11,10 +11,14 @@ import z from '@deepseek-ai/schemastery'
 import { probeAgentKinds } from './dispatch/cli-backend.ts'
 import {
   discoverWorkspaceSkills,
-  loadSkillMarkdown,
   type DiscoveredSkill,
   type HostSkillsPort,
 } from './dispatch/workspace-skills.ts'
+import {
+  discoverPlaybooks,
+  loadPlaybookSource,
+  toDiscoveredPlaybookView,
+} from './flow/playbook-catalog.ts'
 import {
   flowDefSchema,
   flowIdSchema,
@@ -23,10 +27,11 @@ import {
   flowPresetApplyInputSchema,
   flowSyncPlaybookInputSchema,
   flowUpdateInputSchema,
-  materializeFlowPreset,
+  materializeCompiledPlaybook,
   normalizeStepInputs,
   type AgentKindOption,
   type AgentSlashCommand,
+  type DiscoveredPlaybook,
   type FlowDef,
   type FlowIdInput,
   type FlowImportPlaybookInput,
@@ -54,9 +59,14 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   }
 }
 
-export interface FlowServiceConfig {}
+export interface FlowServiceConfig {
+  /** Optional working directory hint for discovering `skills/playbooks/*.md` and workspace skills. */
+  playbookCwd?: string
+}
 
-export const FlowServiceConfig: z<FlowServiceConfig> = z.object({})
+export const FlowServiceConfig: z<FlowServiceConfig> = z.object({
+  playbookCwd: z.string(),
+})
 
 export class DshManagerFlow extends TypertRemoteService {
   static inject = ['dshManagerTeamConfig', 'llm']
@@ -64,10 +74,11 @@ export class DshManagerFlow extends TypertRemoteService {
   static Config: z<FlowServiceConfig> = FlowServiceConfig
 
   private agentKindCache?: readonly AgentKindOption[]
+  private readonly playbookCwdConfig: string | undefined
 
   constructor(ctx: Context, config: FlowServiceConfig = {}) {
     super(ctx, 'dshManagerFlow', { namespace: 'dshManager' })
-    void config
+    this.playbookCwdConfig = config.playbookCwd
   }
 
   protected async [Service.init](): Promise<void> {}
@@ -77,6 +88,9 @@ export class DshManagerFlow extends TypertRemoteService {
   }
 
   private defaultCwd(): string {
+    if (this.playbookCwdConfig !== undefined && this.playbookCwdConfig.trim() !== '') {
+      return this.playbookCwdConfig
+    }
     const reg = (this.ctx as unknown as {
       get?: (key: string) => { list?: () => readonly { readonly path?: string }[] } | undefined
     }).get?.('workspaceRegistry')
@@ -173,9 +187,27 @@ export class DshManagerFlow extends TypertRemoteService {
     readonly status: TeamConfigStatusView
   }> {
     const input = flowPresetApplyInputSchema.parse(rawInput)
+    const cwd = this.defaultCwd()
+    const hostSkills = this.hostSkills()
+    const [catalog, availableSkills] = await Promise.all([
+      discoverPlaybooks(cwd),
+      discoverWorkspaceSkills(cwd, hostSkills).catch(() => []),
+    ])
+    const entry = catalog.find(item => item.id === input.presetId)
+    if (entry === undefined) {
+      throw new RemoteError('dshManager/flow-invalid', `unknown preset "${input.presetId}"`, {
+        reason: `unknown preset "${input.presetId}"`,
+      })
+    }
+    const compiled = await compilePlaybookToFlow({
+      kind: 'file',
+      ref: entry.ref,
+      content: entry.content,
+      availableSkillNames: availableSkills.map(s => s.name),
+    })
     let created!: FlowDef
     await this.ctx.dshManagerTeamConfig.mutate((doc) => {
-      created = materializeFlowPreset(doc.flows, input.presetId)
+      created = materializeCompiledPlaybook(doc.flows, compiled.flow)
       return { ...doc, flows: [...doc.flows, created] }
     })
     return { flow: created, status: this.ctx.dshManagerTeamConfig.status() }
@@ -202,7 +234,7 @@ export class DshManagerFlow extends TypertRemoteService {
         })
       }
       try {
-        const loaded = await loadSkillMarkdown(input.kind, input.ref, cwd, hostSkills)
+        const loaded = await loadPlaybookSource(input.kind, input.ref, cwd, hostSkills)
         content = loaded.content
         resolvedRef = loaded.resolvedRef
       } catch (error) {
@@ -251,12 +283,44 @@ export class DshManagerFlow extends TypertRemoteService {
     if (current.source === undefined) {
       return { flow: current, cacheHit: true, method: 'cache', status: this.ctx.dshManagerTeamConfig.status() }
     }
-    return await this.flowImportPlaybook({
-      kind: current.source.kind,
-      ref: current.source.ref,
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-      ...(input.useLlm === undefined ? {} : { useLlm: input.useLlm }),
+    const cwd = input.cwd ?? this.defaultCwd()
+    const hostSkills = this.hostSkills()
+    const availableSkills = await discoverWorkspaceSkills(cwd, hostSkills).catch(() => [])
+    let loaded: { readonly resolvedKind: 'skill' | 'file'; readonly resolvedRef: string; readonly content: string }
+    try {
+      loaded = await loadPlaybookSource(current.source.kind, current.source.ref, cwd, hostSkills)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new RemoteError('dshManager/flow-invalid', reason, { reason })
+    }
+    const result = await compilePlaybookToFlow({
+      kind: loaded.resolvedKind,
+      ref: loaded.resolvedRef,
+      content: loaded.content,
+      availableSkillNames: availableSkills.map(s => s.name),
+      existingFlow: current,
+      ...(input.useLlm === true ? { compileWithLlm: prompt => this.runPlaybookLlmExtract(prompt) } : {}),
     })
+    if (!result.cacheHit) {
+      await this.ctx.dshManagerTeamConfig.mutate(doc => ({
+        ...doc,
+        flows: doc.flows.map(f => (f.id === current.id ? result.flow : f)),
+      }))
+    }
+    return {
+      flow: result.flow,
+      cacheHit: result.cacheHit,
+      method: result.method,
+      status: this.ctx.dshManagerTeamConfig.status(),
+    }
+  }
+
+  /** List all discovered Playbooks (workspace `skills/playbooks/*.md` priority + plugin built-ins). */
+  @Remote
+  async playbookCatalog(rawInput?: { readonly cwd?: string }): Promise<{ readonly playbooks: readonly DiscoveredPlaybook[] }> {
+    const cwd = rawInput?.cwd !== undefined && rawInput.cwd !== '' ? rawInput.cwd : this.defaultCwd()
+    const entries = await discoverPlaybooks(cwd)
+    return { playbooks: entries.map(toDiscoveredPlaybookView) }
   }
 
   /** List all discovered Skills across workspace roots and host `ctx.skills` (including skills-manager). */

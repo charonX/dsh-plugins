@@ -13,7 +13,9 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { legacyCrewDomain, legacyPipelineDomain, legacyRouteDomain } from './team-config/legacy-domains.ts'
+import type { HostSkillsPort } from './dispatch/workspace-skills.ts'
 import type { FlowDef } from './flow/flow-ir.ts'
+import { discoverAndCompileDefaultPlaybooks } from './flow/playbook-catalog.ts'
 import {
   emptyTeamConfig,
   parseTeamConfigYaml,
@@ -47,11 +49,17 @@ export interface TeamConfigOptions {
   filePath?: string
   /** File-watch debounce in milliseconds; defaults to 60ms. */
   debounceMs?: number
+  /** Working directory for discovering workspace `skills/playbooks/*.md` defaults on fresh install. */
+  playbookCwd?: string
+  /** Automatically seed default Playbook flows when no `team-config.yaml` and no legacy storage exist (default: `true`). */
+  autoSeedPlaybooks?: boolean
 }
 
 export const TeamConfigOptions: z<TeamConfigOptions> = z.object({
   filePath: z.string(),
   debounceMs: z.natural(),
+  playbookCwd: z.string(),
+  autoSeedPlaybooks: z.boolean(),
 })
 
 const DEFAULT_DEBOUNCE_MS = 60
@@ -87,6 +95,8 @@ export class DshManagerTeamConfig extends TypertRemoteService {
 
   private readonly filePath: string
   private readonly debounceMs: number
+  private readonly playbookCwdConfig: string | undefined
+  private readonly autoSeedPlaybooks: boolean
   private doc: TeamConfigDocument = emptyTeamConfig()
   private revision = 1
   private loadedAt = Date.now()
@@ -103,6 +113,8 @@ export class DshManagerTeamConfig extends TypertRemoteService {
     super(ctx, 'dshManagerTeamConfig', { namespace: 'dshManager' })
     this.filePath = config.filePath ?? join(resolveDshHome(ctx), 'dsh-manager', 'team-config.yaml')
     this.debounceMs = config.debounceMs ?? DEFAULT_DEBOUNCE_MS
+    this.playbookCwdConfig = config.playbookCwd
+    this.autoSeedPlaybooks = config.autoSeedPlaybooks ?? true
   }
 
   protected async [Service.init](): Promise<void> {
@@ -239,17 +251,49 @@ export class DshManagerTeamConfig extends TypertRemoteService {
     }
 
     const migrated = await this.readLegacyDomains()
-    const yamlText = serializeTeamConfigYaml(migrated)
+    const doc = migrated.hadLegacyRecords || !this.autoSeedPlaybooks
+      ? migrated.doc
+      : await this.seedDefaultFlows()
+    const yamlText = serializeTeamConfigYaml(doc)
     const hash = sha256(yamlText)
     await writeTextAtomic(this.filePath, yamlText)
     this.lastWrittenHash = hash
-    this.doc = migrated
+    this.doc = doc
     this.loadedAt = Date.now()
     this.lastError = undefined
     this.lastErrorAt = undefined
   }
 
-  private async readLegacyDomains(): Promise<TeamConfigDocument> {
+  private resolvePlaybookCwd(): string {
+    if (this.playbookCwdConfig !== undefined && this.playbookCwdConfig.trim() !== '') {
+      return this.playbookCwdConfig
+    }
+    const reg = (this.ctx as unknown as {
+      get?: (key: string) => { list?: () => readonly { readonly path?: string }[] } | undefined
+    }).get?.('workspaceRegistry')
+    const firstPath = reg?.list?.()?.[0]?.path
+    return firstPath !== undefined && firstPath !== '' ? firstPath : process.cwd()
+  }
+
+  private async seedDefaultFlows(): Promise<TeamConfigDocument> {
+    try {
+      const hostSkills = (this.ctx as unknown as { get?: (key: string) => unknown }).get?.('skills') as HostSkillsPort | undefined
+      const compiled = await discoverAndCompileDefaultPlaybooks({
+        cwd: this.resolvePlaybookCwd(),
+        hostSkills,
+      })
+      if (compiled.length === 0) return emptyTeamConfig()
+      return validateTeamConfigDocument({
+        version: 3,
+        flows: compiled.map(entry => entry.flow),
+      })
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager default playbook auto-seed failed (falling back to empty config): %s', error instanceof Error ? error.message : String(error))
+      return emptyTeamConfig()
+    }
+  }
+
+  private async readLegacyDomains(): Promise<{ readonly doc: TeamConfigDocument; readonly hadLegacyRecords: boolean }> {
     const crewDom = await this.ctx.storageDomain.open(legacyCrewDomain)
     const pipelineDom = await this.ctx.storageDomain.open(legacyPipelineDomain)
     const routeDom = await this.ctx.storageDomain.open(legacyRouteDomain)
@@ -258,13 +302,13 @@ export class DshManagerTeamConfig extends TypertRemoteService {
       const pipelines = [...pipelineDom.table('pipelines').entries()].map(([, record]) => record)
       const routes = [...routeDom.table('rules').entries()].map(([, record]) => record)
       if (crew.length === 0 && pipelines.length === 0 && routes.length === 0) {
-        return emptyTeamConfig()
+        return { doc: emptyTeamConfig(), hadLegacyRecords: false }
       }
       const { doc, warnings } = sanitizeLegacyTeamConfig({ crew, pipelines, routes })
       for (const warning of warnings) {
         this.ctx.logger?.warn('dsh-manager team-config migration: %s', warning)
       }
-      return doc
+      return { doc, hadLegacyRecords: true }
     } finally {
       await Promise.allSettled([crewDom.close(), pipelineDom.close(), routeDom.close()])
     }

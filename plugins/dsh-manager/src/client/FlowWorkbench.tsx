@@ -4,7 +4,6 @@ import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { Button, Modal, SegmentedControl, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   AGENT_KINDS,
-  FLOW_PRESETS,
   WORKSPACE_MODES,
   type AgentKind,
   type AgentKindOption,
@@ -131,6 +130,7 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
     onFlowPresetApply,
     onFlowImportPlaybook,
     onFlowSyncPlaybook,
+    onPlaybookCatalogRefresh,
     onAgentKindOptions,
     onTeamConfigExportYaml,
     onTeamConfigImportYaml,
@@ -140,6 +140,7 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
   const snapshot = useFlows(s => s)
   const flows = snapshot.flows ?? []
   const skills = snapshot.skills ?? []
+  const playbooks = snapshot.playbooks ?? []
 
   const [viewMode, setViewMode] = useState<WorkbenchViewMode>('graph')
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>()
@@ -421,7 +422,11 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
           }}>
             {t('flow.playbook.open')}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => { setPresetError(undefined); setPresetOpen(true) }}>
+          <Button variant="outline" size="sm" onClick={() => {
+            setPresetError(undefined)
+            setPresetOpen(true)
+            void onPlaybookCatalogRefresh()
+          }}>
             {t('preset.open')}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => { void openYamlModal() }}>
@@ -890,7 +895,7 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
         </div>
       </Modal>
 
-      {/* Presets Modal */}
+      {/* Presets / Discovered Playbooks Modal */}
       <Modal
         open={presetOpen}
         onClose={() => setPresetOpen(false)}
@@ -898,29 +903,45 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
         closeLabel={t('flow.cancel')}
       >
         <div className={css.modalBody}>
-          <p className={css.archSubtitle}>{t('preset.modal.hint')}</p>
-          {presetError !== undefined ? <p className={css.errorText}>{presetError}</p> : null}
-          <div className={css.presetList}>
-            {FLOW_PRESETS.map(preset => (
-              <div key={preset.id} className={css.presetCard}>
-                <div className={css.presetHead}>
-                  <strong>{preset.name}</strong>
-                  <Tag tone="info">{preset.workspaceMode}</Tag>
-                </div>
-                <p className={css.archSubtitle}>{preset.summary}</p>
-                <div className={css.presetActions}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={presetBusy !== undefined}
-                    onClick={() => { void applyPreset(preset.id) }}
-                  >
-                    {presetBusy === preset.id ? t('preset.copying') : t('preset.copy')}
-                  </Button>
-                </div>
-              </div>
-            ))}
+          <div className={css.stepsHeader}>
+            <p className={css.archSubtitle}>{t('preset.modal.hint')}</p>
+            <Button variant="ghost" size="sm" onClick={() => { void onPlaybookCatalogRefresh() }}>
+              {t('skills.refresh')}
+            </Button>
           </div>
+          {presetError !== undefined ? <p className={css.errorText}>{presetError}</p> : null}
+          {playbooks.length === 0
+            ? <p className={css.empty}>{t('preset.empty')}</p>
+            : (
+              <div className={css.presetList}>
+                {playbooks.map(preset => (
+                  <div key={preset.id} className={css.presetCard}>
+                    <div className={css.presetHead}>
+                      <strong>{preset.name}</strong>
+                      <div className={css.inspectorBadges}>
+                        <Tag tone={preset.source === 'workspace' ? 'success' : 'neutral'}>
+                          {t(preset.source === 'workspace' ? 'preset.source.workspace' : 'preset.source.builtin')}
+                        </Tag>
+                        <Tag tone="info">{preset.workspaceMode}</Tag>
+                        <Tag tone="neutral">#{preset.hash.slice(0, 7)}</Tag>
+                      </div>
+                    </div>
+                    <p className={css.archSubtitle}>{preset.when}</p>
+                    <p className={css.archSubtitle}><code>{preset.path}</code></p>
+                    <div className={css.presetActions}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={presetBusy !== undefined}
+                        onClick={() => { void applyPreset(preset.id) }}
+                      >
+                        {presetBusy === preset.id ? t('preset.copying') : t('preset.copy')}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
         </div>
       </Modal>
 
