@@ -127,6 +127,7 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   if (input.scratchDir !== undefined) {
     add('artifacts', [
       `Task scratch directory (store intermediate artifacts here, never pollute ${input.cwd}): ${input.scratchDir}`,
+      `If ${input.scratchDir}/align-card.md, ${input.scratchDir}/design.md, or ${input.scratchDir}/prototype/ exists, read them before making assumptions about boundaries or UI layouts.`,
       input.readOnly
         ? `Read-only step: do NOT modify repository files in ${input.cwd}. Record review/verification findings in ${input.scratchDir}/review-report.md and test output in ${input.scratchDir}/test-report.log.`
         : `If ${input.scratchDir}/review-report.md or ${input.scratchDir}/test-report.log exists from an earlier rework, read it first and address every open finding before reporting ready.`,

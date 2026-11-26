@@ -55,6 +55,7 @@ describe('prompt-builder', () => {
     expect(out.text).toContain('Required step skills')
     expect(out.text).toContain('Workspace mode: in-place')
     expect(out.text).toContain('Inspect /tmp/knowledge strictly read-only')
+    expect(out.text).toContain('/tmp/scratch/t1/prototype/')
     expect(out.text).toContain('submit_report')
     expect(out.record.sections.filter(s => s.locked).map(s => s.id)).toEqual(['scope', 'report', 'ask', 'approval', 'deliver'])
   })
