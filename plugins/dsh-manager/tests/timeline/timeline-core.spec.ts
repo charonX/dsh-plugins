@@ -6,6 +6,7 @@ import {
   appendTimelineEvent,
   artifactsOf,
   backfillTimeline,
+  compactTimeline,
   eventOfReport,
   recordAttentionTimeline,
   recordDispatchTimeline,
@@ -260,5 +261,51 @@ describe('backfill of pre-ledger tickets', () => {
     expect(summary?.text?.endsWith('…')).toBe(true)
     expect(summary!.text!.length).toBe(72)
     expect(summarizeActivity([])).toBeUndefined()
+  })
+})
+
+describe('compactTimeline', () => {
+  const spoken = (id: string, seq: number, body: string, turnId = 'dispatch-1'): TimelineEvent => ({
+    id, seq, kind: 'assistant', author: 'executor', at: seq, turnId, body,
+  })
+
+  test('folds an adjacent repeated sentence and keeps the first row', () => {
+    const record: TicketTimelineRecord = {
+      ticketId: 'ticket-1', updatedAt: 2, events: [spoken('a', 0, 'same'), spoken('b', 1, 'same')],
+    }
+    const { record: next, removed } = compactTimeline(record)
+    expect(removed).toBe(1)
+    expect(next.events.map(event => event.id)).toEqual(['a'])
+    expect(next.compactedAt).toBeTypeOf('number')
+  })
+
+  test('folds an assistant message against its message report copy', () => {
+    const record: TicketTimelineRecord = {
+      ticketId: 'ticket-1', updatedAt: 2,
+      events: [spoken('a', 0, 'same'), { ...spoken('b', 1, 'same'), kind: 'report', code: 'report-assistant' }],
+    }
+    expect(compactTimeline(record).record.events.map(event => event.id)).toEqual(['a'])
+  })
+
+  test('keeps a repeat separated by other work and leaves other kinds alone', () => {
+    const record: TicketTimelineRecord = {
+      ticketId: 'ticket-1', updatedAt: 3,
+      events: [
+        spoken('a', 0, 'same'),
+        { id: 'tool', seq: 1, kind: 'tool', author: 'executor', at: 1, turnId: 'dispatch-1', body: 'Read a.ts' },
+        spoken('b', 2, 'same'),
+      ],
+    }
+    expect(compactTimeline(record).record.events.map(event => event.id)).toEqual(['a', 'tool', 'b'])
+  })
+
+  test('is idempotent: a marked ledger is returned untouched', () => {
+    const marked: TicketTimelineRecord = {
+      ticketId: 'ticket-1', updatedAt: 2, compactedAt: 5,
+      events: [spoken('a', 0, 'same'), spoken('b', 1, 'same')],
+    }
+    const result = compactTimeline(marked)
+    expect(result.removed).toBe(0)
+    expect(result.record).toBe(marked)
   })
 })

@@ -11,7 +11,7 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-storage-domain'
-import { appendTimelineEvent, type TimelineStorePort } from './timeline/timeline-core.ts'
+import { appendTimelineEvent, compactTimeline, type TimelineStorePort } from './timeline/timeline-core.ts'
 import { summarizeActivity } from './timeline/timeline-core.ts'
 import { createDomainTimelineStore } from './timeline/storage-store.ts'
 import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView, type TicketWorktreePlan } from './board-domain.ts'
@@ -105,6 +105,28 @@ export class DshManagerBoard extends TypertRemoteService {
     const domain = await this.ctx.storageDomain.open(boardDomain)
     this.domain = domain
     this.ctx.effect(() => async () => { await domain.close() }, 'dsh-manager: close board domain')
+    // One pass over ledgers written before capture-side dedupe existed; it
+    // marks each record so the next boot skips it.
+    void this.compactTicketTimelines(domain)
+  }
+
+  /** Fold duplicated assistant/report rows in ledgers older builds wrote. */
+  private async compactTicketTimelines(domain: Domain<typeof boardDomain>): Promise<void> {
+    try {
+      const store = createDomainTimelineStore(domain)
+      let removed = 0
+      for (const record of store.listTimelines()) {
+        if (record.compactedAt !== undefined) continue
+        const before = record.events.length
+        const updated = await store.updateTimeline(record.ticketId, current => compactTimeline(current).record)
+        if (updated !== undefined) removed += before - updated.events.length
+      }
+      if (removed > 0) {
+        this.ctx.logger?.info('dsh-manager: compacted %d duplicated ticket timeline rows', removed)
+      }
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline compaction failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /** The eval store the Steward drives; the board owns the domain. */

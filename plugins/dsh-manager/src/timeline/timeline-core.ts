@@ -75,6 +75,8 @@ export const ticketTimelineRecord = z.object({
   ticketId: z.string(),
   events: z.array(timelineEventRecord).default([]),
   updatedAt: z.number().default(0),
+  /** Set once the one-time duplicate compaction ran over this ledger. */
+  compactedAt: z.number().optional(),
 })
 
 export type TicketTimelineRecord = z.infer<typeof ticketTimelineRecord>
@@ -86,6 +88,32 @@ export interface TimelineStorePort {
   /** Run `update` in the storage write chain; `undefined` when the ticket has no ledger yet. */
   updateTimeline(ticketId: string, update: (current: TicketTimelineRecord) => TicketTimelineRecord): Promise<TicketTimelineRecord | undefined>
   listTimelines(): readonly TicketTimelineRecord[]
+}
+
+/**
+ * Collapse the duplicate rows older builds wrote: the same executor sentence
+ * landed once as an `assistant` event and once as its `message` report, and a
+ * re-emitted message landed again. Only *adjacent* equal sentences inside one
+ * turn fold, so a deliberate repetition separated by other work survives.
+ *
+ * The pass is idempotent and records `compactedAt`, so boot scans each ledger
+ * once and later appends (already guarded at capture time) stay untouched.
+ */
+export function compactTimeline(record: TicketTimelineRecord): { record: TicketTimelineRecord; removed: number } {
+  const kept: TimelineEvent[] = []
+  for (const event of record.events) {
+    const speech = event.kind === 'assistant' || event.kind === 'report'
+    const previous = kept[kept.length - 1]
+    const duplicate = speech
+      && previous !== undefined
+      && previous.turnId === event.turnId
+      && (previous.kind === 'assistant' || previous.kind === 'report')
+      && previous.body === event.body
+    if (!duplicate) kept.push(event)
+  }
+  const removed = record.events.length - kept.length
+  if (record.compactedAt !== undefined) return { record, removed: 0 }
+  return { record: { ...record, events: kept, compactedAt: Date.now() }, removed }
 }
 
 /** One event to append; `id` makes replays idempotent. */

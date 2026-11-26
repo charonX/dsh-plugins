@@ -39,3 +39,7 @@
 - **继续读 Session，加持久化 session 日志**：宿主 SessionStore 的持久层语义不受插件控制，且 Session 事件无业务归属；否决。
 - **每事件一行表**：查询要全表扫描，`seq` 需要额外计数与并发保护，收益不足以抵消复杂度；否决。
 - **把账本挂在 dispatch 记录上**：dispatch 被取消/重启扫描改写时，历史会被状态机语义污染；且 Steward 事件不属于任何 dispatch；否决。
+
+## 一次性压缩（2026-11）
+
+早期版本把同一条助手消息以 `assistant` 事件与 `message` 报告各写一次，重发还会再写一次，账本里出现相邻重复。捕获端已加守卫；历史数据由 `compactTimeline` 在启动时扫一遍：只折叠同一轮内**相邻且正文相同**的 assistant/report 行，保留最早一条，不合并被其他工作隔开的真实重复，也不动 `turn-started`/`turn-ended` 这类系统行。每条账本写 `compactedAt` 后不再重扫，渲染层的同时折叠保留作兜底。
