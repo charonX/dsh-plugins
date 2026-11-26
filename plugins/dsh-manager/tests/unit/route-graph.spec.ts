@@ -54,3 +54,37 @@ describe('route-graph (layoutFlowMap)', () => {
     expect(connected.has('step-f1-draft')).toBe(true)
   })
 })
+
+describe('route-graph edges', () => {
+  const flow = (id: string, name: string): FlowDef => ({
+    id,
+    name,
+    enabled: true,
+    when: name,
+    workspaceMode: 'in-place',
+    steps: [{ id: `${id}-s1`, name: 'S1', skills: [] }],
+    createdAt: 1,
+    updatedAt: 1,
+  })
+
+  test('every connector leaves and enters a node on an axis, never diagonally', () => {
+    const map = layoutFlowMap({
+      rootTitle: '收到任务',
+      reworkLabel: '失败打回',
+      readOnlyLabel: '只读',
+      confirmLabel: '确认',
+      flows: [flow('f1', '流程一'), flow('f2', '流程二')],
+    })
+    const entryEdges = map.edges.filter(e => e.id.startsWith('edge-entry-'))
+    expect(entryEdges).toHaveLength(2)
+    for (const edge of map.edges) {
+      expect(edge.points.length).toBeGreaterThanOrEqual(2)
+      for (let i = 1; i < edge.points.length; i += 1) {
+        const a = edge.points[i - 1]!
+        const b = edge.points[i]!
+        // An orthogonal connector only changes x or only changes y per segment.
+        expect(a.x === b.x || a.y === b.y).toBe(true)
+      }
+    }
+  })
+})

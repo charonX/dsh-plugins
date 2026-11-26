@@ -606,6 +606,13 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
         onClose={() => setEditorOpen(false)}
         title={editingFlowId === undefined ? t('flow.add.title') : t('flow.edit.title')}
         closeLabel={t('flow.cancel')}
+        className={css.flowEditorModal ?? ''}
+        footer={(
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setEditorOpen(false)}>{t('flow.cancel')}</Button>
+            <Button variant="primary" size="sm" onClick={() => { void submitFlow() }}>{t('flow.save')}</Button>
+          </>
+        )}
       >
         <div className={css.modalBody}>
           <label className={css.field}>
@@ -814,10 +821,6 @@ export function FlowWorkbench(props: FlowWorkbenchProps) {
             })}
           </div>
           {formError !== undefined ? <p className={css.errorText}>{formError}</p> : null}
-          <div className={css.modalActions}>
-            <Button variant="ghost" size="sm" onClick={() => setEditorOpen(false)}>{t('flow.cancel')}</Button>
-            <Button variant="primary" size="sm" onClick={() => { void submitFlow() }}>{t('flow.save')}</Button>
-          </div>
         </div>
       </Modal>
 
