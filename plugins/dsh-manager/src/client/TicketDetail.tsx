@@ -41,7 +41,7 @@ export interface TicketDetailActions {
   /** Manually close/abandon the ticket (`ended`). */
   readonly onCloseTicket?: (input: { readonly ticketId: string; readonly reason?: string }) => Promise<boolean>
   /** Open the dispatch's Session in the host workspace, when one exists. */
-  readonly onOpenSession?: (sessionId: string) => void
+  readonly onOpenSession?: (sessionId: string) => boolean
 }
 
 const DISPATCH_OUTCOME_KEYS = {
@@ -176,6 +176,7 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
   const [cancellingId, setCancellingId] = useState<string | undefined>()
   const [sending, setSending] = useState(false)
   const [sendFailed, setSendFailed] = useState(false)
+  const [openSessionFailed, setOpenSessionFailed] = useState(false)
   const [removingWorktree, setRemovingWorktree] = useState(false)
   const [updatingDeps, setUpdatingDeps] = useState(false)
   const [closingTicket, setClosingTicket] = useState(false)
@@ -264,6 +265,21 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
       })
       .finally(() => { setSending(false) })
   }
+  /**
+   * Reveal the executor Session in the host workspace. Navigation replaces the
+   * main view, so the drawer closes on success — otherwise it would cover the
+   * conversation it just opened. A failed reveal stays open and says why.
+   */
+  const revealSession = (sessionId: string): void => {
+    const opened = actions.onOpenSession?.(sessionId) ?? false
+    if (opened) {
+      setOpenSessionFailed(false)
+      onClose()
+      return
+    }
+    setOpenSessionFailed(true)
+  }
+
   const dispatchNow = (): void => {
     if (actions.onDispatchTicket === undefined || dispatching) return
     setDispatching(true)
@@ -344,7 +360,7 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
           <div className={css.wbHeadActions}>
             {rawSessionId !== undefined && actions.onOpenSession !== undefined
               ? (
-                <Button variant="ghost" size="sm" onClick={() => { actions.onOpenSession?.(rawSessionId) }}>
+                <Button variant="ghost" size="sm" onClick={() => { revealSession(rawSessionId) }}>
                   {t('board.workbench.openSession')}
                 </Button>
               )
@@ -369,7 +385,10 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
         {detail !== undefined
           ? (
             <>
-              <div className={css.wbScroll}>
+              {openSessionFailed
+            ? <p className={css.wbNotice} role="status">{t('board.workbench.openSessionFailed')}</p>
+            : null}
+          <div className={css.wbScroll}>
                 <TicketTimeline
                   detail={detail}
                   attentions={attentions}

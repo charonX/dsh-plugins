@@ -77,7 +77,7 @@ export interface BoardDependencies {
   /** Cancel an active dispatch on operator request. */
   readonly cancelDispatch?: (dispatchId: string) => Promise<boolean>
   /** Jump to one Session in the host workspace, when the host exposes it. */
-  readonly openSession?: (sessionId: string) => void
+  readonly openSession?: (sessionId: string) => boolean
   /** Continue one ticket with a new instruction (deliver, queue, or resume). */
   readonly continueTicket?: (input: { readonly ticketId: string; readonly text: string; readonly newSession?: boolean }) => Promise<ContinueTicketResult | undefined>
   /** Inspect a ticket's mapped git worktree (`status` + `diff`). */
@@ -122,7 +122,7 @@ export interface BoardInjected {
   /** Cancel a queued or running dispatch; resolves `true` when cancelled. */
   readonly onDispatchCancel: (dispatchId: string) => Promise<boolean>
   /** Open the ticket's Executor Session in the host workspace. */
-  readonly onOpenSession: (sessionId: string) => void
+  readonly onOpenSession: (sessionId: string) => boolean
   /** Inspect a ticket's git worktree status and diff; `undefined` when unmapped or failed. */
   readonly onTicketWorktree: (ticketId: string) => Promise<WorktreeInspectionView | undefined>
   /** Remove a ticket's git worktree directory; resolves `true` when removed. */
@@ -329,7 +329,7 @@ export function createBoardSource(deps: BoardDependencies): Pick<BoardInjected, 
       }
     },
     onOpenSession(sessionId) {
-      deps.openSession?.(sessionId)
+      return deps.openSession?.(sessionId) ?? false
     },
     async onContinueTicket(input: { readonly ticketId: string; readonly text: string; readonly newSession?: boolean }) {
       if (deps.continueTicket === undefined) return undefined

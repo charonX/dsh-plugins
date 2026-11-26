@@ -25,7 +25,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
   // capture THIS context, so their later `ctx.remote.dshManager` reads resolve
   // through the fiber that declares the namespace (reads fired from React
   // callbacks would otherwise be refused by the inject guard).
-  const ui = ctx.inject([...UI_INJECT], (uiCtx) => registerUi(uiCtx))
+  const ui = ctx.inject([...UI_INJECT, 'uiWorkspace'], (uiCtx) => registerUi(uiCtx))
   return async () => {
     ui.dispose()
     await unmountRemote()

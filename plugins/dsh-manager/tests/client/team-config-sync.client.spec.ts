@@ -36,6 +36,7 @@ describe('team page hot-reload sync and error banner', () => {
     const runtime = await SlotTestRuntime.create()
     const locale = new LocaleRuntime(runtime.ctx)
     runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
     runtime.ctx.slots.installLocale(locale)
     await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
 
@@ -78,7 +79,7 @@ describe('team page hot-reload sync and error banner', () => {
       },
     })
 
-    await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+    await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
     const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
     fireEvent.click(view.view.getByRole('tab', { name: 'Team & Flows' }))
 
