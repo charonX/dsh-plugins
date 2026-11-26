@@ -696,6 +696,18 @@ function formatTime(millis: number): string {
   return new Date(millis).toLocaleString()
 }
 
+/** Compact relative timestamp for the card's activity line. */
+function relativeTime(t: TranslateNS<'dshManager'>, at: number): string {
+  const minutes = Math.floor((Date.now() - at) / 60_000)
+  if (minutes < 1) return t('board.card.time.justNow')
+  if (minutes < 60) return t('board.card.time.minutes', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('board.card.time.hours', { count: hours })
+  const days = Math.floor(hours / 24)
+  if (days < 30) return t('board.card.time.days', { count: days })
+  return formatTime(at)
+}
+
 /** One ticket card: primary summary (title, badges, source, project, compact attention prompt); click opens full detail. */
 function TicketCard({ ticket, attentions, t, onOpen, onAnswerAttention }: {
   ticket: TicketView
@@ -742,6 +754,14 @@ function TicketCard({ ticket, attentions, t, onOpen, onAnswerAttention }: {
               ? <span>{t('board.card.source', { connection: ticket.sourceConnectionId, external: ticket.externalKey })}</span>
               : null}
             {ticket.projectId !== undefined ? <span>{t('board.card.project', { project: ticket.projectId })}</span> : null}
+          </div>
+        )
+        : null}
+      {ticket.lastActivity !== undefined
+        ? (
+          <div className={css.cardActivity}>
+            <span className={css.cardActivityText}>{ticket.lastActivity.text ?? t('board.card.activityFallback')}</span>
+            <span className={css.cardActivityTime}>{relativeTime(t, ticket.lastActivity.at)}</span>
           </div>
         )
         : null}

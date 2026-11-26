@@ -275,6 +275,32 @@ export function backfillTimeline(
 }
 
 /** Read one ticket's events in ledger order; an absent ledger reads as empty. */
+/** The compact newest-activity line shown on a board card. */
+export interface TimelineActivitySummary {
+  readonly at: number
+  readonly kind: TimelineEventKind
+  readonly author: TimelineAuthor
+  readonly text?: string
+}
+
+const ACTIVITY_TEXT_LIMIT = 72
+
+/**
+ * Pick the newest event worth showing on a card, preferring anything a human
+ * would recognize over raw tool traffic.
+ * @param events - the ticket's ordered timeline events.
+ * @returns the summary, or `undefined` when the timeline is empty.
+ */
+export function summarizeActivity(events: readonly TimelineEvent[]): TimelineActivitySummary | undefined {
+  if (events.length === 0) return undefined
+  const event = [...events].reverse().find(candidate => candidate.kind !== 'tool') ?? events[events.length - 1]!
+  const collapsed = event.body.replace(/\s+/g, ' ').trim()
+  const text = collapsed.length > ACTIVITY_TEXT_LIMIT
+    ? `${collapsed.slice(0, ACTIVITY_TEXT_LIMIT - 1)}…`
+    : collapsed
+  return { at: event.at, kind: event.kind, author: event.author, ...(text === '' ? {} : { text }) }
+}
+
 export function timelineEventsOf(store: TimelineStorePort, ticketId: string): readonly TimelineEvent[] {
   return store.getTimeline(ticketId)?.events ?? []
 }

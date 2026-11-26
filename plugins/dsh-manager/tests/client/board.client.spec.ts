@@ -227,6 +227,30 @@ describe('board page', () => {
     await runtime.dispose()
   })
 
+  test('renders the newest timeline event and its relative time on the card', async () => {
+    const at = Date.now() - 5 * 60_000
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ running: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          tickets: [
+            ticketOf({
+              id: 'ticket-activity', title: 'Rename the drawer heading', state: 'running', threadId: 'thr-2',
+              lastActivity: { at, kind: 'instruction', author: 'user', text: '把标题改成工作台' },
+            }),
+          ],
+        },
+      }),
+    )
+    await vi.waitFor(() => {
+      const text = view.container.textContent ?? ''
+      expect(text).toContain('把标题改成工作台')
+      expect(text).toContain('5m ago')
+    })
+    await runtime.dispose()
+  })
+
   test('a rejecting first read renders the retry affordance', async () => {
     const { runtime, view } = await mountBoard(
       vi.fn().mockRejectedValue(new Error('transport down')),
