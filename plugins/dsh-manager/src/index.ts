@@ -11,6 +11,8 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-storage-domain'
+import { appendTimelineEvent, type TimelineStorePort } from './timeline/timeline-core.ts'
+import { createDomainTimelineStore } from './timeline/storage-store.ts'
 import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView, type TicketWorktreePlan } from './board-domain.ts'
 import { boardFilterSchema, closeTicketInputSchema, ticketDependenciesInputSchema, type BoardFilter, type CloseTicketInput, type TicketDependenciesInput } from './board/wire-types.ts'
 import { unresolvedDependencies, validateDependencies } from './board/dependency-core.ts'
@@ -111,12 +113,21 @@ export class DshManagerBoard extends TypertRemoteService {
 
   /** The dispatch store the executor drives; the board owns the domain. */
   dispatchStore(): DispatchStorePort {
-    return createDomainDispatchStore(this.domain!)
+    return createDomainDispatchStore(this.domain!, {
+      onTimelineError: error => this.ctx.logger?.warn('dsh-manager: dispatch timeline mirror failed: %s', error instanceof Error ? error.message : String(error)),
+    })
   }
 
   /** The attention store the executor drives; the board owns the domain. */
   attentionStore(): AttentionStorePort {
-    return createDomainAttentionStore(this.domain!)
+    return createDomainAttentionStore(this.domain!, {
+      onTimelineError: error => this.ctx.logger?.warn('dsh-manager: attention timeline mirror failed: %s', error instanceof Error ? error.message : String(error)),
+    })
+  }
+
+  /** The ticket timeline ledger; history independent of any Executor Session. */
+  timelineStore(): TimelineStorePort {
+    return createDomainTimelineStore(this.domain!)
   }
 
   /** The review store the Steward drives; the board owns the domain. */
@@ -223,13 +234,27 @@ export class DshManagerBoard extends TypertRemoteService {
    * Re-open a prior execution stage ticket from `ended` back to `todo` when a
    * later review stage returns the flow walk for rework.
    */
-  async reopenStageTicket(id: string): Promise<TicketRecord | undefined> {
+  async reopenStageTicket(
+    id: string,
+    options?: { readonly reason?: string, readonly author?: 'steward' | 'user' },
+  ): Promise<TicketRecord | undefined> {
     const record = this.domain!.table('tickets').get(id as never)
     if (record === undefined || record.state !== 'ended') return record
-    const updated: TicketRecord = { ...record, state: 'todo', updatedAt: Date.now() }
+    const now = Date.now()
+    const updated: TicketRecord = { ...record, state: 'todo', updatedAt: now }
     await this.domain!.table('tickets').put(id as never, updated)
+    await this.appendTicketEvent(id, now, 'reopened', options?.reason ?? '', options?.author ?? 'steward')
     await this.touchFlowMirror(id)
     return updated
+  }
+
+  /** Append one Steward/system event to a ticket's ledger, best effort. */
+  private async appendTicketEvent(id: string, at: number, code: string, body: string, author: 'user' | 'steward' | 'system'): Promise<void> {
+    try {
+      await appendTimelineEvent(this.timelineStore(), { ticketId: id, kind: 'system', author, at, code, body })
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline append failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /**
@@ -261,6 +286,7 @@ export class DshManagerBoard extends TypertRemoteService {
     if (!anyEnded) return undefined
     await this.touchFlowMirror(id)
     const reason = options?.reason?.trim()
+    await this.appendTicketEvent(id, now, 'finished', reason ?? '', 'system')
     await this.ctx.get('dshManagerNotifications')?.notify({
       id: `progress-ended-${id}-${now}`,
       kind: 'progress',

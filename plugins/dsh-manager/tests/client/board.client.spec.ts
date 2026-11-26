@@ -14,6 +14,12 @@ function dialogEl(): HTMLElement {
   return el
 }
 
+function openInfo(): void {
+  const details = dialogEl().querySelector('details')
+  if (!(details instanceof HTMLDetailsElement)) throw new Error('the ticket info disclosure is missing')
+  details.open = true
+}
+
 type ColumnId = 'inbox' | 'pool' | 'todo' | 'running' | 'attention' | 'ended'
 const COLUMN_IDS: readonly ColumnId[] = ['inbox', 'pool', 'todo', 'running', 'attention', 'ended']
 
@@ -1222,11 +1228,13 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
     })
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
-      expect(view.container.textContent).toContain('[claude-code] tool: Bash: pnpm test')
-      expect(view.container.textContent).toContain('command')
+      expect(view.container.textContent).toContain('Bash · pnpm test')
+      expect(view.container.textContent).toContain('tool calls')
       expect(view.container.textContent).toContain('dsh-manager/ticket-ext')
     })
 
+    // Worktree controls live under the ticket info disclosure.
+    openInfo()
     // Show unified worktree diff inline.
     fireEvent.click(view.view.getByRole('button', { name: 'Show diff' }))
     expect(view.container.textContent).toContain('+console.log("ok")')
@@ -1234,7 +1242,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
     // Worktree remove is disabled while dispatch is still running; cancel it first.
     const removeBtn = view.view.getByRole('button', { name: 'Remove worktree' }) as HTMLButtonElement
     expect(removeBtn.disabled).toBe(true)
-    fireEvent.click(view.view.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(view.view.getByRole('button', { name: 'Cancel turn' }))
     await vi.waitFor(() => {
       expect(dispatchCancel).toHaveBeenCalledWith({ dispatchId: 'disp-1' })
       expect(view.container.textContent).toContain('Interrupted')
@@ -1295,7 +1303,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
       expect(view.container.textContent).toContain('Built-in executor')
       expect(view.container.textContent).toContain('dsh-manager-exec-disp-builtin')
       expect(view.container.textContent).toContain('First interim reply')
-      expect(document.body.querySelector('[role="dialog"] h3')?.textContent ?? view.container.textContent).toContain('Dispatches')
+      expect(dialogEl().textContent).toContain('Dispatch history')
       expect(document.body.textContent).toContain('Key Findings')
     })
 
@@ -1419,6 +1427,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
       expect(dialogEl().textContent).toContain('Prerequisites')
       expect(dialogEl().textContent).toContain('Clean up legacy tabs')
     })
+    openInfo()
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Unblock / Run in parallel' }))
     await vi.waitFor(() => {
       expect(setTicketDependencies).toHaveBeenCalledWith({ ticketId: 'ticket-blocked', dependsOn: [] })
@@ -1488,9 +1497,16 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
 
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
+      expect(dialogEl().textContent).toContain('Ticket info')
+    })
+    openInfo()
+    await vi.waitFor(() => {
       expect(within(dialogEl()).getByRole('button', { name: 'Close ticket' })).toBeDefined()
     })
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Close ticket' }))
+    await vi.waitFor(() => {
+      expect(within(dialogEl()).getByRole('button', { name: 'Confirm close?' })).toBeDefined()
+    })
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Confirm close?' }))
     await vi.waitFor(() => {
       expect(closeTicket).toHaveBeenCalledWith({ ticketId: 'ticket-open' })

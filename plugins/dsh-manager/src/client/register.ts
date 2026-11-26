@@ -122,6 +122,23 @@ export function registerUi(ctx: ClientContext): void {
       const result = await dsh.dispatchTicket({ ticketId })
       return result.ok
     },
+    continueTicket: async input => {
+      if (typeof dsh.continueTicket !== 'function') return undefined
+      const result = await dsh.continueTicket(input)
+      return result.ok ? result.value : undefined
+    },
+    openSession: (sessionId: string) => {
+      try {
+        const host = (ctx as unknown as {
+          uiWorkspace?: { openSession?: (id: string) => void }
+          root?: { get?: (key: string) => { openSession?: (id: string) => void } | undefined }
+        })
+        const target = host.uiWorkspace ?? host.root?.get?.('uiWorkspace')
+        if (target !== undefined && typeof target.openSession === 'function') target.openSession(sessionId)
+      } catch {
+        // Navigation is best-effort; the workbench stays usable without it.
+      }
+    },
     cancelDispatch: async dispatchId => {
       if (typeof dsh.dispatchCancel !== 'function') return false
       const result = await dsh.dispatchCancel({ dispatchId })

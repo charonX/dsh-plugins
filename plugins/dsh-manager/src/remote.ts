@@ -32,11 +32,13 @@ import { manualInputSchema, type ManualInput } from './sources/wire-types.ts'
 import { attentionAnswerInputSchema, attentionListInputSchema, type AttentionAnswerInput, type AttentionListInput, type AttentionView } from './attention/wire-types.ts'
 import type { NotificationView } from './notifications/notification-core.ts'
 import {
+  continueTicketInputSchema,
   dispatchCancelInputSchema,
   dispatchListInputSchema,
   dispatchTicketInputSchema,
   ticketChangeDiffInputSchema,
   ticketDetailInputSchema,
+  type ContinueTicketInput, type ContinueTicketResult,
   type DispatchCancelInput, type DispatchListInput, type DispatchTicketInput, type DispatchView,
   type FileDiffView, type TicketChangeDiffInput, type TicketDetailInput, type TicketDetailView,
   type WorktreeInspectionView,
@@ -122,6 +124,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     evalRequeue: (input: AcceptCandidateInput) => Promise<RemoteResult<void>>
     manualInput: (input: ManualInput) => Promise<RemoteResult<{ readonly threadId: string }>>
     dispatchTicket: (input: DispatchTicketInput) => Promise<RemoteResult<DispatchView>>
+    continueTicket: (input: ContinueTicketInput) => Promise<RemoteResult<ContinueTicketResult>>
     dispatchList: (input: DispatchListInput) => Promise<RemoteResult<{ readonly dispatches: readonly DispatchView[] }>>
     dispatchCancel: (input: DispatchCancelInput) => Promise<RemoteResult<{ readonly cancelled: boolean; readonly dispatch: DispatchView }>>
     ticketDetail: (input: TicketDetailInput) => Promise<RemoteResult<TicketDetailView>>
@@ -774,6 +777,30 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           typeSymbol: 'DispatchView',
           create: () => z.any(),
           decode: value => value as DispatchView,
+        },
+      },
+      'dshManager/continueTicket': {
+        service: 'dshManagerExecutor',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'rawInput',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'ContinueTicketInput',
+            create: () => continueTicketInputSchema,
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'ContinueTicketInput',
+            create: () => continueTicketInputSchema,
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'ContinueTicketResult',
+          create: () => z.any(),
+          decode: value => value as ContinueTicketResult,
         },
       },
       'dshManager/dispatchList': {

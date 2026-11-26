@@ -6,7 +6,7 @@ import type { BoardFilter } from '../board/wire-types.ts'
 import type { CandidateView, EvalRecordView } from '../evals/wire-types.ts'
 import type { ConnectionView } from '../connections/wire-types.ts'
 import type { ProjectRef } from '../mappings/wire-types.ts'
-import type { FileDiffView, TicketChangeDiffInput, TicketDetailView, WorktreeInspectionView } from '../dispatch/wire-types.ts'
+import type { ContinueTicketResult, FileDiffView, TicketChangeDiffInput, TicketDetailView, WorktreeInspectionView } from '../dispatch/wire-types.ts'
 import type { FlowTimelineView } from '../flow/flow-core.ts'
 import type { AttentionAnswerInput, AttentionView } from '../attention/wire-types.ts'
 
@@ -76,6 +76,10 @@ export interface BoardDependencies {
   readonly dispatchTicket?: (ticketId: string) => Promise<boolean>
   /** Cancel an active dispatch on operator request. */
   readonly cancelDispatch?: (dispatchId: string) => Promise<boolean>
+  /** Jump to one Session in the host workspace, when the host exposes it. */
+  readonly openSession?: (sessionId: string) => void
+  /** Continue one ticket with a new instruction (deliver, queue, or resume). */
+  readonly continueTicket?: (input: { readonly ticketId: string; readonly text: string; readonly newSession?: boolean }) => Promise<ContinueTicketResult | undefined>
   /** Inspect a ticket's mapped git worktree (`status` + `diff`). */
   readonly readTicketWorktree?: (ticketId: string) => Promise<WorktreeInspectionView | undefined>
   /** Remove a ticket's mapped git worktree directory. */
@@ -105,6 +109,8 @@ export interface BoardInjected {
   readonly onEvalRequeue: (evalIds: readonly string[]) => Promise<number>
   /** Submit one manual entry; resolves `false` when the host rejected it. */
   readonly onManualInput: (input: { title: string; description: string; projectId?: string }) => Promise<boolean>
+  /** Append one instruction to a ticket, resuming its session when it had ended. */
+  readonly onContinueTicket: (input: { readonly ticketId: string; readonly text: string; readonly newSession?: boolean }) => Promise<ContinueTicketResult | undefined>
   /** Read one ticket's whole detail; `undefined` marks a failed read. */
   readonly onTicketDetail: (ticketId: string) => Promise<TicketDetailView | undefined>
   /** Read one ticket's pipeline walk; `undefined` when the ticket walks no pipeline. */
@@ -115,6 +121,8 @@ export interface BoardInjected {
   readonly onDispatchTicket: (ticketId: string) => Promise<boolean>
   /** Cancel a queued or running dispatch; resolves `true` when cancelled. */
   readonly onDispatchCancel: (dispatchId: string) => Promise<boolean>
+  /** Open the ticket's Executor Session in the host workspace. */
+  readonly onOpenSession: (sessionId: string) => void
   /** Inspect a ticket's git worktree status and diff; `undefined` when unmapped or failed. */
   readonly onTicketWorktree: (ticketId: string) => Promise<WorktreeInspectionView | undefined>
   /** Remove a ticket's git worktree directory; resolves `true` when removed. */
@@ -138,7 +146,7 @@ export interface BoardInjected {
  * @param deps - Remote reads, invalidation subscription, and poll cadence.
  * @returns the observable board, the filter/accept/manual actions, and the retry callback.
  */
-export function createBoardSource(deps: BoardDependencies): Pick<BoardInjected, 'hooks' | 'onFilter' | 'onAcceptCandidate' | 'onEvalRequeue' | 'onManualInput' | 'onTicketDetail' | 'onFlowTimeline' | 'onTicketChangeDiff' | 'onDispatchTicket' | 'onDispatchCancel' | 'onTicketWorktree' | 'onTicketWorktreeRemove' | 'onSetTicketDependencies' | 'onCloseTicket' | 'onAnswerAttention' | 'onBoardRetry'> {
+export function createBoardSource(deps: BoardDependencies): Pick<BoardInjected, 'hooks' | 'onFilter' | 'onAcceptCandidate' | 'onEvalRequeue' | 'onManualInput' | 'onTicketDetail' | 'onFlowTimeline' | 'onTicketChangeDiff' | 'onDispatchTicket' | 'onDispatchCancel' | 'onContinueTicket' | 'onOpenSession' | 'onTicketWorktree' | 'onTicketWorktreeRemove' | 'onSetTicketDependencies' | 'onCloseTicket' | 'onAnswerAttention' | 'onBoardRetry'> {
   let snapshot: BoardSnapshot = { status: 'loading' }
   let filter: BoardFilter = loadFilter()
   const listeners = new Set<() => void>()
@@ -318,6 +326,19 @@ export function createBoardSource(deps: BoardDependencies): Pick<BoardInjected, 
         return queued
       } catch {
         return false
+      }
+    },
+    onOpenSession(sessionId) {
+      deps.openSession?.(sessionId)
+    },
+    async onContinueTicket(input: { readonly ticketId: string; readonly text: string; readonly newSession?: boolean }) {
+      if (deps.continueTicket === undefined) return undefined
+      try {
+        const result = await deps.continueTicket(input)
+        if (result?.ok === true) await refresh()
+        return result
+      } catch {
+        return undefined
       }
     },
     async onDispatchCancel(dispatchId) {
