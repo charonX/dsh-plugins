@@ -12,6 +12,7 @@ import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 import { appendTimelineEvent, type TimelineStorePort } from './timeline/timeline-core.ts'
+import { summarizeActivity } from './timeline/timeline-core.ts'
 import { createDomainTimelineStore } from './timeline/storage-store.ts'
 import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView, type TicketWorktreePlan } from './board-domain.ts'
 import { boardFilterSchema, closeTicketInputSchema, ticketDependenciesInputSchema, type BoardFilter, type CloseTicketInput, type TicketDependenciesInput } from './board/wire-types.ts'
@@ -591,6 +592,7 @@ export class DshManagerBoard extends TypertRemoteService {
   ): TicketView {
     const fanIn = fanInViewOf(record, batch, this.ctx.dshManagerSources.threadTriggers(record.threadId))
     const waitingOn = unresolvedDependencies(allRecords, record)
+    const lastActivity = this.lastActivityOf(record.id)
     const live = record.flow === undefined ? undefined : this.resolveLivePipeline(record.flow.pipelineId)
     const flow = record.flow === undefined ? undefined : {
       ...record.flow,
@@ -627,9 +629,17 @@ export class DshManagerBoard extends TypertRemoteService {
       ...(waitingOn.length === 0 ? {} : { waitingOn }),
       ...(record.supersededBy === undefined ? {} : { supersededBy: record.supersededBy }),
       ...(fanIn.length > 0 ? { fanIn } : {}),
+      ...(lastActivity === undefined ? {} : { lastActivity }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     }
+  }
+
+  /** The newest non-tool timeline event, compacted for a card one-liner. */
+  private lastActivityOf(ticketId: string): TicketView['lastActivity'] {
+    const timeline = this.timelineStore().getTimeline(ticketId as never)
+    if (timeline === undefined) return undefined
+    return summarizeActivity(timeline.events)
   }
 
   /** Keep only the tickets matching the combined filter. */

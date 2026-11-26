@@ -8,8 +8,10 @@ import {
   eventOfReport,
   recordAttentionTimeline,
   recordDispatchTimeline,
+  summarizeActivity,
   timelineEventsOf,
   type TicketTimelineRecord,
+  type TimelineEvent,
   type TimelineStorePort,
 } from '../../src/timeline/timeline-core.ts'
 
@@ -224,5 +226,25 @@ describe('backfill of pre-ledger tickets', () => {
 
   test('a ticket with no history folds to an empty ledger', () => {
     expect(backfillTimeline('ticket-x', [], [], 1).events).toEqual([])
+  })
+
+  test('activity summary prefers a human-facing event over tool traffic', () => {
+    const events: TimelineEvent[] = [
+      { id: 'e1', seq: 0, kind: 'assistant', author: 'executor', body: '改完了', at: 100 },
+      { id: 'e2', seq: 1, kind: 'tool', author: 'executor', body: 'Read src/index.ts', at: 200 },
+    ]
+    expect(summarizeActivity(events)).toEqual({ at: 100, kind: 'assistant', author: 'executor', text: '改完了' })
+  })
+
+  test('activity summary falls back to the newest event and truncates long text', () => {
+    const long = '很'.repeat(120)
+    const events: TimelineEvent[] = [
+      { id: 'e2', seq: 1, kind: 'tool', author: 'executor', body: long, at: 200 },
+    ]
+    const summary = summarizeActivity(events)
+    expect(summary?.kind).toBe('tool')
+    expect(summary?.text?.endsWith('…')).toBe(true)
+    expect(summary!.text!.length).toBe(72)
+    expect(summarizeActivity([])).toBeUndefined()
   })
 })

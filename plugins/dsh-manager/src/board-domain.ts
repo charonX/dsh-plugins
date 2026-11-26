@@ -227,6 +227,13 @@ export interface TicketView {
     readonly occurredAt?: number
     readonly collectedAt: number
   }[]
+  /** The most recent meaningful timeline event, for the board card summary. */
+  readonly lastActivity?: {
+    readonly at: number
+    readonly kind: 'instruction' | 'assistant' | 'tool' | 'report' | 'attention' | 'artifact' | 'system'
+    readonly author: 'user' | 'executor' | 'steward' | 'system'
+    readonly text?: string
+  }
   readonly createdAt: number
   readonly updatedAt: number
 }
