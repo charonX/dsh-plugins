@@ -292,6 +292,18 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
         await page.getByRole('button', { name: /^(Edit|编辑)$/ }).first().click()
         await page.waitForTimeout(300)
         await page.screenshot({ path: `${evidenceDir}/team-flow-editor-light.png`, fullPage: false })
+        const stepTabs = page.locator('#flow-step-panel').locator('xpath=preceding-sibling::*[@role="tablist"][1]').getByRole('tab')
+        if (await stepTabs.count() > 1) {
+          await stepTabs.nth(1).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-step2.png`, fullPage: false })
+          await page.getByRole('button', { name: /插入步骤|Insert step/ }).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-inserted.png`, fullPage: false })
+          await page.getByRole('button', { name: /插入步骤|Insert step/ }).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-inserted2.png`, fullPage: false })
+        }
         await page.keyboard.press('Escape')
         await page.waitForTimeout(200)
       }
