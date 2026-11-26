@@ -45,6 +45,7 @@ async function mountManager(extras: Record<string, ReturnType<typeof vi.fn>> = {
   const runtime = await SlotTestRuntime.create()
   const locale = new LocaleRuntime(runtime.ctx)
   runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
   runtime.ctx.slots.installLocale(locale)
   await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
   runtime.remote.provideNamespaces({
@@ -64,7 +65,7 @@ async function mountManager(extras: Record<string, ReturnType<typeof vi.fn>> = {
       ...extras,
     },
   })
-  await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+  await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
   const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
   return { runtime, view }
 }

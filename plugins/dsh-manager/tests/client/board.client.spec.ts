@@ -61,6 +61,7 @@ async function mountBoard(
     attentionList?: ReturnType<typeof vi.fn>
     answerAttention?: ReturnType<typeof vi.fn>
     notificationList?: ReturnType<typeof vi.fn>
+    uiWorkspace?: { openSession: (sessionId: string) => void }
   } = {},
 ): Promise<{ runtime: SlotTestRuntime; view: ReturnType<SlotTestRuntime['renderSlot']> }> {
   const runtime = await SlotTestRuntime.create()
@@ -69,6 +70,7 @@ async function mountBoard(
   // The locale plugin's product face: the renderer needs it for `t` seats.
   runtime.ctx.slots.installLocale(locale)
   await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
+  runtime.ctx.provide('uiWorkspace', extras.uiWorkspace ?? { openSession: () => {} })
   runtime.remote.provideNamespaces({
     dshManager: {
       summary,
@@ -93,7 +95,7 @@ async function mountBoard(
       notificationList: extras.notificationList ?? vi.fn().mockResolvedValue({ ok: true, value: { notifications: [] } }),
     },
   })
-  await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+  await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
   const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
   return { runtime, view }
 }
@@ -609,6 +611,65 @@ describe('board page', () => {
       expect(view.container.textContent).toContain('Todo')
     })
     await runtime.dispose()
+  })
+
+  test('the open-session action reveals the executor session and closes the drawer', async () => {
+    const openSession = vi.fn()
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'running', threadId: 'thr-1' }),
+        dispatches: [
+          { id: 'dispatch-1', ticketId: 'ticket-1', state: 'running', sessionId: 'sess-1', reports: [], createdAt: 1, updatedAt: 2 },
+        ],
+        deliverables: [], changes: [], followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ running: 1 }) }),
+      vi.fn().mockResolvedValue({ ok: true, value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'running' })] } }),
+      { ticketDetail, uiWorkspace: { openSession } },
+    )
+    try {
+      await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+      fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+      await vi.waitFor(() => { expect(dialogEl()).not.toBeNull() })
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Fix the login flow') })
+      fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Open session' }))
+      await vi.waitFor(() => { expect(openSession).toHaveBeenCalledWith('sess-1') })
+      // Navigation replaces the main view, so the drawer must not stay on top of it.
+      await vi.waitFor(() => { expect(document.querySelector('[role="dialog"]')).toBeNull() })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test('a session the sidebar cannot reveal keeps the drawer open and explains why', async () => {
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          { id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', sessionId: 'sess-missing', reports: [], createdAt: 1, updatedAt: 2 },
+        ],
+        deliverables: [], changes: [], followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({ ok: true, value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] } }),
+      { ticketDetail, uiWorkspace: { openSession: () => { throw new Error('unknown session') } } },
+    )
+    try {
+      await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+      fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+      await vi.waitFor(() => { expect(dialogEl()).not.toBeNull() })
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Fix the login flow') })
+      fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Open session' }))
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('not in the sidebar list yet') })
+    } finally {
+      await runtime.dispose()
+    }
   })
 
   test('a ticket card opens a detail panel with dispatches, deliverables, and a resolvable diff', async () => {

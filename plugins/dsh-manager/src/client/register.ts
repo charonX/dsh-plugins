@@ -129,14 +129,16 @@ export function registerUi(ctx: ClientContext): void {
     },
     openSession: (sessionId: string) => {
       try {
-        const host = (ctx as unknown as {
-          uiWorkspace?: { openSession?: (id: string) => void }
-          root?: { get?: (key: string) => { openSession?: (id: string) => void } | undefined }
-        })
-        const target = host.uiWorkspace ?? host.root?.get?.('uiWorkspace')
-        if (target !== undefined && typeof target.openSession === 'function') target.openSession(sessionId)
-      } catch {
-        // Navigation is best-effort; the workbench stays usable without it.
+        const target = (ctx as unknown as { uiWorkspace?: { openSession?: (id: string) => void } }).uiWorkspace
+        if (target === undefined || typeof target.openSession !== 'function') {
+          console.warn('dsh-manager: uiWorkspace.openSession is unavailable; cannot reveal the executor session')
+          return false
+        }
+        target.openSession(sessionId)
+        return true
+      } catch (error) {
+        console.warn('dsh-manager: opening the executor session failed:', error)
+        return false
       }
     },
     cancelDispatch: async dispatchId => {
