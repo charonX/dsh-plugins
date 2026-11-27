@@ -493,7 +493,7 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
     }
     const [version, initCatalog] = await Promise.all([
       probeAgentVersion(subprocess, executablePath),
-      this.probeClaudeCatalog(subprocess, executablePath, signal),
+      this.probeClaudeCatalog(subprocess, executablePath, homedir(), signal),
     ])
     const models = normalizeModelList([
       ...this.configuredModels,
@@ -513,9 +513,29 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
     }
   }
 
+  async probeCommands(
+    subprocess: SubprocessRuntime,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch {
+      return []
+    }
+    const targetCwd = cwd.trim() === '' ? homedir() : cwd
+    const initCatalog = await this.probeClaudeCatalog(subprocess, executablePath, targetCwd, signal).catch(() => ({
+      commands: [],
+      models: [],
+    }))
+    return initCatalog.commands
+  }
+
   private async probeClaudeCatalog(
     subprocess: SubprocessRuntime,
     executablePath: string,
+    cwd: string = homedir(),
     signal?: AbortSignal,
   ): Promise<{ readonly commands: readonly AgentCommandOption[]; readonly models: readonly AgentModelOption[] }> {
     const controller = new AbortController()
@@ -531,7 +551,7 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
           '--output-format', 'stream-json',
           '--input-format', 'stream-json',
         ],
-        cwd: homedir(),
+        cwd,
         stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: 16_384 } },
         graceMs: 1_000,
         signal: controller.signal,

@@ -4,6 +4,7 @@
  * providers and AgentPresets, attaches the `agent/pre-step` external turn
  * driver, and shares the same adapters with `ctx.subagents`.
  */
+import { existsSync } from 'node:fs'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
@@ -25,6 +26,7 @@ import {
   type SelectSessionPermissionInput,
   type SessionAgentId,
   type SessionAgentState,
+  type SessionCommandsResult,
   type WorkspaceGitStatus,
 } from './types.ts'
 import { createAdapterMap, type ExternalAgentAdapter, type ExternalPermissionPolicy } from './adapters/index.ts'
@@ -306,19 +308,7 @@ export class ExternalAgentsService extends TypertRemoteService {
     }
   }
 
-  @Remote('getCatalog')
-  async getCatalog(): Promise<{ readonly agents: readonly AgentDescriptor[] }> {
-    await this.catalog.refreshAll().catch(() => {})
-    return { agents: this.catalog.descriptors() }
-  }
-
-  @Remote('getSessionState')
-  async getSessionState(sessionId: string): Promise<SessionAgentState> {
-    return this.readState(sessionId)
-  }
-
-  @Remote('getWorkspaceStatus')
-  async getWorkspaceStatus(sessionId: string): Promise<WorkspaceGitStatus> {
+  private async resolveSessionCwd(sessionId: string): Promise<string | undefined> {
     const branded = brandString<SessionId>(sessionId)
     const live = this.agentsSvc.get(branded)
     let cwd = live?.session.header.cwd
@@ -338,7 +328,40 @@ export class ExternalAgentsService extends TypertRemoteService {
       const loaded = await sessionsSvc?.get?.(branded).catch(() => undefined)
       cwd = loaded?.header?.cwd
     }
-    if (cwd === undefined || cwd === '') {
+    return cwd === undefined || cwd === '' ? undefined : cwd
+  }
+
+  @Remote('getCatalog')
+  async getCatalog(): Promise<{ readonly agents: readonly AgentDescriptor[] }> {
+    await this.catalog.refreshAll().catch(() => {})
+    return { agents: this.catalog.descriptors() }
+  }
+
+  @Remote('getSessionState')
+  async getSessionState(sessionId: string): Promise<SessionAgentState> {
+    return this.readState(sessionId)
+  }
+
+  @Remote('getSessionCommands')
+  async getSessionCommands(sessionId: string): Promise<SessionCommandsResult> {
+    const agentId = this.readSessionAgentId(sessionId)
+    if (agentId === 'native') {
+      return { agentId, commands: [] }
+    }
+    const cwd = await this.resolveSessionCwd(sessionId)
+    if (cwd === undefined || !existsSync(cwd)) {
+      const cached = this.catalog.getProbe(agentId)
+      const probe = cached.available ? cached : await this.catalog.refreshOne(agentId).catch(() => cached)
+      return { agentId, commands: probe.commands ?? [] }
+    }
+    const commands = await this.catalog.getCommandsForCwd(agentId, cwd)
+    return { agentId, commands }
+  }
+
+  @Remote('getWorkspaceStatus')
+  async getWorkspaceStatus(sessionId: string): Promise<WorkspaceGitStatus> {
+    const cwd = await this.resolveSessionCwd(sessionId)
+    if (cwd === undefined) {
       return { cwd: '', isGitRepo: false, isWorktree: false, dirtyCount: 0, worktrees: [] }
     }
     const subprocess = this.ctx.get('subprocess') as SubprocessRuntime | undefined

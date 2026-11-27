@@ -537,7 +537,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
       commands: [],
     }
     try {
-      discovered = await this.probeAcpCatalog(subprocess, executablePath, signal)
+      discovered = await this.probeAcpCatalog(subprocess, executablePath, homedir(), signal)
     } catch {
       // Fall back cleanly to defaults if ACP catalog query cannot connect offline.
     }
@@ -559,9 +559,29 @@ export class AgyAdapter implements ExternalAgentAdapter {
     }
   }
 
+  async probeCommands(
+    subprocess: SubprocessRuntime,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch {
+      return []
+    }
+    const targetCwd = cwd.trim() === '' ? homedir() : cwd
+    const discovered = await this.probeAcpCatalog(subprocess, executablePath, targetCwd, signal).catch(() => ({
+      models: [],
+      commands: [],
+    }))
+    return discovered.commands
+  }
+
   private async probeAcpCatalog(
     subprocess: SubprocessRuntime,
     executablePath: string,
+    cwd: string = homedir(),
     signal?: AbortSignal,
   ): Promise<{
     readonly models: readonly AgentModelOption[]
@@ -570,7 +590,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
   }> {
     const child = subprocess.spawn({
       argv: [executablePath, 'acp', '--stdio'],
-      cwd: homedir(),
+      cwd,
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: 16_384 } },
       graceMs: 1_500,
       ...(signal === undefined ? {} : { signal }),
@@ -606,7 +626,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
             clientCapabilities: {},
           })
           return await conn.agent.request(methods.agent.session.new, {
-            cwd: homedir(),
+            cwd,
             mcpServers: [],
           })
         })(),

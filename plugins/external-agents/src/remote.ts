@@ -10,6 +10,7 @@ import type {
   SelectSessionAgentInput,
   SelectSessionPermissionInput,
   SessionAgentState,
+  SessionCommandsResult,
   WorkspaceGitStatus,
 } from './types.ts'
 
@@ -29,6 +30,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespaceExternalAgents {
     getCatalog: () => Promise<RemoteResult<{ readonly agents: readonly AgentDescriptor[] }>>
     getSessionState: (sessionId: string) => Promise<RemoteResult<SessionAgentState>>
+    getSessionCommands: (sessionId: string) => Promise<RemoteResult<SessionCommandsResult>>
     getWorkspaceStatus: (sessionId: string) => Promise<RemoteResult<WorkspaceGitStatus>>
     selectSessionAgent: (input: SelectSessionAgentInput) => Promise<RemoteResult<SessionAgentState>>
     selectSessionPermission: (input: SelectSessionPermissionInput) => Promise<RemoteResult<SessionAgentState>>
@@ -76,6 +78,30 @@ export const TYPERT_REMOTE = createTypertRemoteInfo(
           typeSymbol: 'SessionAgentState',
           create: () => z.any(),
           decode: value => value as SessionAgentState,
+        },
+      },
+      'externalAgents/getSessionCommands': {
+        service: 'externalAgents',
+        invocation: { kind: 'direct' },
+        parameters: [{
+          name: 'sessionId',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'string',
+            create: () => z.string().min(1),
+          },
+          strictCodec: {
+            mode: 'strict',
+            typeSymbol: 'string',
+            create: () => z.string().min(1),
+          },
+        }],
+        result: {
+          mode: 'strict',
+          typeSymbol: 'SessionCommandsResult',
+          create: () => z.any(),
+          decode: value => value as SessionCommandsResult,
         },
       },
       'externalAgents/getWorkspaceStatus': {

@@ -19,6 +19,7 @@ import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import {
   EXTERNAL_AGENT_IDS,
   providerIdForAgent,
+  type AgentCommandOption,
   type AgentDescriptor,
   type ExternalAgentId,
 } from './types.ts'
@@ -89,7 +90,11 @@ class ExternalCatalogAdapter extends LlmAdapter {
 }
 
 export class ExternalAgentCatalog {
+  private static readonly COMMAND_CACHE_TTL_MS = 15_000
+
   private readonly probes = new Map<ExternalAgentId, ExternalProbeResult>()
+  private readonly cwdCommands = new Map<string, { readonly commands: readonly AgentCommandOption[]; readonly fetchedAt: number }>()
+  private readonly inFlightCwdCommands = new Map<string, Promise<readonly AgentCommandOption[]>>()
   private readonly listeners = new Set<(id?: ExternalAgentId) => void>()
   private inFlightRefresh: Promise<void> | undefined
   private lastRefreshedAt = 0
@@ -161,6 +166,53 @@ export class ExternalAgentCatalog {
     this.probes.set(id, result)
     this.notify(id)
     return result
+  }
+
+  /**
+   * Probe and cache slash commands for `(id, cwd)` so workspace-local skills
+   * (e.g. `.claude/skills`, `.agents/skills`) are discovered in the session's
+   * actual directory instead of `homedir()`.
+   */
+  async getCommandsForCwd(
+    id: ExternalAgentId,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    const targetCwd = cwd.trim()
+    if (targetCwd === '') return this.getProbe(id).commands ?? []
+    const adapter = this.adapters.get(id)
+    if (adapter?.probeCommands === undefined) {
+      return this.getProbe(id).commands ?? []
+    }
+    const cacheKey = `${id}\0${targetCwd}`
+    const cached = this.cwdCommands.get(cacheKey)
+    if (cached !== undefined && Date.now() - cached.fetchedAt < ExternalAgentCatalog.COMMAND_CACHE_TTL_MS) {
+      return cached.commands
+    }
+    const existing = this.inFlightCwdCommands.get(cacheKey)
+    if (existing !== undefined) return existing
+    const subprocess = this.readSubprocess()
+    if (subprocess === undefined) {
+      return this.getProbe(id).commands ?? []
+    }
+    const probeCommands = adapter.probeCommands.bind(adapter)
+    const run = probeCommands(subprocess, targetCwd, signal)
+      .then((commands) => {
+        const globalCommands = this.getProbe(id).commands ?? []
+        if (commands.length === 0 && globalCommands.length > 0) {
+          return globalCommands
+        }
+        this.cwdCommands.set(cacheKey, { commands, fetchedAt: Date.now() })
+        return commands
+      })
+      .catch(() => this.getProbe(id).commands ?? [])
+      .finally(() => {
+        if (this.inFlightCwdCommands.get(cacheKey) === run) {
+          this.inFlightCwdCommands.delete(cacheKey)
+        }
+      })
+    this.inFlightCwdCommands.set(cacheKey, run)
+    return run
   }
 
   descriptors(): readonly AgentDescriptor[] {
