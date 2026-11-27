@@ -148,6 +148,13 @@ export class DshManagerExecutor extends TypertRemoteService {
   private config: ExecutorConfig
   private pumping = false
   private disposed = false
+
+  /** True once service teardown or its Cordis fiber unloading/disposal has begun. */
+  private isDisposing(): boolean {
+    const fiber = (this.ctx as unknown as { fiber?: { state?: number; uid?: number | null } }).fiber
+    // Cordis FiberState: DISPOSED = 4, UNLOADING = 5 (const enum, not exported at runtime).
+    return this.disposed || fiber?.uid === null || fiber?.state === 4 || fiber?.state === 5
+  }
   private readonly activeRuns = new Set<Promise<void>>()
   private ticker?: ReturnType<typeof setInterval>
   /** The live executor agents by dispatch id; answer delivery follows up here. */
@@ -971,7 +978,7 @@ export class DshManagerExecutor extends TypertRemoteService {
    * started executor runs detached, so the pump never blocks on a turn.
    */
   async pump(): Promise<void> {
-    if (this.pumping || this.disposed) return
+    if (this.pumping || this.isDisposing()) return
     this.pumping = true
     try {
       const store = this.ctx.dshManagerBoard.dispatchStore()
@@ -994,7 +1001,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       const queued = records.filter(record => record.state === 'queued')
         .sort((left, right) => left.createdAt - right.createdAt)
       for (const next of queued) {
-        if (slots <= 0 || this.disposed) break
+        if (slots <= 0 || this.isDisposing()) break
         const targetTicket = byTicket.get(next.ticketId)
         if (targetTicket !== undefined && unresolvedDependencies(tickets, targetTicket).length > 0) continue
         // A resumed turn reuses the predecessor's session; never start it while
@@ -1006,10 +1013,10 @@ export class DshManagerExecutor extends TypertRemoteService {
         const sessionId = (next.sessionId ?? `dsh-manager-exec-${next.id}`) as SessionId
         if (records.some(record => record.id !== next.id && record.state === 'running' && record.sessionId === sessionId)) continue
         const started = await startDispatch(store, next.id, sessionId, Date.now())
-        if (started === undefined || this.disposed) continue
+        if (started === undefined || this.isDisposing()) continue
         slots--
         const runPromise = this.runExecutor(started).catch(error => {
-          if (!this.disposed) this.ctx.logger?.error(error)
+          if (!this.isDisposing()) this.ctx.logger?.error(error)
         }).finally(() => {
           this.activeRuns.delete(runPromise)
         })
@@ -1178,7 +1185,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     try {
       await this.awaitAndSettleBuiltinTurn(record, agent, executorSessionId)
     } catch (error) {
-      this.ctx.logger?.error(error)
+      if (!this.isDisposing()) this.ctx.logger?.error(error)
     } finally {
       if (timer !== undefined) clearTimeout(timer)
       controller.signal.removeEventListener('abort', onCancel)
@@ -1201,7 +1208,7 @@ export class DshManagerExecutor extends TypertRemoteService {
   ): Promise<void> {
     const store = this.ctx.dshManagerBoard.dispatchStore()
     await agent.whenIdle()
-    if (this.disposed) return
+    if (this.isDisposing()) return
     const current = store.getDispatch(record.id)
     if (current === undefined || current.state === 'ended') {
       this.cleanupDispatchLiveState(record.id, true)
@@ -2050,7 +2057,12 @@ export class DshManagerExecutor extends TypertRemoteService {
       })
     this.liveAgents.set(record.id, handle.agent)
     this.liveHandles.set(record.id, handle)
-    this.ctx.effect(() => async () => { await handle.dispose() }, `dsh-manager: dispose executor session ${sessionId}`)
+    this.ctx.effect(() => async () => {
+      // Mark disposed before handle.dispose() aborts the active turn: Cordis
+      // disposes effects LIFO, so session teardown runs before init's disposer.
+      this.disposed = true
+      await handle.dispose()
+    }, `dsh-manager: dispose executor session ${sessionId}`)
     // Sandbox mode and approval policy are durable session state: headless
     // background executors never block on native `ctx.approval` prompts
     // (external writes still gate through `tools/pre-execute` Attention).
