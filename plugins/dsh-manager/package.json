@@ -1,6 +1,6 @@
 {
   "name": "@charonx/dsh-manager",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "description": "Dsh Manager: external Trigger intake and a Steward ticket board for DeepSeek Harness",

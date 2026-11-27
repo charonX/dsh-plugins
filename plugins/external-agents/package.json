@@ -1,6 +1,6 @@
 {
   "name": "@charonx/dsh-external-agents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "description": "Session-level third-party coding agent runtime for DeepSeek Harness (agy via ACP, Claude Code, Pi Agent, Codex) with composer switching, session lock, model selection, and Subagent sharing.",
