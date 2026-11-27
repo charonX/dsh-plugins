@@ -766,6 +766,14 @@ export class DshManagerSteward extends TypertRemoteService {
     }
     if (pick === undefined || pick.none === true || pick.flowId === undefined) {
       // Single-step generic fallback when no configured flow matches.
+      const ticket = this.ctx.dshManagerBoard.ticketRecord(ticketId)
+      const waitingOn = ticket === undefined
+        ? []
+        : unresolvedDependencies(this.ctx.dshManagerBoard.ticketRecords(), ticket)
+      if (waitingOn.length > 0) {
+        this.note('eval-decision', `waiting (${waitingOn.length} dep) · single-step fallback · ${ticketId}`, routePromptId)
+        return
+      }
       this.note('eval-decision', `route → single-step fallback · ${ticketId}`, routePromptId)
       await this.ctx.dshManagerExecutor.dispatchTicket({ ticketId })
       return
