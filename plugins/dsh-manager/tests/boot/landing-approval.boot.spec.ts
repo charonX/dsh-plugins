@@ -1,6 +1,6 @@
 /**
  * Boot-tier integration spec for Slice 3 & Slice 4:
- * - Executor prompt injects dynamically discovered `AGENTS.md` + git branch/remote context (zero static config).
+ * - Executor prompt carries a `Repo rules` pointer plus git branch/remote context, never the doc bodies (zero static config).
  * - `check_branch_rebase` executes immediately without approval.
  * - `local_merge_branch` is intercepted at `tools/pre-execute` as `'merge-mr'` Approval,
  *   does not mutate `main` until approved, and lands cleanly onto `main` after approval.
@@ -179,8 +179,10 @@ test('discovers AGENTS.md landing policy, allows non-destructive check_branch_re
       approvalId = pending!.id
     }, { timeout: 20_000 })
 
-    // Dynamically discovered AGENTS.md excerpt was injected into Executor prompt.
-    expect(adapter.seenPrompts[0]).toContain('Local repository merges directly into main.')
+    // Repo rules are pointed at, not inlined: the executor's own runtime loads AGENTS.md.
+    expect(adapter.seenPrompts[0]).toContain('Repo rules: read ')
+    expect(adapter.seenPrompts[0]).toContain('AGENTS.md')
+    expect(adapter.seenPrompts[0]).not.toContain('Local repository merges directly into main.')
     // `main` has NOT been mutated before human approval.
     expect(await git(repoDir, 'rev-parse', 'HEAD')).toBe(baseSha)
 
