@@ -63,10 +63,28 @@ describe('prompt-builder', () => {
     expect(out.text).toContain('Mounted skills: how.')
     expect(out.text).toContain('Required step skills')
     expect(out.text).toContain('Workspace mode: in-place')
-    expect(out.text).toContain('Inspect /tmp/knowledge strictly read-only')
+    expect(out.text).toContain('Work in /tmp/knowledge strictly read-only against tracked files.')
     expect(out.text).toContain('/tmp/scratch/t1/review-report.md')
     expect(out.text).toContain('submit_report')
     expect(out.record.sections.filter(s => s.locked).map(s => s.id)).toEqual(['scope', 'report', 'ask', 'approval', 'deliver'])
+  })
+
+  test('points at the align card instead of restating the mandate', () => {
+    const out = buildExecutorTurnPrompt({
+      turnId: 'executor',
+      ticket: sampleTicket,
+      cwd: '/tmp/knowledge',
+      skills: [],
+      readOnly: false,
+      scratchDir: '/tmp/scratch/t1',
+      alignCardPath: '/tmp/scratch/t1/align-card.md',
+      repoRulesPath: '/tmp/knowledge/AGENTS.md',
+      templateRevision: 3,
+    })
+
+    expect(out.text).toContain('Follow /tmp/scratch/t1/align-card.md in order')
+    expect(out.text).not.toContain('summarize docs')
+    expect(out.record.sections.map(s => s.id)).not.toContain('landing')
   })
 
   test('points at repo rules instead of inlining the doc body', () => {

@@ -152,7 +152,7 @@ function adaptiveTurn(connectionIds: { gitlab: string; jira: string }): (options
     }
     if (last.role !== 'user') return textResponse('done')
     if (/eval (eval-[0-9a-f-]+)/.test(tail)) return stewardAccept(options)
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('Ticket ticket-')) {
       executorTurns += 1
       return executorTurns === 1
         ? toolCallsResponse([{

@@ -100,7 +100,7 @@ class LandingAdapter extends LlmAdapter {
       for (const c of textResponse('Title')) yield c
       return
     }
-    if (last.role === 'user' && tail.includes('executor dispatched for ticket')) {
+    if (last.role === 'user' && tail.includes('Ticket ticket-')) {
       this.seenPrompts.push(tail)
       this.step = 1
       for (const c of toolCallsResponse([{ name: 'check_branch_rebase', args: { targetBranch: 'main' } }])) yield c

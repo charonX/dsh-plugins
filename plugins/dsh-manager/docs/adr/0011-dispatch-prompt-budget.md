@@ -1,4 +1,4 @@
-# ADR 0011：派工提示词设 8,000 字符硬预算，超限失败而非截断
+# ADR 0011：派工提示词是指针单——8,000 字符硬预算，超限失败而非截断
 
 - 状态：已采纳（2026-11-27）
 - 相关：ADR 0008（skill-driven flow IR and thin steward）、ADR 0007（prompt 模板分层，已被本决策取代的路径）
@@ -40,6 +40,26 @@
 
 改造后同类工单预算约 **3,300–3,800 字符**，降幅约 83%。
 
+### 第二轮：从「瘦身后的摘要」到「指针单」
+
+第一轮落地后实测一张冒烟票仍是 **3,774 字符**，其中可推导或低价值内容 1,213 字符（32%）。用户的判断很直接：
+"给他 align 文档，让他按顺序开发就行了"。据此追加三条决策：
+
+8. **对齐卡优先**：`<scratch>/align-card.md` 存在时，提示词不再复述 mandate，只留
+   `Follow <align-card> in order; the numbered gates below are the finish line.`；对齐卡本身就写着范围、
+   行为用例与切片顺序，复述一遍只是让两层内容有机会不一致。
+9. **删 landing 段**：工作区/交付事实是**派工前**的探测结果，执行器在自己 cwd 里跑一次命令就能拿到，
+   而且探测结论会随分支漂移；它留在提示词里只会变成过时的第二真相。
+10. **契约段压成一行**：`report` / `ask` / `approval` / `deliver` 仍是 locked 段（工具契约不能丢），
+    但每条从 2–3 句压到一行，例如 `submit_report: progress / waiting / blocked / failed / not-needed / ready.`。
+11. **handoff 只带人类发言**：原先把 origin session 里所有 `user/message` 都收进来，连 runtime-context
+    注入（system-reminder、`Time sampled`）和"已经重启"这类过程话都被带进提示词。现在按
+    `source.kind === 'user'` 过滤，只留最近 2 条、每条 160 字符，并删掉 `Origin discussion session:` 行。
+
+第二轮实测：同一张冒烟票 **3,774 → 1,200 字符量级**（boot 用例里的样例工单实测 1,180）。剩下的主要是
+AC 完成门禁与 worktree/repo-rules 指针——前者是唯一持久契约（`scratch/` 会被清理），后者执行器必须知道
+去哪写。
+
 ## 备选与否决
 
 - **恢复三级可视化 Prompt Studio 模板层**（ADR 0007 的实现）：已按 ADR 0008 收敛为极简拼装器，用户不需要
@@ -57,3 +77,5 @@
 - resume 场景下多轮叠加仍可能撞限，这是设计意图：应当拆票或精简 mandate，而不是把预算调大。
 - 存量工单需要迁移：新增 `dsh_manager_revise_ticket` 只管 `todo` 态，改写 title / scope / AC / scratchDir /
   worktree 计划，并落一条 `revised` 时间线事件。
+- 提示词不再是"任务说明书"，而是"指针 + 门禁"：出单方对齐的质量开始直接决定执行质量——对齐卡没写清楚的，
+  执行器不会在提示词里被补全。这是有意的取舍：宁可在对齐阶段花时间，也不要在派工提示词里维护第二份需求。

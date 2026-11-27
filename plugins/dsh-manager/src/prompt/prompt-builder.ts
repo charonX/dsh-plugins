@@ -5,7 +5,6 @@
  */
 import type { TicketRecord, TicketWorktreePlan } from '../board-domain.ts'
 import type { DispatchPromptRecord, DispatchPromptSectionRecord } from '../dispatch/dispatch-core.ts'
-import { formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from '../dispatch/landing-discovery.ts'
 import { formatSkillPromptLines, type DiscoveredSkill } from '../dispatch/workspace-skills.ts'
 import type { FlowDef, FlowStepDef } from '../flow/flow-ir.ts'
 
@@ -69,9 +68,13 @@ export interface ExecutorPromptInput {
   readonly scratchDir?: string
   readonly readOnly: boolean
   readonly worktree?: TicketWorktreePlan
-  readonly landingFacts?: ProjectLandingFacts
   /** Absolute path of the repo instruction file to point at (never its body). */
   readonly repoRulesPath?: string
+  /**
+   * Absolute path of the ticket's align card. When it exists the card carries the
+   * scope and the slices, so the prompt only points at it instead of restating them.
+   */
+  readonly alignCardPath?: string
   readonly handoffLines?: readonly string[]
   readonly upstreamLines?: readonly string[]
   readonly answeredLines?: readonly string[]
@@ -109,18 +112,14 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   }
 
   const isExternal = input.turnId === 'external-cli'
-  add('identity', [
-    isExternal
-      ? `Ticket ${input.ticket.id}: ${input.ticket.title}.`
-      : `You are the executor dispatched for ticket ${input.ticket.id}: ${input.ticket.title}.`,
-  ])
+  add('identity', [`Ticket ${input.ticket.id}: ${input.ticket.title}.`])
 
-  if (input.ticket.mandate !== undefined) {
-    add('mandate', [
-      isExternal
-        ? `Mandate scope: ${input.ticket.mandate.scope} (strength ${input.ticket.mandate.strength}).`
-        : `Your mandate covers ${input.ticket.mandate.scope} (strength ${input.ticket.mandate.strength}).`,
-    ])
+  if (input.alignCardPath !== undefined) {
+    // The align card already holds scope, behaviours and slices: restating the
+    // mandate in the prompt duplicates it and pushes the budget.
+    add('mandate', [`Follow ${input.alignCardPath} in order; the numbered gates below are the finish line.`])
+  } else if (input.ticket.mandate !== undefined) {
+    add('mandate', [`Scope: ${input.ticket.mandate.scope} (${input.ticket.mandate.strength}).`])
   }
 
   add('handoff', input.handoffLines ?? [])
@@ -156,42 +155,31 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
     add('repoRules', [`Repo rules: read ${input.repoRulesPath} before acting; they are not inlined in this prompt.`])
   }
 
-  if (input.landingFacts !== undefined) {
-    add('landing', formatLandingDiscoveryPromptLines(input.landingFacts))
-  }
-
   if (input.scratchDir !== undefined) {
     add('artifacts', [
-      `Task scratch directory: ${input.scratchDir} (keep intermediate artifacts here, never inside the repo).`,
-      `Read ${input.scratchDir}/align-card.md or design.md first when present.`,
+      `Scratch: ${input.scratchDir} (artifacts only, never inside the repo).`,
       input.readOnly
-        ? `Read-only step: do NOT modify repository files. Write findings to ${input.scratchDir}/review-report.md and test output to ${input.scratchDir}/test-report.log.`
-        : `If ${input.scratchDir}/review-report.md or test-report.log from an earlier rework exists, read it and address every open finding before reporting ready.`,
+        ? `Read-only: write findings to ${input.scratchDir}/review-report.md and ${input.scratchDir}/test-report.log.`
+        : `If an earlier review-report.md or test-report.log is there, address every open finding before ready.`,
     ])
   }
 
   // Locked deterministic boundary & tool contracts.
   const mapped = input.projectId !== undefined
   const scopeText = !mapped
-    ? 'This ticket has no mapped project: analyze read-only; do not write or modify any files.'
+    ? 'No mapped project: analyze read-only; do not write or modify files.'
     : input.readOnly
-      ? `This ticket is mapped to project ${input.projectId}. Inspect ${input.cwd} strictly read-only against tracked files.${input.scratchDir !== undefined ? ` Write review/verification artifacts only inside ${input.scratchDir}.` : ''}`
-      : `This ticket is mapped to project ${input.projectId}. Work in ${input.cwd}: edit files and run checks there; local edits and checks are pre-approved, external actions are not.`
+      ? `Work in ${input.cwd} strictly read-only against tracked files.`
+      : `Work in ${input.cwd}; local edits and checks are pre-approved, external actions are not.`
   add('scope', [scopeText], true)
 
   if (!isExternal) {
-    add('report', [
-      'Report through the submit_report tool: progress while working, waiting when input is pending, blocked when stuck, failed when the work cannot be done, not-needed when nothing is required, ready when the work is complete.',
-    ], true)
-    add('ask', [
-      'When the work needs the user\'s input, ask through the ask_user tool with a concrete question and end your turn; the answer arrives as your next message.',
-    ], true)
+    add('report', ['submit_report: progress / waiting / blocked / failed / not-needed / ready.'], true)
+    add('ask', ['ask_user: one concrete question, then end the turn.'], true)
     add('approval', [
-      'External writes & repository landing actions (post_mr_comment, set_jira_status, local_merge_branch, push_branch, create_mr_or_pr) wait for the user\'s approval before executing — use check_branch_rebase first when landing git changes.',
+      'External writes and landing (local_merge_branch, push_branch, create_mr_or_pr, …) need user approval; check_branch_rebase first when landing.',
     ], true)
-    add('deliver', [
-      'Declare final deliverable files with the present tool before reporting ready.',
-    ], true)
+    add('deliver', ['present: declare deliverables before ready.'], true)
   } else {
     add('headless', [
       'You are running in non-interactive headless CLI mode: do NOT call interactive ask_question or ask_user tools. Summarize results and any open decisions concisely in your final Markdown output.',

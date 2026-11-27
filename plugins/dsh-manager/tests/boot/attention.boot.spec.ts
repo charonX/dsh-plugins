@@ -112,7 +112,7 @@ function adaptiveTurn(): (options: GenerateOptions) => Promise<StreamChunk[]> {
     if (lastSerialized.includes('Generate the session title')) return textResponse('Session title')
     if (last.role !== 'user') return textResponse('standing by for the answer')
     if (/eval (eval-[0-9a-f-]+)/.test(tail)) return stewardAccept(options)
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('Ticket ticket-')) {
       return toolCallsResponse([{
         name: 'ask_user',
         args: { question: 'Which database should this target?', details: 'The ticket does not name one.' },

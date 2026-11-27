@@ -124,7 +124,7 @@ function adaptiveTurn(plan: PolicyPlan): (options: GenerateOptions) => Promise<S
         },
       ])
     }
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('Ticket ticket-')) {
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'the work is done' } }])
     }
     return textResponse('done')

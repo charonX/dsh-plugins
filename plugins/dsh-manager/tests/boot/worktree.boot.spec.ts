@@ -139,7 +139,7 @@ function adaptiveTurn(gates: { releaseFirst: Promise<void> }): (options: Generat
       return textResponse('done')
     }
     if (/eval (eval-[0-9a-f-]+)/.test(tail)) return stewardAccept(options)
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('Ticket ticket-')) {
       executorCalls += 1
       if (executorCalls === 1) await gates.releaseFirst
       const fileName = `finding-${executorCalls}.md`
