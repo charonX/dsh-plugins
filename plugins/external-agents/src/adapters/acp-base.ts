@@ -53,6 +53,8 @@ const DEFAULT_IDLE_TTL_MS = 60_000
 const DEFAULT_POST_BG_IDLE_TTL_MS = 15_000
 const DEFAULT_WAKEUP_GRACE_MS = 20_000
 const DEFAULT_WAKEUP_QUIESCENCE_MS = 2_500
+const DEFAULT_PROBE_TIMEOUT_MS = 5_000
+const DEFAULT_PROBE_COMMANDS_WAIT_MS = 600
 
 const BENIGN_ACP_UPDATE_KINDS = new Set([
   'agent_thought_chunk',
@@ -61,14 +63,54 @@ const BENIGN_ACP_UPDATE_KINDS = new Set([
   'tool_call_update',
   'usage_update',
   'state_update',
+  'session_info_update',
   'available_commands_update',
   'current_mode_update',
   'config_option_update',
   'plan',
 ])
 
-const READ_ONLY_TOOL_SEGMENT_RE = /(?:^|_)(?:get|list|read|search|query|summary|status|inspect|describe|fetch|show|find|view|check)(?:$|_)/iu
-const MUTATING_TOOL_SEGMENT_RE = /(?:^|_)(?:create|write|edit|update|upsert|delete|remove|drop|replace|set|put|post|patch|approve|reject|answer|run|exec|kill|cancel|push|merge)(?:$|_)/iu
+const READ_ONLY_TOOL_TOKENS = new Set([
+  'get',
+  'list',
+  'read',
+  'search',
+  'query',
+  'summary',
+  'status',
+  'inspect',
+  'describe',
+  'fetch',
+  'show',
+  'find',
+  'view',
+  'check',
+])
+
+const MUTATING_TOOL_TOKENS = new Set([
+  'create',
+  'write',
+  'edit',
+  'update',
+  'upsert',
+  'delete',
+  'remove',
+  'drop',
+  'replace',
+  'set',
+  'put',
+  'post',
+  'patch',
+  'approve',
+  'reject',
+  'answer',
+  'run',
+  'exec',
+  'kill',
+  'cancel',
+  'push',
+  'merge',
+])
 
 /**
  * Matches request-shape complaints ("invalid session params: ...", "unknown
@@ -109,6 +151,10 @@ export interface AcpSessionBaseOptions {
   readonly wakeupGraceMs?: number
   /** Quiet window after wakeup output chunks before marking a reactive wakeup turn complete. */
   readonly wakeupQuiescenceMs?: number
+  /** Timeout for `probeAcpCatalog` (`initialize` + `session/new`). */
+  readonly probeTimeoutMs?: number
+  /** Quiet window waiting for `available_commands_update` after `session/new` during probe. */
+  readonly probeCommandsWaitMs?: number
   /** ACP client name reported in `initialize` (defaults to `dsh-external-agents`). */
   readonly clientName?: string
 }
@@ -477,11 +523,22 @@ function extractAcpErrorText(error: unknown): { readonly code?: number; readonly
   if (typeof rec.message === 'string') parts.push(rec.message)
   if (typeof rec.data === 'string') {
     parts.push(rec.data)
-  } else if (rec.data !== undefined) {
-    try {
-      parts.push(JSON.stringify(rec.data))
-    } catch {
-      // Ignore unserializable error data.
+  } else if (rec.data !== undefined && rec.data !== null) {
+    if (typeof rec.data === 'object') {
+      const dataRec = rec.data as { readonly message?: unknown; readonly error?: unknown; readonly detail?: unknown; readonly reason?: unknown }
+      const nestedTexts = [dataRec.message, dataRec.error, dataRec.detail, dataRec.reason]
+        .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      if (nestedTexts.length > 0) {
+        parts.push(nestedTexts.join(' '))
+      } else {
+        try {
+          parts.push(JSON.stringify(rec.data))
+        } catch {
+          // Ignore unserializable error data.
+        }
+      }
+    } else {
+      parts.push(String(rec.data))
     }
   }
   if (rec.cause !== undefined) {
@@ -531,12 +588,14 @@ function stripServerPrefix(identifier: string, serverName: string): string | und
     `mcp__${serverName}__`,
     `${serverName}:`,
     `${serverName}/`,
+    `${serverName}-`,
     ...(normalizedName !== serverName
       ? [
           `mcp_${normalizedName}_`,
           `mcp__${normalizedName}__`,
           `${normalizedName}:`,
           `${normalizedName}/`,
+          `${normalizedName}-`,
         ]
       : []),
   ]
@@ -550,7 +609,9 @@ function stripServerPrefix(identifier: string, serverName: string): string | und
 
 function isLikelyReadOnlyToolName(bareToolName: string): boolean {
   if (bareToolName === '') return false
-  return READ_ONLY_TOOL_SEGMENT_RE.test(bareToolName) && !MUTATING_TOOL_SEGMENT_RE.test(bareToolName)
+  const tokens = bareToolName.toLowerCase().split(/[^a-z0-9]+/u).filter(Boolean)
+  if (tokens.length === 0) return false
+  return tokens.some(t => READ_ONLY_TOOL_TOKENS.has(t)) && !tokens.some(t => MUTATING_TOOL_TOKENS.has(t))
 }
 
 /**
@@ -618,6 +679,8 @@ export interface PooledAcpSession {
   readonly connection: ReturnType<ReturnType<typeof createAcpClientApp>['connect']>
   readonly supportsImage: boolean
   readonly advertisedModelIds: ReadonlySet<string>
+  initialModeId?: string
+  initialModelId?: string
   mcpServers: readonly ExternalMcpServerConfig[]
   externalSessionId: string
   permissionPolicy: ExternalPermissionPolicy
@@ -656,6 +719,8 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
   protected readonly postBgIdleTtlMs: number
   protected readonly wakeupGraceMs: number
   protected readonly wakeupQuiescenceMs: number
+  protected readonly probeTimeoutMs: number
+  protected readonly probeCommandsWaitMs: number
   protected readonly clientName: string
   private readonly pool = new Map<string, PooledAcpSession>()
   private readonly asyncListeners = new Map<string, Set<(event: ExternalAsyncEvent) => void>>()
@@ -665,10 +730,16 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
     this.postBgIdleTtlMs = options.postBgIdleTtlMs ?? DEFAULT_POST_BG_IDLE_TTL_MS
     this.wakeupGraceMs = options.wakeupGraceMs ?? DEFAULT_WAKEUP_GRACE_MS
     this.wakeupQuiescenceMs = options.wakeupQuiescenceMs ?? DEFAULT_WAKEUP_QUIESCENCE_MS
+    this.probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
+    this.probeCommandsWaitMs = options.probeCommandsWaitMs ?? DEFAULT_PROBE_COMMANDS_WAIT_MS
     this.clientName = options.clientName ?? 'dsh-external-agents'
   }
 
   abstract probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult>
+
+  protected resolveExecutable(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<string> {
+    return resolveAgentExecutable(subprocess, this.command, signal)
+  }
 
   protected buildAcpSpawnArgs(_request: ExternalTurnRequest, _mode: string): string[] {
     return ['acp']
@@ -772,7 +843,7 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
         || allowKind === 'think'
         || mcpMatch.isBridgedMcp
     }
-    if (mode === 'plan') {
+    if (mode === 'plan' || mode === 'ask') {
       return allowKind === 'read'
         || allowKind === 'search'
         || allowKind === 'think'
@@ -951,7 +1022,7 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
       NodeReadable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
     ))
     try {
-      const timeoutSignal = AbortSignal.timeout(5_000)
+      const timeoutSignal = AbortSignal.timeout(this.probeTimeoutMs)
       const created = await Promise.race([
         (async () => {
           await conn.agent.request(methods.agent.initialize, {
@@ -970,7 +1041,7 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
       if (commands.length === 0) {
         await Promise.race([
           commandsReady,
-          new Promise<void>(resolve => setTimeout(resolve, 600)),
+          new Promise<void>(resolve => setTimeout(resolve, this.probeCommandsWaitMs)),
         ])
       }
       const extractedModels = extractModelsFromSessionResponse(created)
@@ -1141,7 +1212,7 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
     mode: string,
     dshSessionId: string,
   ): Promise<PooledAcpSession> {
-    const executablePath = await resolveAgentExecutable(subprocess, this.command, request.signal)
+    const executablePath = await this.resolveExecutable(subprocess, request.signal)
     const args = this.buildAcpSpawnArgs(request, mode)
     const child = subprocess.spawn({
       argv: [executablePath, ...args],
@@ -1311,6 +1382,33 @@ export abstract class AcpSessionBase implements ExternalAgentAdapter {
 
       for (const model of extractModelsFromSessionResponse(sessionResponse)) {
         advertisedModelIds.add(model.id)
+      }
+      if (typeof sessionResponse === 'object' && sessionResponse !== null) {
+        const rec = sessionResponse as Record<string, unknown>
+        const modesObj = typeof rec.modes === 'object' && rec.modes !== null
+          ? rec.modes as Record<string, unknown>
+          : undefined
+        if (typeof modesObj?.currentModeId === 'string' && modesObj.currentModeId !== '') {
+          session.initialModeId = modesObj.currentModeId
+        }
+        const modelsObj = typeof rec.models === 'object' && rec.models !== null
+          ? rec.models as Record<string, unknown>
+          : undefined
+        if (typeof modelsObj?.currentModelId === 'string' && modelsObj.currentModelId !== '') {
+          session.initialModelId = modelsObj.currentModelId
+        }
+        if (Array.isArray(rec.configOptions)) {
+          for (const opt of rec.configOptions) {
+            if (typeof opt !== 'object' || opt === null) continue
+            const cfg = opt as Record<string, unknown>
+            if (cfg.id === 'mode' && typeof cfg.currentValue === 'string' && cfg.currentValue !== '') {
+              session.initialModeId ??= cfg.currentValue
+            }
+            if (cfg.id === 'model' && typeof cfg.currentValue === 'string' && cfg.currentValue !== '') {
+              session.initialModelId ??= cfg.currentValue
+            }
+          }
+        }
       }
       session.externalSessionId = activeSessionId
       return session

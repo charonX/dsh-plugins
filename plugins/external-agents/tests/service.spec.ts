@@ -69,13 +69,14 @@ describe('ExternalAgentsService', () => {
     expect(registeredPresetIds).toEqual([])
 
     const catalog = await svc.getCatalog()
-    expect(catalog.agents.map(a => a.id)).toEqual(['native', 'agy', 'claude-code', 'pi', 'codex'])
+    expect(catalog.agents.map(a => a.id)).toEqual(['native', 'agy', 'claude-code', 'pi', 'codex', 'cursor'])
 
     // Catalog exposes reasoning, permission modes, and quota snapshots for settings & dsh-manager flow nodes.
     const agyDesc = catalog.agents.find(a => a.id === 'agy')
     const claudeDesc = catalog.agents.find(a => a.id === 'claude-code')
     const piDesc = catalog.agents.find(a => a.id === 'pi')
     const codexDesc = catalog.agents.find(a => a.id === 'codex')
+    const cursorDesc = catalog.agents.find(a => a.id === 'cursor')
     expect(agyDesc?.label).toBe('Antigravity')
     expect(agyDesc?.permissionModes.map(m => m.id)).toContain('accept-edits')
     expect(claudeDesc?.permissionModes.map(m => m.id)).toContain('dontAsk')
@@ -83,6 +84,10 @@ describe('ExternalAgentsService', () => {
     expect(codexDesc?.reasoning?.efforts.map(e => e.id)).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
     expect(piDesc?.permissionModes).toEqual([])
     expect(piDesc?.quota?.status).toBe('unsupported')
+    expect(cursorDesc?.label).toBe('Cursor')
+    expect(cursorDesc?.defaultPermissionMode).toBe('agent')
+    expect(cursorDesc?.permissionModes.map(m => m.id)).toEqual(['agent', 'plan', 'ask'])
+    expect(cursorDesc?.quota?.status).toBe('unsupported')
 
     // Global config defaults & per-agent settings round-trip.
     const updatedCfg = await svc.updateConfig({
@@ -372,5 +377,64 @@ describe('ExternalAgentsService', () => {
       commands: [{ name: 'how', description: 'Skill from B', source: 'custom' }],
     })
     expect(spawnLog.filter(s => s.bin.endsWith('/claude') && s.cwd === dirB)).toHaveLength(1)
+  })
+
+  it('degrades gracefully when cursor/external CLIs are missing without affecting DSH Native sessions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-missing-cursor-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const missingSubprocess = {
+      resolveExecutable: async (cmd: string) => {
+        throw new Error(`ENOENT: ${cmd} not found`)
+      },
+      spawn: () => {
+        throw new Error('should not spawn missing CLI')
+      },
+    } as unknown as SubprocessRuntime
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    ctx.provide('subprocess')
+    ;(ctx as unknown as { subprocess: SubprocessRuntime }).subprocess = missingSubprocess
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+    await ctx.plugin(ExternalAgentsService, {
+      storeFile: join(dir, 'sessions.json'),
+      configFile: join(dir, 'config.json'),
+      quotaFile: join(dir, 'quotas.json'),
+      registerAgentPresets: false,
+      registerSubagents: false,
+    })
+
+    const svc = ctx.externalAgents
+    const catalog = await svc.getCatalog()
+    const nativeDesc = catalog.agents.find(a => a.id === 'native')
+    const cursorDesc = catalog.agents.find(a => a.id === 'cursor')
+    expect(nativeDesc?.available).toBe(true)
+    expect(cursorDesc?.available).toBe(false)
+
+    const handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-native-safe'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+    cleanups.push(() => handle.dispose())
+
+    const state = await svc.getSessionState('sess-native-safe')
+    expect(state.agentId).toBe('native')
+    expect(handle.agent.model.current()?.provider).toBe('deepseek')
+
+    await expect(
+      svc.selectSessionAgent({ sessionId: 'sess-native-safe', agentId: 'cursor' }),
+    ).rejects.toThrow()
+
+    // Session remains cleanly on native after failed switch to uninstalled cursor.
+    expect((await svc.getSessionState('sess-native-safe')).agentId).toBe('native')
   })
 })

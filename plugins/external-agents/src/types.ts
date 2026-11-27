@@ -2,7 +2,7 @@
  * Shared domain types for @charonx/dsh-external-agents.
  */
 
-export type ExternalAgentId = 'agy' | 'claude-code' | 'pi' | 'codex'
+export type ExternalAgentId = 'agy' | 'claude-code' | 'pi' | 'codex' | 'cursor'
 export type SessionAgentId = 'native' | ExternalAgentId
 
 export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = [
@@ -10,6 +10,7 @@ export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = [
   'claude-code',
   'pi',
   'codex',
+  'cursor',
 ] as const
 
 /** Provider route prefix used for legacy session compatibility and assistant message provenance. */

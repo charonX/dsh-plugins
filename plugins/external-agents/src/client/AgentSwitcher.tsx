@@ -7,7 +7,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { AgentDescriptor, SessionAgentId, SessionAgentState } from '../types.ts'
+import { EXTERNAL_AGENT_IDS, type AgentDescriptor, type SessionAgentId, type SessionAgentState } from '../types.ts'
 import type { ExternalAgentsLocaleKey } from './locales.ts'
 import css from './AgentSwitcher.module.css'
 
@@ -41,6 +41,7 @@ const COMPACT_LABELS: Record<SessionAgentId, string> = {
   'claude-code': 'Claude',
   pi: 'Pi',
   codex: 'Codex',
+  cursor: 'Cursor',
 }
 
 export function AgentSwitcher({
@@ -106,8 +107,8 @@ export function AgentSwitcher({
     if (sessionState !== null) return sessionState.agentId
     if (typeof preset === 'string' && preset.startsWith('ext-')) {
       const candidate = preset.slice(4)
-      if (candidate === 'agy' || candidate === 'claude-code' || candidate === 'pi' || candidate === 'codex') {
-        return candidate
+      if ((EXTERNAL_AGENT_IDS as readonly string[]).includes(candidate)) {
+        return candidate as SessionAgentId
       }
     }
     return 'native'
