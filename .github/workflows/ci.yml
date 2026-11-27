@@ -45,8 +45,8 @@ jobs:
             const targets = JSON.parse(process.argv[1]);
             for (const target of targets) {
               console.log(`=== Checking ${target.name} (${target.relDir}) ===`);
-              execFileSync("pnpm", ["--filter", target.name, "run", "test"], { stdio: "inherit" });
               execFileSync("pnpm", ["--filter", target.name, "run", "build"], { stdio: "inherit" });
+              execFileSync("pnpm", ["--filter", target.name, "run", "test"], { stdio: "inherit" });
             }
           ' "${TARGETS_JSON}"
 

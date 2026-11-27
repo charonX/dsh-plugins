@@ -104,8 +104,8 @@ jobs:
             echo "::group::Releasing ${PKG_NAME}@${VERSION} (${TAG})"
             (
               cd "${ROOT_DIR}/${REL_DIR}"
-              pnpm run test
               pnpm run build
+              pnpm run test
               npm publish --provenance --access public
               TARBALL=$(npm pack --quiet)
               TARBALL_PATH="${ROOT_DIR}/${REL_DIR}/${TARBALL}"
@@ -174,11 +174,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test, build, and publish via npm OIDC
+      - name: Build, test, and publish via npm OIDC
         working-directory: ${{ steps.meta.outputs.pkg_dir }}
         run: |
-          pnpm run test
           pnpm run build
+          pnpm run test
           npm publish --provenance --access public
 
       - name: Pack tarball and create GitHub Release
