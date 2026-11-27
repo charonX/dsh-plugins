@@ -35,15 +35,18 @@ import {
   agentIdFromPreset,
   agentIdFromProvider,
 } from './types.ts'
-import type {
-  ExternalAgentAdapter,
-  ExternalAsyncEvent,
-  ExternalImageInput,
-  ExternalMcpServerConfig,
-  ExternalPermissionPolicy,
-  ExternalTurnEvent,
-  ExternalTurnOutcome,
-  ExternalUsageReport,
+import {
+  ExternalResumeRejectedError,
+  explainExecFormatError,
+  isResumeRejectedError,
+  type ExternalAgentAdapter,
+  type ExternalAsyncEvent,
+  type ExternalImageInput,
+  type ExternalMcpServerConfig,
+  type ExternalPermissionPolicy,
+  type ExternalTurnEvent,
+  type ExternalTurnOutcome,
+  type ExternalUsageReport,
 } from './adapters/index.ts'
 import type { ExternalSessionStore } from './session-store.ts'
 
@@ -677,6 +680,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
       step = nextStep
       stepOpen = true
       stepHasTools = false
+      streamedNarrativeText = ''
       stepAdvertisedIds.clear()
       attempt = new LiveExternalAttempt(deps.ctx, agent, turn, step, counters)
     }
@@ -910,6 +914,8 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           }
           if (advertiseToolCall(brandedCallId, 'subagent', argsJson, meta)) {
             syntheticTaskCalls.set(event.taskId, syntheticId)
+            // Clear interim narration so pre-tool chatter cannot leak as post-tool answer.
+            streamedNarrativeText = ''
           }
         }
         return
@@ -998,6 +1004,9 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
         }
         const brandedCallId = brandString<ToolCallId>(event.callId)
         advertiseToolCall(brandedCallId, event.name, event.arguments, meta)
+        // Isolate interim narration: pre-tool prose is already committed with the tool-call
+        // step and must not be mistaken for post-tool deliverable text.
+        streamedNarrativeText = ''
         if (IMMEDIATE_TASK_TOOL_RE.test(event.toolName ?? event.name)) {
           upsertBackgroundTaskFromMeta(meta)
         }
@@ -1058,20 +1067,57 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
       } else {
         coord.pendingWakeupAfterRun = false
         const mcpServers = deps.resolveMcpServers ? await deps.resolveMcpServers(agent.id) : []
-        outcome = await adapter.runTurn(subprocess, {
-          prompt: promptText,
-          ...(promptImages.length > 0 ? { images: promptImages } : {}),
-          cwd,
-          dshSessionId: agent.id,
-          model: effectiveModel,
-          ...(effectiveReasoningEffort === undefined ? {} : { reasoningEffort: effectiveReasoningEffort }),
-          ...(priorBinding?.externalSessionId === undefined ? {} : { externalSessionId: priorBinding.externalSessionId }),
-          ...(effectivePermissionMode === undefined ? {} : { permissionMode: effectivePermissionMode }),
-          permissionPolicy: deps.getPermissionPolicy(),
-          ...(mcpServers.length > 0 ? { mcpServers } : {}),
-          signal,
-          onEvent: handleTurnEvent,
-        })
+        let attemptedExternalSessionId = priorBinding?.externalSessionId
+        let retriedFreshSession = false
+        while (true) {
+          try {
+            const candidate = await adapter.runTurn(subprocess, {
+              prompt: promptText,
+              ...(promptImages.length > 0 ? { images: promptImages } : {}),
+              cwd,
+              dshSessionId: agent.id,
+              model: effectiveModel,
+              ...(effectiveReasoningEffort === undefined ? {} : { reasoningEffort: effectiveReasoningEffort }),
+              ...(attemptedExternalSessionId === undefined ? {} : { externalSessionId: attemptedExternalSessionId }),
+              ...(effectivePermissionMode === undefined ? {} : { permissionMode: effectivePermissionMode }),
+              permissionPolicy: deps.getPermissionPolicy(),
+              ...(mcpServers.length > 0 ? { mcpServers } : {}),
+              signal,
+              onEvent: handleTurnEvent,
+            })
+            if (candidate.resumeRejected === true && attemptedExternalSessionId !== undefined && !signal.aborted) {
+              deps.store.clearExternalSessionId(agent.id, externalAgentId, attemptedExternalSessionId)
+              if (!retriedFreshSession && !stepHasTools && !attempt.hasAnyOutput() && startedToolIds.size === 0) {
+                retriedFreshSession = true
+                attemptedExternalSessionId = undefined
+                continue
+              }
+              throw new ExternalResumeRejectedError(
+                candidate.error ?? `${externalAgentId} rejected resumed session "${attemptedExternalSessionId}"`,
+              )
+            }
+            outcome = candidate
+            break
+          } catch (runErr) {
+            if (
+              !signal.aborted
+              && attemptedExternalSessionId !== undefined
+              && isResumeRejectedError(runErr)
+            ) {
+              deps.store.clearExternalSessionId(agent.id, externalAgentId, attemptedExternalSessionId)
+              if (!retriedFreshSession && !stepHasTools && !attempt.hasAnyOutput() && startedToolIds.size === 0) {
+                retriedFreshSession = true
+                attemptedExternalSessionId = undefined
+                continue
+              }
+            }
+            throw runErr
+          }
+        }
+      }
+
+      if (outcome.terminalConfirmed === false) {
+        throw new Error(outcome.error ?? `${externalAgentId} stream ended without a terminal completion frame`)
       }
 
       fallbackText = outcome.finalText
@@ -1140,7 +1186,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           // Best-effort step closure before ReactLoopAgent logs turn/end.
         }
       }
-      throw error
+      throw explainExecFormatError(error)
     } finally {
       releaseLock()
       if (coord.pendingWakeupAfterRun && !deps.store.isRunning(agent.id)) {

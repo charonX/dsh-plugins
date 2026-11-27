@@ -94,4 +94,33 @@ describe('ExternalSessionStore', () => {
     store.clearBackgroundState('s-bg')
     expect(store.getTasks('s-bg')).toEqual([])
   })
+
+  it('clears rejected externalSessionId conditionally without losing agent, model, or permission bindings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-agents-clear-'))
+    dirs.push(dir)
+    const file = join(dir, 'sessions.json')
+
+    const store = new ExternalSessionStore(file)
+    store.setAgent('s-clear', 'agy', {
+      externalSessionId: 'stale-ext-1',
+      model: 'gemini-4-neon',
+      reasoningEffort: 'high',
+      permissionMode: 'plan',
+      nativeFallbackModel: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+
+    // Mismatched expectedExternalSessionId leaves the binding untouched.
+    expect(store.clearExternalSessionId('s-clear', 'agy', 'other-id')).toBe(false)
+    expect(store.get('s-clear')?.externalSessionId).toBe('stale-ext-1')
+
+    // Matching id clears only externalSessionId and persists across reloads.
+    expect(store.clearExternalSessionId('s-clear', 'agy', 'stale-ext-1')).toBe(true)
+    const reloaded = new ExternalSessionStore(file).get('s-clear')
+    expect(reloaded?.externalSessionId).toBeUndefined()
+    expect(reloaded?.agentId).toBe('agy')
+    expect(reloaded?.model).toBe('gemini-4-neon')
+    expect(reloaded?.reasoningEffort).toBe('high')
+    expect(reloaded?.permissionMode).toBe('plan')
+    expect(reloaded?.nativeFallbackModel).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
+  })
 })

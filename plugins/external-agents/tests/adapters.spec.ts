@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -5,16 +8,24 @@ import {
   AgyAdapter,
   ClaudeCodeAdapter,
   CodexAdapter,
+  ExternalResumeRejectedError,
   PiAdapter,
   buildAcpPromptBlocks,
   buildClaudeRunArgs,
   buildClaudeStreamUserMessage,
   buildCodexRunArgs,
+  buildExternalSubprocessEnv,
+  buildGuiFallbackPath,
   buildPiRunArgs,
+  explainExecFormatError,
   extractAcpAvailableCommands,
   extractAcpUsageEvent,
   extractReasoningFromSessionResponse,
+  isExecFormatError,
+  isInternalClaudeCodeEnvKey,
+  isResumeRejectedError,
   normalizeModelList,
+  npmPackagePostinstallRepair,
   parseClaudeInitResponse,
   parseClaudeLine,
   parseCodexLine,
@@ -22,7 +33,14 @@ import {
   parsePiLine,
   parsePiListModelsOutput,
   parsePiListModelsWithContext,
+  resolveAgentExecutable,
+  sanitizeExternalCliEnv,
 } from '../src/adapters/index.ts'
+import {
+  AcpUsageAccumulator,
+  classifyAcpMcpPermission,
+  isAcpResumeRejectedError,
+} from '../src/adapters/acp-base.ts'
 import { resolveClaudeAllowedMcpTools, type ClaudeParseState } from '../src/adapters/claude.ts'
 import type { PiParseState } from '../src/adapters/pi.ts'
 import type { CodexParseState } from '../src/adapters/codex.ts'
@@ -1121,5 +1139,394 @@ describe('external agent stream parsers and probes', () => {
         usedPercent: 45,
       })
     }
+  })
+
+  it('strips internal CLAUDECODE* nesting markers while preserving user CLAUDE_CODE_* config and enriches GUI PATH with ~/.cursor/bin', async () => {
+    expect(isInternalClaudeCodeEnvKey('CLAUDECODE')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('claudecode')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('CLAUDECODE_CUSTOM_FLAG')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_ENTRYPOINT')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_EXECPATH')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_SESSION_ID')).toBe(true)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_SSE_PORT')).toBe(true)
+
+    expect(isInternalClaudeCodeEnvKey('CLAUDECODEX')).toBe(false)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_GIT_BASH_PATH')).toBe(false)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_USE_BEDROCK')).toBe(false)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_TMPDIR')).toBe(false)
+    expect(isInternalClaudeCodeEnvKey('CLAUDE_CODE_MAX_OUTPUT_TOKENS')).toBe(false)
+
+    const sampleEnv: NodeJS.ProcessEnv = {
+      PATH: '/usr/bin:/bin',
+      CLAUDECODE: '1',
+      CLAUDECODE_SUBAGENT: 'yes',
+      CLAUDE_CODE_ENTRYPOINT: 'cli',
+      CLAUDE_CODE_EXECPATH: '/usr/local/bin/claude',
+      CLAUDE_CODE_SESSION_ID: 'sess-123',
+      CLAUDE_CODE_SSE_PORT: '9999',
+      CLAUDECODEX: 'keep',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_TMPDIR: '/tmp/claude-user',
+    }
+    const sanitized = sanitizeExternalCliEnv(sampleEnv, undefined, { home: '/Users/tester', platform: 'darwin' })
+    expect(sanitized.CLAUDECODE).toBeUndefined()
+    expect(sanitized.CLAUDECODE_SUBAGENT).toBeUndefined()
+    expect(sanitized.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(sanitized.CLAUDE_CODE_EXECPATH).toBeUndefined()
+    expect(sanitized.CLAUDE_CODE_SESSION_ID).toBeUndefined()
+    expect(sanitized.CLAUDE_CODE_SSE_PORT).toBeUndefined()
+    expect(sanitized.CLAUDECODEX).toBe('keep')
+    expect(sanitized.CLAUDE_CODE_USE_BEDROCK).toBe('1')
+    expect(sanitized.CLAUDE_CODE_TMPDIR).toBe('/tmp/claude-user')
+    expect(sanitized.PATH?.startsWith('/usr/bin:/bin')).toBe(true)
+    expect(sanitized.PATH).toContain('/Users/tester/.cursor/bin')
+    expect(sanitized.PATH).toContain('/Users/tester/.local/bin')
+
+    const overlay = buildExternalSubprocessEnv({ CUSTOM_KEY: 'v1' }, sampleEnv, { home: '/Users/tester', platform: 'darwin' })
+    expect('CLAUDECODE' in overlay && overlay.CLAUDECODE === undefined).toBe(true)
+    expect('CLAUDECODE_SUBAGENT' in overlay && overlay.CLAUDECODE_SUBAGENT === undefined).toBe(true)
+    expect(overlay.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
+    expect(overlay.CLAUDE_CODE_EXECPATH).toBeUndefined()
+    expect(overlay.CLAUDE_CODE_SESSION_ID).toBeUndefined()
+    expect(overlay.CLAUDE_CODE_SSE_PORT).toBeUndefined()
+    expect(overlay.CUSTOM_KEY).toBe('v1')
+    expect(overlay.PATH).toContain('/Users/tester/.cursor/bin')
+
+    const guiPath = buildGuiFallbackPath('/usr/bin', { home: '/Users/tester', platform: 'darwin', env: {} })
+    expect(guiPath.split(':').slice(0, 3)).toEqual([
+      '/usr/bin',
+      '/Users/tester/.local/bin',
+      '/Users/tester/.cursor/bin',
+    ])
+
+    // resolveAgentExecutable falls back via GUI PATH when primary lookup misses
+    const seenLookups: Array<{ cmd: string; pathEnv?: string | undefined }> = []
+    const fakeSubprocess = {
+      resolveExecutable: async (cmd: string, env?: Readonly<Record<string, string>>) => {
+        seenLookups.push({ cmd, pathEnv: env?.PATH })
+        if (env?.PATH?.includes('.cursor/bin')) {
+          return '/Users/tester/.cursor/bin/agent'
+        }
+        throw new Error('not found')
+      },
+    } as unknown as SubprocessRuntime
+    const resolved = await resolveAgentExecutable(fakeSubprocess, 'agent')
+    expect(resolved).toBe('/Users/tester/.cursor/bin/agent')
+    expect(seenLookups.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('diagnoses ENOEXEC stub binaries with package postinstall repair instructions idempotently', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-enoexec-'))
+    try {
+      const pkgDir = join(dir, 'node_modules', '@anthropic-ai', 'claude-code')
+      const binDir = join(pkgDir, 'bin')
+      mkdirSync(binDir, { recursive: true })
+      const stubPath = join(binDir, 'claude.exe')
+      writeFileSync(stubPath, 'placeholder stub', 'utf8')
+      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({
+        name: '@anthropic-ai/claude-code',
+        scripts: { postinstall: 'node install.cjs' },
+      }), 'utf8')
+
+      const repair = npmPackagePostinstallRepair(stubPath, 'darwin')
+      expect(repair).toEqual({
+        packageName: '@anthropic-ai/claude-code',
+        rootDir: pkgDir,
+        command: `cd '${pkgDir}' && node install.cjs`,
+        shell: 'bash',
+      })
+
+      const rawErr = Object.assign(new Error(`spawn ${stubPath} ENOEXEC`), { code: 'ENOEXEC', path: stubPath })
+      expect(isExecFormatError(rawErr)).toBe(true)
+      const explained = explainExecFormatError(rawErr, stubPath)
+      expect(explained.message).toContain('@anthropic-ai/claude-code')
+      expect(explained.message).toContain('node install.cjs')
+      expect(explained.message).toContain('postinstall')
+      // Calling twice is idempotent
+      expect(explainExecFormatError(explained, stubPath)).toBe(explained)
+
+      const normalErr = new Error('network timeout')
+      expect(isExecFormatError(normalErr)).toBe(false)
+      expect(explainExecFormatError(normalErr)).toBe(normalErr)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('propagates ACP setMode/setConfigOption errors, routes dynamic MCP permissions without hardcoded prefixes, and isolates narration / empty completion', async () => {
+    const runMockAcpTurn = async (options: {
+      readonly failSetMode?: boolean
+      readonly failSetConfig?: boolean
+      readonly advertiseModels?: readonly string[]
+      readonly promptMode?: 'empty' | 'pre-tool-narration' | 'unknown-block' | 'permission-check' | 'load-rejected' | 'load-transient'
+      readonly permissionMode?: string
+      readonly model?: string
+      readonly reasoningEffort?: string
+      readonly externalSessionId?: string
+      readonly mcpServers?: ReadonlyArray<{
+        readonly name: string
+        readonly url: string
+        readonly headers: Readonly<Record<string, string>>
+        readonly tools?: ReadonlyArray<{ readonly name: string; readonly description: string; readonly inputSchema: Record<string, unknown>; readonly readOnly?: boolean }>
+      }>
+    }) => {
+      const clientToAgent = new PassThrough()
+      const agentToClient = new PassThrough()
+      let doneResolve!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+      const done = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+        doneResolve = r
+      })
+      const outcomes: Record<string, unknown> = {}
+      let promptReqId: number | string | undefined
+      let buf = ''
+      clientToAgent.on('data', (chunk: Buffer) => {
+        buf += chunk.toString('utf8')
+        let nl = buf.indexOf('\n')
+        while (nl !== -1) {
+          const line = buf.slice(0, nl).trim()
+          buf = buf.slice(nl + 1)
+          if (line !== '') {
+            const msg = JSON.parse(line) as { id?: number | string; method?: string; result?: unknown }
+            if (msg.method === 'initialize') {
+              agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } })}\n`)
+            } else if (msg.method === 'session/load') {
+              if (options.promptMode === 'load-rejected') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  error: { code: -32602, message: 'Invalid session identifier "dead-sess"' },
+                })}\n`)
+              } else if (options.promptMode === 'load-transient') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  error: { code: -32000, message: 'Invalid session parameters: cwd must be absolute' },
+                })}\n`)
+              } else {
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+              }
+            } else if (msg.method === 'session/new') {
+              const result: Record<string, unknown> = { sessionId: 'acp-test-1' }
+              if (options.advertiseModels !== undefined) {
+                result.models = { availableModels: options.advertiseModels.map(m => ({ modelId: m, name: m })) }
+              }
+              agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`)
+            } else if (msg.method === 'session/set_mode') {
+              if (options.failSetMode) {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  error: { code: -32602, message: 'unsupported mode' },
+                })}\n`)
+              } else {
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+              }
+            } else if (msg.method === 'session/set_config_option') {
+              if (options.failSetConfig) {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  error: { code: -32602, message: 'invalid config option' },
+                })}\n`)
+              } else {
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+              }
+            } else if (msg.method === 'session/prompt') {
+              promptReqId = msg.id
+              if (options.promptMode === 'empty') {
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })}\n`)
+              } else if (options.promptMode === 'pre-tool-narration') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: { sessionId: 'acp-test-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Let me check first.' } } },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: { sessionId: 'acp-test-1', update: { sessionUpdate: 'tool_call', toolCallId: 'tc-1', kind: 'read', title: 'read_file' } },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: { sessionId: 'acp-test-1', update: { sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', status: 'completed', rawOutput: 'ok' } },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })}\n`)
+              } else if (options.promptMode === 'unknown-block') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: { sessionId: 'acp-test-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Stale chatter' } } },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: {
+                    sessionId: 'acp-test-1',
+                    update: {
+                      sessionUpdate: 'agent_message_chunk',
+                      content: { type: 'resource_link', uri: 'file:///tmp/out.txt', name: 'out.txt' },
+                    },
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: { sessionId: 'acp-test-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Real final answer' } } },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { stopReason: 'end_turn' } })}\n`)
+              } else if (options.promptMode === 'permission-check') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 801,
+                  method: 'session/request_permission',
+                  params: {
+                    sessionId: 'acp-test-1',
+                    toolCall: { toolCallId: 'p-1', kind: 'other', title: 'mcp_custom-tools_read_items' },
+                    options: [{ optionId: 'allow-1', kind: 'allow_once', name: 'Allow' }],
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 802,
+                  method: 'session/request_permission',
+                  params: {
+                    sessionId: 'acp-test-1',
+                    toolCall: { toolCallId: 'p-2', kind: 'other', title: 'mcp_custom-tools_delete_item' },
+                    options: [{ optionId: 'allow-1', kind: 'allow_once', name: 'Allow' }],
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: 803,
+                  method: 'session/request_permission',
+                  params: {
+                    sessionId: 'acp-test-1',
+                    toolCall: { toolCallId: 'p-3', kind: 'other', title: 'mcp_dsh-manager_dsh_manager_board_summary' },
+                    options: [{ optionId: 'allow-1', kind: 'allow_once', name: 'Allow' }],
+                  },
+                })}\n`)
+              }
+            } else if (msg.id === 801) {
+              outcomes.readCustom = (msg.result as { outcome?: unknown })?.outcome
+            } else if (msg.id === 802) {
+              outcomes.deleteCustom = (msg.result as { outcome?: unknown })?.outcome
+            } else if (msg.id === 803) {
+              outcomes.unconfiguredMgr = (msg.result as { outcome?: unknown })?.outcome
+              agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: promptReqId, result: { stopReason: 'end_turn' } })}\n`)
+            }
+          }
+          nl = buf.indexOf('\n')
+        }
+      })
+      clientToAgent.once('finish', () => {
+        agentToClient.end()
+        doneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+      })
+      const fakeHandle = {
+        stdin: clientToAgent,
+        stdout: agentToClient,
+        done,
+        terminate: async () => {
+          agentToClient.end()
+          doneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+        },
+      } as unknown as SubprocessHandle
+      const fakeSubprocess = {
+        resolveExecutable: async () => '/usr/local/bin/agy',
+        spawn: () => fakeHandle,
+      } as unknown as SubprocessRuntime
+      const adapter = new AgyAdapter()
+      try {
+        const res = await adapter.runTurn(fakeSubprocess, {
+          prompt: 'test',
+          cwd: '/tmp',
+          model: options.model ?? 'default',
+          ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
+          ...(options.externalSessionId === undefined ? {} : { externalSessionId: options.externalSessionId }),
+          permissionMode: options.permissionMode ?? 'plan',
+          permissionPolicy: 'allow',
+          ...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
+          signal: new AbortController().signal,
+          onEvent: () => {},
+        })
+        return { res, outcomes }
+      } finally {
+        await adapter.dispose()
+      }
+    }
+
+    // 1. setMode & setConfigOption errors are NOT swallowed
+    await expect(runMockAcpTurn({ failSetMode: true, permissionMode: 'plan' })).rejects.toThrow(/session\/set_mode/)
+    await expect(runMockAcpTurn({ failSetConfig: true, model: 'gemini-4-neon' })).rejects.toThrow(/session\/set_config_option/)
+
+    // 2. Unknown advertised model fails loudly
+    await expect(runMockAcpTurn({
+      advertiseModels: ['gemini-4-neon', 'gemini-4-argon'],
+      model: 'typo-model',
+    })).rejects.toThrow(/Unknown model "typo-model"/)
+
+    // 3. Empty completion guard rejects zero-activity empty turns
+    await expect(runMockAcpTurn({ promptMode: 'empty' })).rejects.toThrow(/empty output/)
+
+    // 4. Pre-tool narration is isolated and not returned as finalText
+    const preTool = await runMockAcpTurn({ promptMode: 'pre-tool-narration' })
+    expect(preTool.res.finalText).toBe('')
+    expect(preTool.res.terminalConfirmed).toBe(true)
+
+    // 5. Unknown intermediate update clears stale narration buffer
+    const unknownBlock = await runMockAcpTurn({ promptMode: 'unknown-block' })
+    expect(unknownBlock.res.finalText).toBe('Real final answer')
+
+    // 6. Dynamic MCP permission routing (custom-tools allowed by spec/readOnly; unconfigured dsh-manager denied)
+    const perm = await runMockAcpTurn({
+      promptMode: 'permission-check',
+      permissionMode: 'plan',
+      mcpServers: [{
+        name: 'custom-tools',
+        url: 'http://127.0.0.1:49999/mcp',
+        headers: {},
+        tools: [
+          { name: 'read_items', description: 'Read items', inputSchema: {}, readOnly: true },
+          { name: 'delete_item', description: 'Delete item', inputSchema: {}, readOnly: false },
+        ],
+      }],
+    })
+    expect(perm.outcomes.readCustom).toEqual({ outcome: 'selected', optionId: 'allow-1' })
+    expect(perm.outcomes.deleteCustom).toEqual({ outcome: 'cancelled' })
+    expect(perm.outcomes.unconfiguredMgr).toEqual({ outcome: 'cancelled' })
+
+    // 7. session/load rejection vs request complaint
+    await expect(runMockAcpTurn({
+      promptMode: 'load-rejected',
+      externalSessionId: 'dead-sess',
+    })).rejects.toBeInstanceOf(ExternalResumeRejectedError)
+
+    const transientPromise = runMockAcpTurn({
+      promptMode: 'load-transient',
+      externalSessionId: 'good-sess',
+    })
+    await expect(transientPromise).rejects.toThrow(/session\/load/)
+    await transientPromise.catch((err) => {
+      expect(isResumeRejectedError(err)).toBe(false)
+    })
+
+    // 8. Pure helpers: isAcpResumeRejectedError, classifyAcpMcpPermission, AcpUsageAccumulator
+    expect(isAcpResumeRejectedError({ code: -32602, message: 'Unknown session ses_1' })).toBe(true)
+    expect(isAcpResumeRejectedError({ code: -32000, message: 'Invalid token for session abc' })).toBe(false)
+    expect(isAcpResumeRejectedError({ code: -32602, message: 'Unknown session capability requested' })).toBe(false)
+    expect(classifyAcpMcpPermission(
+      { toolCallId: 'c1', kind: 'other', title: 'mcp__my-srv__my_srv_get' },
+      [{ name: 'my-srv', url: 'http://127.0.0.1:1/mcp', headers: {} }],
+    )).toEqual({ isBridgedMcp: true, isReadOnlyBridgedMcp: true, matchedServer: 'my-srv' })
+
+    const acc = new AcpUsageAccumulator()
+    const u1 = extractAcpUsageEvent({
+      _meta: { usage: { inputTokens: 1000, outputTokens: 200, cachedReadTokens: 400, totalTokens: 1200 } },
+    })
+    expect(u1).toBeDefined()
+    expect(acc.merge(u1!)).toMatchObject({ inputTokens: 600, outputTokens: 200, cacheReadTokens: 400 })
+    const u2 = acc.merge({ inputTokens: 600, outputTokens: 250, cacheReadTokens: 400, isTurnTotal: true })
+    expect(u2).toMatchObject({ inputTokens: 600, outputTokens: 250, cacheReadTokens: 400 })
   })
 })
