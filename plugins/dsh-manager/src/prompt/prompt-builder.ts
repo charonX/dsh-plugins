@@ -8,8 +8,41 @@ import type { DispatchPromptRecord, DispatchPromptSectionRecord } from '../dispa
 import { formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from '../dispatch/landing-discovery.ts'
 import { formatSkillPromptLines, type DiscoveredSkill } from '../dispatch/workspace-skills.ts'
 import type { FlowDef, FlowStepDef } from '../flow/flow-ir.ts'
-import type { ProjectFactsSnapshot } from './project-facts.ts'
 
+/** Hard character budget for one dispatch prompt (built-in executor and external CLI). */
+export const MAX_DISPATCH_PROMPT_CHARS = 8_000
+
+/** Coarse per-section attribution carried by {@link PromptBudgetExceededError}. */
+export interface PromptSectionSize {
+  readonly id: string
+  readonly chars: number
+}
+
+/**
+ * Raised when a dispatch prompt exceeds {@link MAX_DISPATCH_PROMPT_CHARS}.
+ * Dispatch must fail loudly instead of silently truncating: a truncated prompt
+ * loses its locked tool contracts and the executor then improvises.
+ */
+export class PromptBudgetExceededError extends Error {
+  readonly chars: number
+  readonly limit: number
+  readonly sectionSizes: readonly PromptSectionSize[]
+
+  constructor(chars: number, sectionSizes: readonly PromptSectionSize[]) {
+    const largest = [...sectionSizes]
+      .sort((left, right) => right.chars - left.chars)
+      .slice(0, 4)
+      .map(entry => `${entry.id}=${entry.chars}`)
+      .join(', ')
+    super(`dispatch prompt is ${chars} chars, over the ${MAX_DISPATCH_PROMPT_CHARS}-char budget (largest sections: ${largest})`)
+    this.name = 'PromptBudgetExceededError'
+    this.chars = chars
+    this.limit = MAX_DISPATCH_PROMPT_CHARS
+    this.sectionSizes = sectionSizes
+  }
+}
+
+/** Steward-turn prompt cap (bytes); executor prompts use {@link MAX_DISPATCH_PROMPT_CHARS}. */
 export const MAX_RENDERED_PROMPT_BYTES = 65_536
 
 export function truncateUtf8Bytes(text: string, maxBytes: number): { readonly text: string; readonly truncated: boolean } {
@@ -37,7 +70,8 @@ export interface ExecutorPromptInput {
   readonly readOnly: boolean
   readonly worktree?: TicketWorktreePlan
   readonly landingFacts?: ProjectLandingFacts
-  readonly projectFacts?: ProjectFactsSnapshot
+  /** Absolute path of the repo instruction file to point at (never its body). */
+  readonly repoRulesPath?: string
   readonly handoffLines?: readonly string[]
   readonly upstreamLines?: readonly string[]
   readonly answeredLines?: readonly string[]
@@ -116,8 +150,10 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   const wtLine = worktreeContextLine(input.worktree)
   add('worktree', wtLine === undefined ? [] : [wtLine])
 
-  if (input.projectFacts?.agentsMd !== undefined) {
-    add('projectIndex', [`Project instructions (${input.projectFacts.root}):\n${input.projectFacts.agentsMd}`])
+  if (input.repoRulesPath !== undefined) {
+    // The agent reads its own repo rules: harness/Claude/Codex inject cwd AGENTS.md,
+    // so inlining the body only duplicates it and burns the prompt budget.
+    add('repoRules', [`Repo rules: read ${input.repoRulesPath} before acting; they are not inlined in this prompt.`])
   }
 
   if (input.landingFacts !== undefined) {
@@ -126,11 +162,11 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
 
   if (input.scratchDir !== undefined) {
     add('artifacts', [
-      `Task scratch directory (store intermediate artifacts here, never pollute ${input.cwd}): ${input.scratchDir}`,
-      `If ${input.scratchDir}/align-card.md, ${input.scratchDir}/design.md, or ${input.scratchDir}/prototype/ exists, read them before making assumptions about boundaries or UI layouts.`,
+      `Task scratch directory: ${input.scratchDir} (keep intermediate artifacts here, never inside the repo).`,
+      `Read ${input.scratchDir}/align-card.md or design.md first when present.`,
       input.readOnly
-        ? `Read-only step: do NOT modify repository files in ${input.cwd}. Record review/verification findings in ${input.scratchDir}/review-report.md and test output in ${input.scratchDir}/test-report.log.`
-        : `If ${input.scratchDir}/review-report.md or ${input.scratchDir}/test-report.log exists from an earlier rework, read it first and address every open finding before reporting ready.`,
+        ? `Read-only step: do NOT modify repository files. Write findings to ${input.scratchDir}/review-report.md and test output to ${input.scratchDir}/test-report.log.`
+        : `If ${input.scratchDir}/review-report.md or test-report.log from an earlier rework exists, read it and address every open finding before reporting ready.`,
     ])
   }
 
@@ -164,14 +200,17 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
 
   add('rework', input.reworkLines ?? [])
 
+  const sectionSizes: PromptSectionSize[] = sections.map(section => ({ id: section.id, chars: section.text.length }))
   const rawText = sections.map(s => s.text).join('\n\n')
-  const capped = truncateUtf8Bytes(rawText, MAX_RENDERED_PROMPT_BYTES)
+  if (rawText.length > MAX_DISPATCH_PROMPT_CHARS) {
+    throw new PromptBudgetExceededError(rawText.length, sectionSizes)
+  }
   return {
-    text: capped.text,
+    text: rawText,
     record: {
       turnId: input.turnId,
-      text: capped.text,
-      truncated: capped.truncated,
+      text: rawText,
+      truncated: false,
       sections,
       templateRevision: input.templateRevision,
       renderedAt: Date.now(),

@@ -1,6 +1,12 @@
 /** Unit tests for the minimal Skill + Goal + Locked-Contract prompt builder. */
 import { describe, expect, test } from 'vitest'
-import { buildExecutorTurnPrompt, buildStewardGatePrompt, buildStewardRoutePrompt } from '../../src/prompt/prompt-builder.ts'
+import {
+  MAX_DISPATCH_PROMPT_CHARS,
+  PromptBudgetExceededError,
+  buildExecutorTurnPrompt,
+  buildStewardGatePrompt,
+  buildStewardRoutePrompt,
+} from '../../src/prompt/prompt-builder.ts'
 import type { TicketRecord } from '../../src/board-domain.ts'
 import type { FlowDef } from '../../src/flow/flow-ir.ts'
 
@@ -28,6 +34,11 @@ const sampleFlow: FlowDef = {
   updatedAt: 1,
 }
 
+const discoveredSkills = [
+  { name: 'how', description: 'Explore docs read-only', path: '.dsh/skills/how/SKILL.md' },
+  { name: 'tdd', description: 'Behavior TDD', path: '.dsh/skills/tdd/SKILL.md' },
+]
+
 describe('prompt-builder', () => {
   test('places mounted skills first, enforces readOnly scope, and locks tool contracts', () => {
     const step = sampleFlow.steps[0]!
@@ -40,13 +51,11 @@ describe('prompt-builder', () => {
       stepCount: 1,
       projectId: 'proj-1',
       cwd: '/tmp/knowledge',
-      skills: [
-        { name: 'how', description: 'Explore docs read-only', path: '.dsh/skills/how/SKILL.md' },
-        { name: 'tdd', description: 'Behavior TDD', path: '.dsh/skills/tdd/SKILL.md' },
-      ],
+      skills: discoveredSkills,
       scratchDir: '/tmp/scratch/t1',
       readOnly: true,
       worktree: { mode: 'in-place' },
+      repoRulesPath: '/tmp/knowledge/AGENTS.md',
       templateRevision: 3,
     })
 
@@ -55,9 +64,80 @@ describe('prompt-builder', () => {
     expect(out.text).toContain('Required step skills')
     expect(out.text).toContain('Workspace mode: in-place')
     expect(out.text).toContain('Inspect /tmp/knowledge strictly read-only')
-    expect(out.text).toContain('/tmp/scratch/t1/prototype/')
+    expect(out.text).toContain('/tmp/scratch/t1/review-report.md')
     expect(out.text).toContain('submit_report')
     expect(out.record.sections.filter(s => s.locked).map(s => s.id)).toEqual(['scope', 'report', 'ask', 'approval', 'deliver'])
+  })
+
+  test('points at repo rules instead of inlining the doc body', () => {
+    const out = buildExecutorTurnPrompt({
+      turnId: 'executor',
+      ticket: sampleTicket,
+      cwd: '/tmp/knowledge',
+      skills: [],
+      readOnly: false,
+      repoRulesPath: '/tmp/knowledge/AGENTS.md',
+      templateRevision: 3,
+    })
+
+    expect(out.text).toContain('Repo rules: read /tmp/knowledge/AGENTS.md')
+    expect(out.text).not.toContain('Project instructions')
+    expect(out.record.sections.map(s => s.id)).not.toContain('projectIndex')
+  })
+
+  test('lists only step-mounted skills and omits the section entirely otherwise', () => {
+    const step = sampleFlow.steps[0]!
+    const withStep = buildExecutorTurnPrompt({
+      turnId: 'executor',
+      ticket: sampleTicket,
+      flow: sampleFlow,
+      step,
+      stepIndex: 0,
+      stepCount: 1,
+      cwd: '/tmp/knowledge',
+      skills: discoveredSkills,
+      readOnly: true,
+      templateRevision: 3,
+    })
+    expect(withStep.text).toContain('- how (')
+    expect(withStep.text).not.toContain('tdd')
+    expect(withStep.text).not.toContain('Other available skills')
+
+    const withoutStep = buildExecutorTurnPrompt({
+      turnId: 'executor',
+      ticket: sampleTicket,
+      cwd: '/tmp/knowledge',
+      skills: discoveredSkills,
+      readOnly: false,
+      templateRevision: 3,
+    })
+    expect(withoutStep.text).not.toContain('Available skills')
+    expect(withoutStep.record.sections.map(s => s.id)).not.toContain('skills')
+  })
+
+  test('rejects an over-budget prompt instead of truncating it', () => {
+    const bulky: TicketRecord = {
+      ...sampleTicket,
+      mandate: { strength: 'explicit', scope: 'x'.repeat(MAX_DISPATCH_PROMPT_CHARS), policyVersion: '1' },
+    }
+    let caught: unknown
+    try {
+      buildExecutorTurnPrompt({
+        turnId: 'executor',
+        ticket: bulky,
+        cwd: '/tmp/knowledge',
+        skills: [],
+        readOnly: false,
+        templateRevision: 3,
+      })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(PromptBudgetExceededError)
+    const budgetError = caught as PromptBudgetExceededError
+    expect(budgetError.limit).toBe(MAX_DISPATCH_PROMPT_CHARS)
+    expect(budgetError.chars).toBeGreaterThan(MAX_DISPATCH_PROMPT_CHARS)
+    expect(budgetError.sectionSizes.map(entry => entry.id)).toContain('mandate')
   })
 
   test('builds domain-agnostic route & gate prompts', () => {

@@ -75,6 +75,32 @@ export function extractScratchPrototypeDirFromText(text: string | undefined, bas
 }
 
 /**
+ * Resolve an explicit relative scratch dir. Tickets are commonly written as
+ * `home-repos/scratch/tasks/<slug>` although `basePath` already is `home-repos`,
+ * and resolving that verbatim produced `home-repos/home-repos/scratch/...`,
+ * a path the executor could never read its `align-card.md` from. Any
+ * `[<prefix>/]scratch/<tasks|prototypes>/<slug>` form now anchors on the
+ * workspace scratch root discovered above `basePath`.
+ */
+function resolveExplicitScratchDir(explicit: string, basePath: string): string {
+  const base = resolve(basePath)
+  const normalized = explicit.replace(/^\.\//, '').replace(/\/+$/, '')
+  const match = /(?:^|\/)scratch\/(tasks|prototypes)\/([A-Za-z0-9._-]+)$/.exec(normalized)
+  if (match !== null) {
+    const kind = match[1] as 'tasks' | 'prototypes'
+    const slug = match[2]!
+    if (kind === 'tasks') {
+      const tasksRoot = findScratchTasksRoot(base)
+      if (tasksRoot !== undefined) return join(tasksRoot, slug)
+    } else {
+      const scratchRoot = findScratchRoot(base)
+      if (scratchRoot !== undefined) return join(scratchRoot, 'prototypes', slug)
+    }
+  }
+  return resolve(base, normalized)
+}
+
+/**
  * Resolve the shared scratch directory for a ticket or flow walk.
  * Precedence: explicit `ticket.scratchDir` -> path referenced in text ->
  * `<nearest scratch/tasks>/<rootTicketId>` -> `<basePath>/.dsh-manager/tasks/<rootTicketId>`.
@@ -88,7 +114,7 @@ export function resolveTaskScratchDir(input: {
 }): string {
   const explicit = input.scratchDir?.trim()
   if (explicit !== undefined && explicit !== '') {
-    return isAbsolute(explicit) ? explicit : resolve(input.basePath, explicit)
+    return isAbsolute(explicit) ? explicit : resolveExplicitScratchDir(explicit, input.basePath)
   }
   const fromText = extractScratchTaskDirFromText(
     [input.scope, input.acceptanceCriteria].filter(Boolean).join('\n'),

@@ -69,8 +69,10 @@ describe('workspace-skills', () => {
       const lines = formatSkillPromptLines(skills, ['tdd'])
       expect(lines[0]).toContain('Required step skills')
       expect(lines[1]).toContain('- tdd (.agents/skills/tdd/SKILL.md)')
-      expect(lines[2]).toContain('Other available skills')
-      expect(lines.some(l => l.includes('writing-style'))).toBe(true)
+      // Unmounted skills stay out of the prompt; the agent's own catalog lists them.
+      expect(lines.some(l => l.includes('writing-style'))).toBe(false)
+      expect(lines.some(l => l.includes('Other available skills'))).toBe(false)
+      expect(formatSkillPromptLines(skills, [])).toEqual([])
 
       const loaded = await loadSkillMarkdown('skill', 'writing-style', root, {
         async list() { return [{ name: 'writing-style', description: 'Knowledge base writing rules.' }] },

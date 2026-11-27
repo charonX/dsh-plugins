@@ -132,7 +132,9 @@ describe('adaptive landing discovery & git landing ops', () => {
     expect(richFacts.deliverySkills.some(s => s.name === 'release-pr')).toBe(true)
     const promptText = formatLandingDiscoveryPromptLines(richFacts).join('\n')
     expect(promptText).toContain('/release-pr')
-    expect(promptText).toContain('Open a Pull Request on GitHub')
+    // Raw doc bodies stay out of the prompt: the agent reads AGENTS.md itself.
+    expect(promptText).not.toContain('Open a Pull Request on GitHub')
+    expect(promptText).toContain(`repoRoot: ${richFacts.repoRoot}`)
   })
 
   test('checks rebase readiness, aborts conflicts cleanly, and lands via localMergeBranch + cleanup', async () => {

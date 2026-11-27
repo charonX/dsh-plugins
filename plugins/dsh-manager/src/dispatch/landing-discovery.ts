@@ -4,7 +4,7 @@
  * skills, and live git remotes/branches — requiring zero static `projects:`
  * configuration while defaulting safely when rules are absent or ambiguous.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -66,6 +66,15 @@ function ancestorDirs(startDir: string, maxDepth = 4): string[] {
   return dirs
 }
 
+/** Identity of a doc path after symlink resolution, so `CLAUDE.md -> AGENTS.md` is read once. */
+function realpathOrSelf(filePath: string): string {
+  try {
+    return realpathSync(filePath)
+  } catch {
+    return filePath
+  }
+}
+
 async function readDocExcerpts(repoRoot: string): Promise<DiscoveredDoc[]> {
   const docs: DiscoveredDoc[] = []
   const seen = new Set<string>()
@@ -81,8 +90,10 @@ async function readDocExcerpts(repoRoot: string): Promise<DiscoveredDoc[]> {
     for (const rel of CANDIDATE_DOC_NAMES) {
       if (scope === 'ancestor' && rel === 'docs/verify/README.md') continue
       const fullPath = join(dir, rel)
-      if (seen.has(fullPath) || !existsSync(fullPath)) continue
-      seen.add(fullPath)
+      if (!existsSync(fullPath)) continue
+      const identity = realpathOrSelf(fullPath)
+      if (seen.has(identity)) continue
+      seen.add(identity)
       try {
         const raw = await readFile(fullPath, 'utf8')
         const trimmed = raw.trim()
@@ -192,10 +203,15 @@ export async function discoverProjectLandingFacts(
   }
 }
 
-/** Format discovered project landing facts into prompt instructions for Delivery/Review agents. */
+/**
+ * Format the probed landing facts for landing/review steps. Repository docs are
+ * deliberately NOT inlined: the agent reads `AGENTS.md` itself, and duplicating
+ * its body (plus the `CLAUDE.md` symlink and ancestor copies) dominated the
+ * dispatch prompt. Only the machine-readable landing facts stay here.
+ */
 export function formatLandingDiscoveryPromptLines(facts: ProjectLandingFacts): string[] {
   const lines: string[] = [
-    'Project landing discovery (dynamically probed — follow repo rules & project skills first; if ambiguous, keep changes verified on current branch and ask human):',
+    'Project landing discovery (probed live — follow repo rules first; if ambiguous, keep the change verified on the current branch and ask a human):',
     `- repoRoot: ${facts.repoRoot}`,
     `- currentBranch: ${facts.currentBranch ?? '(unknown/non-git)'}${facts.upstreamBranch === undefined ? '' : ` | upstream: ${facts.upstreamBranch}`}`,
     `- originRemote: ${facts.originUrl ?? '(none)'} (forge: ${facts.forge})`,
@@ -207,10 +223,6 @@ export function formatLandingDiscoveryPromptLines(facts: ProjectLandingFacts): s
     for (const skill of facts.deliverySkills) {
       lines.push(`  - /${skill.name} (${skill.path}): ${skill.description}`)
     }
-  }
-  for (const doc of facts.docs) {
-    lines.push(`--- ${doc.scope.toUpperCase()} DOC: ${doc.path} ---`)
-    lines.push(doc.excerpt)
   }
   return lines
 }

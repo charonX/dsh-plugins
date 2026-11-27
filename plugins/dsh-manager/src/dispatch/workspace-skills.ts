@@ -172,35 +172,25 @@ export async function loadSkillMarkdown(
   throw new Error(`skill "${ref}" not found in workspace or host registry`)
 }
 
-/** Format discovered skills into concise prompt lines, highlighting step-mounted skills first. */
+/**
+ * Format the step-mounted skills into prompt lines. Unmounted skills stay out:
+ * the agent's own skill catalog already covers them, and listing every
+ * workspace/host skill crowded out the ticket mandate in dispatched prompts.
+ */
 export function formatSkillPromptLines(
   skills: readonly DiscoveredSkill[],
   mountedSkillNames: readonly string[] = [],
 ): readonly string[] {
-  const mountedSet = new Set(mountedSkillNames)
-  const lines: string[] = []
-  if (mountedSkillNames.length > 0) {
-    lines.push('Required step skills (read and follow each matching SKILL.md before executing):')
-    for (const name of mountedSkillNames) {
-      const hit = skills.find(skill => skill.name === name)
-      if (hit !== undefined) {
-        lines.push(hit.description !== ''
-          ? `- ${hit.name} (${hit.path}): ${hit.description}`
-          : `- ${hit.name} (${hit.path})`)
-      } else {
-        lines.push(`- ${name} (invoke or read skill "${name}" if available in your skill catalog)`)
-      }
-    }
-  }
-  const extra = skills.filter(skill => !mountedSet.has(skill.name))
-  if (extra.length > 0) {
-    lines.push(mountedSkillNames.length > 0
-      ? 'Other available skills (read matching SKILL.md if helpful):'
-      : 'Available skills (read matching SKILL.md when relevant):')
-    for (const skill of extra) {
-      lines.push(skill.description !== ''
-        ? `- ${skill.name} (${skill.path}): ${skill.description}`
-        : `- ${skill.name} (${skill.path})`)
+  if (mountedSkillNames.length === 0) return []
+  const lines: string[] = ['Required step skills (read and follow each matching SKILL.md before executing):']
+  for (const name of mountedSkillNames) {
+    const hit = skills.find(skill => skill.name === name)
+    if (hit !== undefined) {
+      lines.push(hit.description !== ''
+        ? `- ${hit.name} (${hit.path}): ${hit.description}`
+        : `- ${hit.name} (${hit.path})`)
+    } else {
+      lines.push(`- ${name} (invoke or read skill "${name}" if available in your skill catalog)`)
     }
   }
   return lines
