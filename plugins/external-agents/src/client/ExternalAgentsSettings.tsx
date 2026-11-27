@@ -81,7 +81,7 @@ function QuotaSection({
           {observedText !== '' && (
             <span className={css.quotaObserved}>{t('settingsQuotaObservedAt', { time: observedText })}</span>
           )}
-          {agent.available && agent.id !== 'pi' && (
+          {agent.available && agent.id !== 'pi' && quota?.status !== 'unsupported' && (
             <button
               type="button"
               className={`${css.button} ${css.buttonSmall}`}

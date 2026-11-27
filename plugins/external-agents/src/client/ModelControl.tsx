@@ -344,7 +344,11 @@ function ExternalModelPicker({
           <div className={css.section}>
             <div className={css.sectionHeader}>
               <span className={css.sectionTitle}>{t('modelSectionLabel')}</span>
-              <span className={css.sectionMeta}>{descriptor?.label}</span>
+              <span className={css.sectionMeta}>
+                {agentId === 'cursor' && resolved.efforts.length === 0
+                  ? t('modelParameterizedEffortHint')
+                  : descriptor?.label}
+              </span>
             </div>
 
             {showSearch && (

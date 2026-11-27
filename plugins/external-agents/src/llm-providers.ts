@@ -18,11 +18,13 @@ import type { ExternalAgentAdapter, ExternalProbeResult } from './adapters/index
 import type { ExternalQuotaStore } from './quota-store.ts'
 
 function fallbackQuotaFor(id: ExternalAgentId, probe: ExternalProbeResult): AgentQuotaSnapshot {
-  if (id === 'pi') {
+  if (id === 'pi' || id === 'cursor') {
     return {
       status: 'unsupported',
       source: 'unsupported',
-      note: 'Pi Agent CLI does not expose subscription quota.',
+      note: id === 'pi'
+        ? 'Pi Agent CLI does not expose subscription quota.'
+        : 'Cursor Agent CLI does not expose subscription quota.',
     }
   }
   if (!probe.available) {
@@ -183,7 +185,7 @@ export class ExternalAgentCatalog {
       const adapter = this.adapters.get(agentId)
       if (adapter === undefined) return
       const probe = await this.refreshOne(agentId, signal)
-      if (agentId === 'pi') {
+      if (agentId === 'pi' || agentId === 'cursor') {
         this.quotaStore?.set(agentId, fallbackQuotaFor(agentId, probe))
         this.notify(agentId)
         return
@@ -228,7 +230,7 @@ export class ExternalAgentCatalog {
       const adapter = this.adapters.get(id)!
       const probe = this.getProbe(id)
       const storedQuota = this.quotaStore?.get(id)
-      const effectiveQuota = id === 'pi'
+      const effectiveQuota = id === 'pi' || id === 'cursor'
         ? fallbackQuotaFor(id, probe)
         : (storedQuota ?? fallbackQuotaFor(id, probe))
       return {

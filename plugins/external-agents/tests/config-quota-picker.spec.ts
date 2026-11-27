@@ -10,11 +10,13 @@ import {
   parseClaudeRateLimitInfo,
 } from '../src/quota-store.ts'
 import {
+  extractParameterizedEffort,
   filterExternalModels,
   formatCustomModelsText,
   parseCustomModelsText,
   resolveActiveModelAndEffort,
 } from '../src/client/model-picker-core.ts'
+import { externalAgentIdSchema, sessionAgentIdSchema } from '../src/remote.ts'
 
 describe('ExternalAgentConfigStore & ExternalQuotaStore', () => {
   const dirs: string[] = []
@@ -212,5 +214,43 @@ describe('Single-popover model & effort helpers', () => {
       { id: 'custom-a', name: 'custom-a' },
     ])
     expect(formatCustomModelsText(parsed)).toBe('gemini-4-neon|Gemini 4 Neon\ncustom-a')
+  })
+
+  it('extracts parameterized effort for Cursor model variants and validates remote schemas for cursor', () => {
+    expect(extractParameterizedEffort('claude-opus-5-5[context=300k,effort=medium,fast=false]')).toBe('Medium')
+    expect(extractParameterizedEffort('gemini-4-neon[context=300k,reasoning_effort=high]')).toBe('High')
+    expect(extractParameterizedEffort('gpt-5.3-codex[reasoning=xhigh,fast=false]')).toBe('Extra High')
+    expect(extractParameterizedEffort('default[]')).toBeUndefined()
+
+    const cursorDescriptor = {
+      id: 'cursor' as const,
+      label: 'Cursor',
+      command: 'agent',
+      available: true,
+      defaultModel: 'default',
+      models: [
+        { id: 'default', name: 'Auto (Cursor default)' },
+        { id: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'claude-opus-5-5 (medium · 300k)' },
+      ],
+      permissionModes: [
+        { id: 'agent', name: 'Agent' },
+        { id: 'plan', name: 'Plan' },
+        { id: 'ask', name: 'Ask' },
+      ],
+      commands: [],
+    }
+    const resolved = resolveActiveModelAndEffort(cursorDescriptor, {
+      sessionId: 's-cursor-1',
+      agentId: 'cursor',
+      locked: false,
+      running: false,
+      selectedExternalModel: { model: 'claude-opus-5-5[context=300k,effort=medium,fast=false]' },
+    })
+    expect(resolved.modelLabel).toBe('claude-opus-5-5 (medium · 300k)')
+    expect(resolved.effortLabel).toBe('Medium')
+    expect(resolved.efforts).toEqual([])
+
+    expect(externalAgentIdSchema.parse('cursor')).toBe('cursor')
+    expect(sessionAgentIdSchema.parse('cursor')).toBe('cursor')
   })
 })
