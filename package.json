@@ -8,7 +8,11 @@
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm -r run test",
-    "e2e": "pnpm -r --if-present run e2e"
+    "e2e": "pnpm -r --if-present run e2e",
+    "check:hygiene": "node scripts/check-repo-hygiene.mjs",
+    "test:release": "node --test scripts/release-targets.test.mjs",
+    "changeset": "changeset",
+    "changeset:status": "changeset status"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.12",
