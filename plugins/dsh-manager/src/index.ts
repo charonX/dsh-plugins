@@ -42,6 +42,7 @@ import { createDomainDispatchStore } from './dispatch/storage-store.ts'
 import type { DispatchStorePort } from './dispatch/dispatch-core.ts'
 import type { TicketLinkView } from './dispatch/wire-types.ts'
 import { flowChain, flowTimelineOf, renderFlowMarkdown } from './flow/flow-core.ts'
+import { applyTicketRevision, type TicketRevisionPatch, type TicketRevisionResult } from './ticket-revision.ts'
 
 export type { BoardColumn, BoardSummary } from './board-domain.ts'
 
@@ -187,6 +188,34 @@ export class DshManagerBoard extends TypertRemoteService {
     const updated: TicketRecord = { ...record, worktree: merged, updatedAt: Date.now() }
     await this.domain!.table('tickets').put(id as never, updated)
     return updated
+  }
+
+  /**
+   * Rewrite the planning fields of a not-yet-dispatched ticket (title, mandate
+   * scope, acceptance gate, scratch dir, worktree plan). History is append-only:
+   * the revision lands as one `revised` timeline event naming the fields.
+   */
+  async reviseTicket(
+    id: string,
+    patch: TicketRevisionPatch,
+    options?: { readonly reason?: string; readonly author?: 'user' | 'steward' },
+  ): Promise<TicketRevisionResult> {
+    const record = this.domain!.table('tickets').get(id as never)
+    if (record === undefined) return { ok: false, reason: `unknown ticket ${id}` }
+    const now = Date.now()
+    const result = applyTicketRevision(record, patch, now)
+    if (!result.ok) return result
+    await this.domain!.table('tickets').put(id as never, result.record)
+    const reason = options?.reason?.trim()
+    await this.appendTicketEvent(
+      id,
+      now,
+      'revised',
+      `fields: ${result.changed.join(', ')}${reason === undefined || reason === '' ? '' : ` — ${reason}`}`,
+      options?.author ?? 'user',
+    )
+    await this.touchFlowMirror(id)
+    return result
   }
 
   /**
@@ -386,8 +415,7 @@ export class DshManagerBoard extends TypertRemoteService {
         validated.length === 0
         && (record.dependsOn?.length ?? 0) > 0
         && next.state === 'todo'
-        && next.flow !== undefined
-        && next.flow.pendingSkip === undefined
+        && next.flow?.pendingSkip === undefined
       ) {
         void executor.dispatchTicket({ ticketId: record.id }).catch(() => {})
       } else {

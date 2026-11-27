@@ -30,6 +30,32 @@ export function filterExternalModels(
   return [...prefix, ...substring]
 }
 
+const PARAMETERIZED_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+}
+
+export function extractParameterizedEffort(modelId: string): string | undefined {
+  const bracketStart = modelId.indexOf('[')
+  const bracketEnd = modelId.lastIndexOf(']')
+  if (bracketStart === -1 || bracketEnd <= bracketStart) return undefined
+  const inner = modelId.slice(bracketStart + 1, bracketEnd)
+  for (const part of inner.split(',')) {
+    const eq = part.indexOf('=')
+    if (eq === -1) continue
+    const key = part.slice(0, eq).trim()
+    const val = part.slice(eq + 1).trim()
+    if ((key === 'effort' || key === 'reasoning_effort' || key === 'reasoning') && val !== '') {
+      return PARAMETERIZED_EFFORT_LABELS[val.toLowerCase()] ?? val
+    }
+  }
+  return undefined
+}
+
 export function resolveActiveModelAndEffort(
   descriptor: AgentDescriptor | undefined,
   sessionState: SessionAgentState | null,
@@ -55,7 +81,7 @@ export function resolveActiveModelAndEffort(
     ? sessionState.selectedExternalModel.reasoningEffort
     : (agentSettings?.defaultReasoningEffort ?? descriptor?.reasoning?.defaultEffort)
   const matchedEffort = effortId === undefined ? undefined : efforts.find(item => item.id === effortId)
-  const effortLabel = matchedEffort?.name ?? effortId
+  const effortLabel = matchedEffort?.name ?? effortId ?? (efforts.length === 0 ? extractParameterizedEffort(modelId) : undefined)
 
   return {
     modelId,

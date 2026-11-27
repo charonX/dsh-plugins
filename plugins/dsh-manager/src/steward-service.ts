@@ -141,7 +141,7 @@ const WORKTREE_PLAN_PARAM = {
   description: 'Optional AI-analyzed worktree & target repo plan written onto the ticket.',
   properties: {
     mode: { type: 'string' as const, enum: ['worktree', 'in-place', 'none'], description: 'worktree for isolated code edits (default), none for read-only analysis, in-place for non-git paths.' },
-    repoRoot: { type: 'string' as const, description: 'Exact git repository root path to modify (e.g. a sub-repo under repos/<name> rather than an aggregate root).' },
+    repoRoot: { type: 'string' as const, description: 'Git repository root that actually holds the code to change: the sub-repo (repos/<name>) when the ticket names one, never an aggregate workspace container whose sub-repos are untracked.' },
     baseBranch: { type: 'string' as const, description: 'Base branch to cut the new worktree from (default main).' },
     branch: { type: 'string' as const, description: 'Semantic feature branch starting with feat- (kebab-case, e.g. feat-dsh-manager-xxx).' },
     mergeTarget: { type: 'string' as const, description: 'Local integration target branch declared by that repo rules (e.g. test for dsh-plugins, or omit if PR-only).' },
@@ -766,6 +766,14 @@ export class DshManagerSteward extends TypertRemoteService {
     }
     if (pick === undefined || pick.none === true || pick.flowId === undefined) {
       // Single-step generic fallback when no configured flow matches.
+      const ticket = this.ctx.dshManagerBoard.ticketRecord(ticketId)
+      const waitingOn = ticket === undefined
+        ? []
+        : unresolvedDependencies(this.ctx.dshManagerBoard.ticketRecords(), ticket)
+      if (waitingOn.length > 0) {
+        this.note('eval-decision', `waiting (${waitingOn.length} dep) · single-step fallback · ${ticketId}`, routePromptId)
+        return
+      }
       this.note('eval-decision', `route → single-step fallback · ${ticketId}`, routePromptId)
       await this.ctx.dshManagerExecutor.dispatchTicket({ ticketId })
       return

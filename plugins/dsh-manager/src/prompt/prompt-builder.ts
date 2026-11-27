@@ -5,11 +5,43 @@
  */
 import type { TicketRecord, TicketWorktreePlan } from '../board-domain.ts'
 import type { DispatchPromptRecord, DispatchPromptSectionRecord } from '../dispatch/dispatch-core.ts'
-import { formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from '../dispatch/landing-discovery.ts'
 import { formatSkillPromptLines, type DiscoveredSkill } from '../dispatch/workspace-skills.ts'
 import type { FlowDef, FlowStepDef } from '../flow/flow-ir.ts'
-import type { ProjectFactsSnapshot } from './project-facts.ts'
 
+/** Hard character budget for one dispatch prompt (built-in executor and external CLI). */
+export const MAX_DISPATCH_PROMPT_CHARS = 8_000
+
+/** Coarse per-section attribution carried by {@link PromptBudgetExceededError}. */
+export interface PromptSectionSize {
+  readonly id: string
+  readonly chars: number
+}
+
+/**
+ * Raised when a dispatch prompt exceeds {@link MAX_DISPATCH_PROMPT_CHARS}.
+ * Dispatch must fail loudly instead of silently truncating: a truncated prompt
+ * loses its locked tool contracts and the executor then improvises.
+ */
+export class PromptBudgetExceededError extends Error {
+  readonly chars: number
+  readonly limit: number
+  readonly sectionSizes: readonly PromptSectionSize[]
+
+  constructor(chars: number, sectionSizes: readonly PromptSectionSize[]) {
+    const largest = [...sectionSizes]
+      .sort((left, right) => right.chars - left.chars)
+      .slice(0, 4)
+      .map(entry => `${entry.id}=${entry.chars}`)
+      .join(', ')
+    super(`dispatch prompt is ${chars} chars, over the ${MAX_DISPATCH_PROMPT_CHARS}-char budget (largest sections: ${largest})`)
+    this.name = 'PromptBudgetExceededError'
+    this.chars = chars
+    this.limit = MAX_DISPATCH_PROMPT_CHARS
+    this.sectionSizes = sectionSizes
+  }
+}
+
+/** Steward-turn prompt cap (bytes); executor prompts use {@link MAX_DISPATCH_PROMPT_CHARS}. */
 export const MAX_RENDERED_PROMPT_BYTES = 65_536
 
 export function truncateUtf8Bytes(text: string, maxBytes: number): { readonly text: string; readonly truncated: boolean } {
@@ -36,13 +68,60 @@ export interface ExecutorPromptInput {
   readonly scratchDir?: string
   readonly readOnly: boolean
   readonly worktree?: TicketWorktreePlan
-  readonly landingFacts?: ProjectLandingFacts
-  readonly projectFacts?: ProjectFactsSnapshot
+  /** Absolute path of the repo instruction file to point at (never its body). */
+  readonly repoRulesPath?: string
+  /**
+   * Absolute path of the ticket's align card. When it exists the card carries the
+   * scope and the slices, so the prompt only points at it instead of restating them.
+   */
+  readonly alignCardPath?: string
   readonly handoffLines?: readonly string[]
   readonly upstreamLines?: readonly string[]
   readonly answeredLines?: readonly string[]
   readonly reworkLines?: readonly string[]
   readonly templateRevision: number
+}
+
+/**
+ * Fixed heading for each section id (undefined = the ticket line itself).
+ * Headings are Chinese because the whole skeleton is Chinese; ticket text
+ * (title, acceptance gates, human turns) stays verbatim in its own language.
+ */
+const SECTION_HEADINGS: Readonly<Record<string, string | undefined>> = {
+  identity: undefined,
+  mandate: '任务',
+  handoff: '上下文',
+  step: '流程',
+  upstream: '上游产出',
+  answers: '人类回答',
+  skills: '技能',
+  worktree: '环境',
+  artifacts: '环境',
+  repoRules: '约束',
+  scope: '约束',
+  report: '工具契约',
+  ask: '工具契约',
+  approval: '工具契约',
+  deliver: '工具契约',
+  headless: '工具契约',
+  rework: '返工要求',
+}
+
+/**
+ * Render sections under their headings, keeping section ids intact for the
+ * dispatch snapshot (TicketDetail, budget attribution, tests).
+ */
+export function renderSectionBlocks(sections: readonly DispatchPromptSectionRecord[]): string {
+  const groups: { heading: string | undefined; texts: string[] }[] = []
+  for (const section of sections) {
+    const heading = SECTION_HEADINGS[section.id]
+    const last = groups[groups.length - 1]
+    if (last !== undefined && last.heading === heading) last.texts.push(section.text)
+    else groups.push({ heading, texts: [section.text] })
+  }
+  return groups
+    .map(group => group.heading === undefined ? group.texts.join('\n') : `## ${group.heading}\n${group.texts.join('\n')}`)
+    .join('\n\n')
 }
 
 function buildSection(id: string, text: string, locked: boolean): DispatchPromptSectionRecord {
@@ -51,15 +130,15 @@ function buildSection(id: string, text: string, locked: boolean): DispatchPrompt
 
 function worktreeContextLine(worktree: TicketWorktreePlan | undefined): string | undefined {
   if (worktree === undefined) return undefined
-  if (worktree.mode === 'in-place') return 'Workspace mode: in-place (work directly in the target directory without creating a git worktree).'
-  if (worktree.mode === 'none') return 'Workspace mode: read-only inspection (no git worktree).'
+  if (worktree.mode === 'in-place') return '作业模式：就地（in-place），直接在目标目录改，不建工作树。'
+  if (worktree.mode === 'none') return '作业模式：只读检查，不建工作树。'
   const parts = [
     worktree.repoRoot === undefined ? undefined : `repo=${worktree.repoRoot}`,
     worktree.baseBranch === undefined ? undefined : `base=${worktree.baseBranch}`,
     worktree.branch === undefined ? undefined : `branch=${worktree.branch}`,
     worktree.mergeTarget === undefined ? undefined : `mergeTarget=${worktree.mergeTarget}`,
   ].filter((v): v is string => v !== undefined)
-  return parts.length === 0 ? undefined : `Worktree plan: ${parts.join(', ')}.`
+  return parts.length === 0 ? undefined : `工作树：${parts.join(', ')}`
 }
 
 /** Build the executor or external-cli prompt and its persisted snapshot record. */
@@ -75,18 +154,14 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   }
 
   const isExternal = input.turnId === 'external-cli'
-  add('identity', [
-    isExternal
-      ? `Ticket ${input.ticket.id}: ${input.ticket.title}.`
-      : `You are the executor dispatched for ticket ${input.ticket.id}: ${input.ticket.title}.`,
-  ])
+  add('identity', [`工单 ${input.ticket.id}：${input.ticket.title}`])
 
-  if (input.ticket.mandate !== undefined) {
-    add('mandate', [
-      isExternal
-        ? `Mandate scope: ${input.ticket.mandate.scope} (strength ${input.ticket.mandate.strength}).`
-        : `Your mandate covers ${input.ticket.mandate.scope} (strength ${input.ticket.mandate.strength}).`,
-    ])
+  if (input.alignCardPath !== undefined) {
+    // The align card already holds scope, behaviours and slices: restating the
+    // mandate in the prompt duplicates it and pushes the budget.
+    add('mandate', [`按 ${input.alignCardPath} 的顺序执行；下方编号门禁即完成标准。`])
+  } else if (input.ticket.mandate !== undefined) {
+    add('mandate', [`范围：${input.ticket.mandate.scope}（${input.ticket.mandate.strength}）`])
   }
 
   add('handoff', input.handoffLines ?? [])
@@ -95,18 +170,18 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
     const idx = (input.stepIndex ?? 0) + 1
     const total = input.stepCount ?? input.flow.steps.length
     add('step', [
-      `Flow "${input.flow.name}" — Step ${idx}/${total}: "${input.step.name}".`,
-      input.step.goal !== undefined && input.step.goal !== '' ? `Step goal: ${input.step.goal}` : undefined,
-      input.step.skills.length > 0 ? `Mounted skills: ${input.step.skills.join(', ')}.` : undefined,
+      `流程「${input.flow.name}」第 ${idx}/${total} 步：「${input.step.name}」`,
+      input.step.goal !== undefined && input.step.goal !== '' ? `本步目标：${input.step.goal}` : undefined,
+      input.step.skills.length > 0 ? `挂载技能：${input.step.skills.join('、')}` : undefined,
     ])
   }
 
   add('upstream', (input.upstreamLines ?? []).length > 0
-    ? ['Upstream step outputs:', ...(input.upstreamLines ?? [])]
+    ? ['上游产出：', ...(input.upstreamLines ?? [])]
     : [])
 
   add('answers', (input.answeredLines ?? []).length > 0
-    ? ['Recent human answers / confirmations for this ticket:', ...(input.answeredLines ?? [])]
+    ? ['人类回答与确认：', ...(input.answeredLines ?? [])]
     : [])
 
   const mountedSkills = input.step?.skills ?? []
@@ -116,62 +191,56 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   const wtLine = worktreeContextLine(input.worktree)
   add('worktree', wtLine === undefined ? [] : [wtLine])
 
-  if (input.projectFacts?.agentsMd !== undefined) {
-    add('projectIndex', [`Project instructions (${input.projectFacts.root}):\n${input.projectFacts.agentsMd}`])
-  }
-
-  if (input.landingFacts !== undefined) {
-    add('landing', formatLandingDiscoveryPromptLines(input.landingFacts))
-  }
-
   if (input.scratchDir !== undefined) {
     add('artifacts', [
-      `Task scratch directory (store intermediate artifacts here, never pollute ${input.cwd}): ${input.scratchDir}`,
-      `If ${input.scratchDir}/align-card.md, ${input.scratchDir}/design.md, or ${input.scratchDir}/prototype/ exists, read them before making assumptions about boundaries or UI layouts.`,
+      `产出目录：${input.scratchDir}（只放过程产物，不要写进仓库）。`,
       input.readOnly
-        ? `Read-only step: do NOT modify repository files in ${input.cwd}. Record review/verification findings in ${input.scratchDir}/review-report.md and test output in ${input.scratchDir}/test-report.log.`
-        : `If ${input.scratchDir}/review-report.md or ${input.scratchDir}/test-report.log exists from an earlier rework, read it first and address every open finding before reporting ready.`,
+        ? `只读模式：把结论写进 ${input.scratchDir}/review-report.md 与 ${input.scratchDir}/test-report.log。`
+        : `若目录里已有 review-report.md 或 test-report.log，ready 前逐条处理未关闭项。`,
     ])
+  }
+
+  if (input.repoRulesPath !== undefined) {
+    // The agent reads its own repo rules: harness/Claude/Codex inject cwd AGENTS.md,
+    // so inlining the body only duplicates it and burns the prompt budget.
+    add('repoRules', [`仓库规则：动手前读 ${input.repoRulesPath}（正文不在这里重复）。`])
   }
 
   // Locked deterministic boundary & tool contracts.
   const mapped = input.projectId !== undefined
   const scopeText = !mapped
-    ? 'This ticket has no mapped project: analyze read-only; do not write or modify any files.'
+    ? '未映射项目：只分析，不修改文件。'
     : input.readOnly
-      ? `This ticket is mapped to project ${input.projectId}. Inspect ${input.cwd} strictly read-only against tracked files.${input.scratchDir !== undefined ? ` Write review/verification artifacts only inside ${input.scratchDir}.` : ''}`
-      : `This ticket is mapped to project ${input.projectId}. Work in ${input.cwd}: edit files and run checks there; local edits and checks are pre-approved, external actions are not.`
+      ? `在 ${input.cwd} 内只读作业，不修改任何被跟踪文件。`
+      : `在 ${input.cwd} 内作业；本地编辑与自测已授权，外部动作需用户批准。`
   add('scope', [scopeText], true)
 
   if (!isExternal) {
-    add('report', [
-      'Report through the submit_report tool: progress while working, waiting when input is pending, blocked when stuck, failed when the work cannot be done, not-needed when nothing is required, ready when the work is complete.',
-    ], true)
-    add('ask', [
-      'When the work needs the user\'s input, ask through the ask_user tool with a concrete question and end your turn; the answer arrives as your next message.',
-    ], true)
+    add('report', ['submit_report：progress / waiting / blocked / failed / not-needed / ready'], true)
+    add('ask', ['ask_user：提出一个具体问题后结束本轮。'], true)
     add('approval', [
-      'External writes & repository landing actions (post_mr_comment, set_jira_status, local_merge_branch, push_branch, create_mr_or_pr) wait for the user\'s approval before executing — use check_branch_rebase first when landing git changes.',
+      '外部写与落地（local_merge_branch、push_branch、create_mr_or_pr 等）需用户批准；落地前先跑 check_branch_rebase。',
     ], true)
-    add('deliver', [
-      'Declare final deliverable files with the present tool before reporting ready.',
-    ], true)
+    add('deliver', ['present：ready 前先声明交付物。'], true)
   } else {
     add('headless', [
-      'You are running in non-interactive headless CLI mode: do NOT call interactive ask_question or ask_user tools. Summarize results and any open decisions concisely in your final Markdown output.',
+      '非交互 headless CLI 模式：不要调用 ask_question / ask_user 等交互工具；把结果与待决事项写进最终 Markdown 回复。',
     ], true)
   }
 
   add('rework', input.reworkLines ?? [])
 
-  const rawText = sections.map(s => s.text).join('\n\n')
-  const capped = truncateUtf8Bytes(rawText, MAX_RENDERED_PROMPT_BYTES)
+  const sectionSizes: PromptSectionSize[] = sections.map(section => ({ id: section.id, chars: section.text.length }))
+  const rawText = renderSectionBlocks(sections)
+  if (rawText.length > MAX_DISPATCH_PROMPT_CHARS) {
+    throw new PromptBudgetExceededError(rawText.length, sectionSizes)
+  }
   return {
-    text: capped.text,
+    text: rawText,
     record: {
       turnId: input.turnId,
-      text: capped.text,
-      truncated: capped.truncated,
+      text: rawText,
+      truncated: false,
       sections,
       templateRevision: input.templateRevision,
       renderedAt: Date.now(),

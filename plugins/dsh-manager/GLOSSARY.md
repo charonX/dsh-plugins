@@ -171,7 +171,11 @@ _Avoid_: 静态项目配置表、自动强推 main、跳过冲突恢复
 ## 提示词拼装与项目事实
 
 **Prompt Builder（极简提示词拼装器）**:
-`src/prompt/prompt-builder.ts`：负责组装执行器与管家轮次提示词，将当前步骤挂载的 `SKILL.md` 方法论与可用技能清单置前，并保留系统确定性的只读契约段（`scope`、`report`、`ask`、`approval`、`deliver`）。不再提供三级可视化段落覆盖。
+`src/prompt/prompt-builder.ts`：负责组装执行器与管家轮次提示词，将当前步骤挂载的 `SKILL.md` 方法论与可用技能清单置前，并保留系统确定性的只读契约段（`scope`、`report`、`ask`、`approval`、`deliver`）。不再提供三级可视化段落覆盖；渲染版式见「提示词版式」。
+
+**提示词版式（Prompt Layout）**:
+派工提示词按固定中文标题分组渲染（`## 任务` / `## 上下文` / `## 流程` / `## 上游产出` / `## 人类回答` / `## 技能` / `## 环境` / `## 约束` / `## 返工要求` / `## 工具契约`），顺序固定、同标题段落连续；骨架（标题、说明句、契约句）用中文，工单标题/mandate/完成门禁/人类发言保留原文不翻译，工具名与字段名保持英文标识符。唯一入口 `renderSectionBlocks`，section id 不变。
+_Avoid_: 平铺无标题的段落、把工单原文译成英文、给标题加编号
 _Avoid_: Prompt Studio 三级模板引擎
 
 **契约段（Locked Section）**:
@@ -179,8 +183,16 @@ _Avoid_: Prompt Studio 三级模板引擎
 _Avoid_: 可配置提示词块
 
 **项目事实（Project Facts）**:
-派工时直接从目标项目目录与 `workspaceRegistry` 动态读取的 `AGENTS.md` / `CLAUDE.md`、`docs/git-flow.md`、`docs/verify/README.md`、可用技能列表与落地模式，保证 Flow 配置零仓库硬编码。
-_Avoid_: 静态项目片段文件
+派工时直接从目标项目目录与 `workspaceRegistry` 动态探测的仓库布局、目标子仓、`docs/git-flow.md` 摘要与落地模式，保证 Flow 配置零仓库硬编码。仓库规则文档（`AGENTS.md` / `CLAUDE.md` / `docs/verify/README.md`）**不再内联正文**，只保留一行 `Repo rules: read <path>` 指针——执行器自身的 agent 运行时已注入当前工作区规则，内联等于同一份正文重复多次。
+_Avoid_: 静态项目片段文件、把 AGENTS.md 全文拼进提示词
+
+**提示词预算（Prompt Budget）**:
+派工提示词（executor 与 external-cli 两种渲染路径）的硬上限 `MAX_DISPATCH_PROMPT_CHARS = 8000` 字符，按段落统计后校验：超限即抛 `PromptBudgetExceededError`（带最大段落明细），由执行器写一条 failed 汇报并开一条 attention，绝不静默截断。管家轮次提示词仍用 `MAX_RENDERED_PROMPT_BYTES` 字节截断，两者互不影响。
+_Avoid_: 静默截断、按字节估算字符预算
+
+**完成门禁（Acceptance Gate）**:
+`create_ticket` / `revise_ticket` 写入的 3–5 条命令级或实跑级检查，用来直接判定工单是否完成（构建/测试命令、一次真实端到端运行及其证据路径）。是行为契约的最小持久副本（align card 在 `scratch/` 会被清理），不是实现清单；实现步骤写在 `mandate.scope`，行为用例留在 align card。
+_Avoid_: 实现步骤清单、验收用例全集
 
 **续做（Continuation）**:
 把一句话追加到一张工单的执行会话里，而不是新开工单。运行中的工单插进当前轮或排到下一轮；已结束的工单先拉回 `todo`，再 `resume` 原 `Executor Session`。

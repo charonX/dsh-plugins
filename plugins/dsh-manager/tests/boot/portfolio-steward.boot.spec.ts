@@ -135,7 +135,7 @@ class PortfolioAdapter extends LlmAdapter {
       }])) yield c
       return
     }
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('工单 ticket-')) {
       for (const c of toolCallsResponse([{
         name: 'submit_report',
         args: { kind: 'ready', message: 'implemented after dependency settled' },

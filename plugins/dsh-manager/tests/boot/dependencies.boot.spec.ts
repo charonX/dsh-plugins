@@ -88,7 +88,7 @@ class ReadyAdapter extends LlmAdapter {
       for (const c of textResponse('Title')) yield c
       return
     }
-    if (last.role === 'user' && tail.includes('executor dispatched for ticket')) {
+    if (last.role === 'user' && tail.includes('工单 ticket-')) {
       this.dispatchedPrompts.push(tail)
       for (const c of toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'finished stage cleanly' } }])) yield c
       return
@@ -190,6 +190,28 @@ test('blocks dependent tickets until prerequisite ends or dependency is manually
     await vi.waitFor(async () => {
       const detailC = await ctx.dshManagerExecutor.ticketDetail({ ticketId: ticketC.id })
       expect(detailC.dispatches.some(d => d.outcome === 'ready')).toBe(true)
+    }, { timeout: 20_000 })
+
+    // Flow-less (single-step fallback) tickets with dependsOn must also wake
+    // when their prerequisite ends or dependencies are cleared.
+    const directRoot = await ctx.dshManagerBoard.mintDirectTicket({
+      title: 'Flowless root task',
+      scope: 'root step',
+    }, now + 10)
+    const directChild = await ctx.dshManagerBoard.mintDirectTicket({
+      title: 'Flowless child task',
+      scope: 'dependent single-step fallback',
+      dependsOn: [directRoot.id],
+    }, now + 11)
+    await ctx.dshManagerExecutor.dispatchTicket({ ticketId: directRoot.id })
+    await vi.waitFor(async () => {
+      const detailRoot = await ctx.dshManagerExecutor.ticketDetail({ ticketId: directRoot.id })
+      expect(detailRoot.dispatches[0]?.outcome).toBe('ready')
+    }, { timeout: 20_000 })
+    await ctx.dshManagerBoard.finishTicket(directRoot.id, Date.now())
+    await vi.waitFor(async () => {
+      const detailChild = await ctx.dshManagerExecutor.ticketDetail({ ticketId: directChild.id })
+      expect(detailChild.dispatches.some(d => d.outcome === 'ready')).toBe(true)
     }, { timeout: 20_000 })
   } finally {
     await ctx.fiber.dispose()

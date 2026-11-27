@@ -19,8 +19,8 @@ import type {
   WorkspaceGitStatus,
 } from './types.ts'
 
-export const externalAgentIdSchema = z.enum(['agy', 'claude-code', 'pi', 'codex'])
-export const sessionAgentIdSchema = z.enum(['native', 'agy', 'claude-code', 'pi', 'codex'])
+export const externalAgentIdSchema = z.enum(['agy', 'claude-code', 'pi', 'codex', 'cursor'])
+export const sessionAgentIdSchema = z.enum(['native', 'agy', 'claude-code', 'pi', 'codex', 'cursor'])
 
 export const selectSessionAgentInputSchema = z.object({
   sessionId: z.string().min(1),

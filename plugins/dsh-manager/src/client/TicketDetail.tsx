@@ -313,7 +313,11 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
     if (actions.onCloseTicket === undefined || closingTicket) return
     setClosingTicket(true)
     void actions.onCloseTicket({ ticketId })
-      .finally(() => setClosingTicket(false))
+      .then((ok) => { if (ok) setConfirmingClose(false) })
+      .finally(() => {
+        setClosingTicket(false)
+        setReloadSeq(seq => seq + 1)
+      })
   }
   const openDiff = (change: ChangesRef, index: number): void => {
     setOpenChange(change)
@@ -372,6 +376,24 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
                   : detail.dispatches.length > 0 ? t('board.detail.dispatch.retry') : t('board.composer.dispatch')}
               </Button>
             ) : null}
+            {detail !== undefined && detail.ticket.state !== 'ended' && actions.onCloseTicket !== undefined
+              ? (confirmingClose
+                ? (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={() => { setConfirmingClose(false) }}>
+                      {t('board.detail.ticket.cancelClose')}
+                    </Button>
+                    <Button variant="primary" size="sm" disabled={closingTicket} onClick={closeCurrentTicket}>
+                      {closingTicket ? t('board.detail.ticket.closing') : t('board.detail.ticket.confirmClose')}
+                    </Button>
+                  </>
+                )
+                : (
+                  <Button variant="outline" size="sm" onClick={() => { setConfirmingClose(true) }}>
+                    {t('board.detail.ticket.close')}
+                  </Button>
+                ))
+              : null}
             <Button variant="ghost" size="sm" onClick={() => { setReloadSeq(seq => seq + 1) }}>
               {t('board.detail.refresh')}
             </Button>
@@ -756,28 +778,6 @@ export function TicketDetailPanel({ ticketId, attentions, projects, connections,
                         : null}
                     </section>
 
-                    {detail.ticket.state !== 'ended' && actions.onCloseTicket !== undefined
-                      ? (
-                        <div className={css.detailWorktreeActions}>
-                          {confirmingClose
-                            ? (
-                              <>
-                                <Button variant="ghost" size="sm" onClick={() => { setConfirmingClose(false) }}>
-                                  {t('board.detail.ticket.cancelClose')}
-                                </Button>
-                                <Button variant="primary" size="sm" disabled={closingTicket} onClick={closeCurrentTicket}>
-                                  {closingTicket ? t('board.detail.ticket.closing') : t('board.detail.ticket.confirmClose')}
-                                </Button>
-                              </>
-                            )
-                            : (
-                              <Button variant="ghost" size="sm" onClick={() => { setConfirmingClose(true) }}>
-                                {t('board.detail.ticket.close')}
-                              </Button>
-                            )}
-                        </div>
-                      )
-                      : null}
                   </div>
                 </details>
               </div>

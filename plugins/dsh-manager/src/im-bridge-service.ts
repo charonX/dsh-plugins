@@ -12,6 +12,8 @@ import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-workspace'
 import { extractScratchTaskDirFromText } from './dispatch/scratch-artifacts.ts'
+import type { TicketWorktreePlan } from './board-domain.ts'
+import type { TicketRevisionPatch } from './ticket-revision.ts'
 import {
   defaultImSettings,
   formatNotificationForIm,
@@ -104,6 +106,7 @@ export class DshManagerIm extends TypertRemoteService {
       toolsCtx.effect(() => toolsCtx.tools.register(this.boardSummaryTool()), 'dsh-manager: register board summary tool')
       toolsCtx.effect(() => toolsCtx.tools.register(this.answerAttentionTool()), 'dsh-manager: register answer attention tool')
       toolsCtx.effect(() => toolsCtx.tools.register(this.createTicketTool()), 'dsh-manager: register create ticket tool')
+      toolsCtx.effect(() => toolsCtx.tools.register(this.reviseTicketTool()), 'dsh-manager: register revise ticket tool')
     })
   }
 
@@ -435,6 +438,70 @@ export class DshManagerIm extends TypertRemoteService {
     })
   }
 
+  private reviseTicketTool() {
+    const self = this
+    return defineTool({
+      name: 'dsh_manager_revise_ticket',
+      description: 'Rewrite the planning fields (title, mandate scope, acceptance gate, scratch dir, worktree plan) of a ticket that has NOT been dispatched yet (todo state). Use it to trim an over-long or stale dispatch prompt before it runs. It never touches running or ended tickets, and appends one "revised" event to the ticket timeline.',
+      parameters: {
+        ticketId: { type: 'string', required: true, description: 'Exact ticket id to revise.' },
+        title: { type: 'string', description: 'New short title.' },
+        scope: { type: 'string', description: 'New mandate scope: what the work covers and what it must not touch.' },
+        acceptanceCriteria: { type: 'string', description: 'New completion gate: 3-5 command-level or real-run checks that decide done. Pass an empty string to clear it.' },
+        scratchDir: { type: 'string', description: 'New shared scratch task directory (absolute path preferred).' },
+        worktreeMode: { type: 'string', enum: ['worktree', 'in-place', 'none'], description: 'Worktree mode to merge onto the plan.' },
+        repoRoot: { type: 'string', description: 'Git repository root that holds the code (the sub-repo, not an aggregate workspace).' },
+        baseBranch: { type: 'string', description: 'Base branch for the worktree.' },
+        branch: { type: 'string', description: 'Feature branch name.' },
+        mergeTarget: { type: 'string', description: 'Local integration branch this repo merges into, if any.' },
+        reason: { type: 'string', description: 'Why this revision is needed; recorded on the ticket timeline.' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean' },
+            ticketId: { type: 'string' },
+            changed: { type: 'array', items: { type: 'string' } },
+            error: { type: 'string' },
+          },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.ok
+            ? `revised ${String(value.ticketId)} (${(value.changed ?? []).join(', ')})`
+            : `failed: ${String(value.error)}`,
+        }],
+      },
+      async execute(args) {
+        const ticketId = String(args.ticketId ?? '').trim()
+        if (ticketId === '') return { ok: false, error: 'ticketId is required' }
+        const worktree: Partial<TicketWorktreePlan> = {
+          ...(args.worktreeMode === undefined ? {} : { mode: args.worktreeMode }),
+          ...(typeof args.repoRoot === 'string' && args.repoRoot.trim() !== '' ? { repoRoot: args.repoRoot.trim() } : {}),
+          ...(typeof args.baseBranch === 'string' && args.baseBranch.trim() !== '' ? { baseBranch: args.baseBranch.trim() } : {}),
+          ...(typeof args.branch === 'string' && args.branch.trim() !== '' ? { branch: args.branch.trim() } : {}),
+          ...(typeof args.mergeTarget === 'string' && args.mergeTarget.trim() !== '' ? { mergeTarget: args.mergeTarget.trim() } : {}),
+        }
+        const patch: TicketRevisionPatch = {
+          ...(typeof args.title === 'string' ? { title: args.title } : {}),
+          ...(typeof args.scope === 'string' ? { mandateScope: args.scope } : {}),
+          ...(typeof args.acceptanceCriteria === 'string' ? { acceptanceCriteria: args.acceptanceCriteria } : {}),
+          ...(typeof args.scratchDir === 'string' && args.scratchDir.trim() !== '' ? { scratchDir: args.scratchDir } : {}),
+          ...(Object.keys(worktree).length === 0 ? {} : { worktree }),
+        }
+        const reason = typeof args.reason === 'string' && args.reason.trim() !== '' ? args.reason.trim() : undefined
+        const result = await self.ctx.dshManagerBoard.reviseTicket(ticketId, patch, {
+          ...(reason === undefined ? {} : { reason }),
+          author: 'user',
+        })
+        if (!result.ok) return { ok: false, ticketId, error: result.reason }
+        return { ok: true, ticketId, changed: [...result.changed] }
+      },
+    })
+  }
+
   private createTicketTool() {
     const self = this
     return defineTool({
@@ -444,7 +511,7 @@ export class DshManagerIm extends TypertRemoteService {
         title: { type: 'string', required: true, description: 'Short descriptive title of the confirmed task or bug.' },
         description: { type: 'string', required: true, description: 'Concise requirement summary, context, or reproduction info.' },
         scope: { type: 'string', description: 'Explicit mandate scope/boundaries agreed with the user; defaults to description.' },
-        acceptanceCriteria: { type: 'string', description: 'Agreed acceptance criteria or checks to run before reporting done.' },
+        acceptanceCriteria: { type: 'string', description: 'Completion gate agreed with the user: 3-5 command-level or real-run checks that decide done (e.g. build/test commands, one real end-to-end run with its evidence path). Not an implementation checklist; behavioural acceptance stays in the align card.' },
         scratchDir: { type: 'string', description: 'Optional shared scratch task directory path (e.g. home-repos/scratch/tasks/<slug>).' },
         projectId: { type: 'string', description: 'Optional target DSH project id; auto-resolved from the active workspace when omitted.' },
         dependsOn: {

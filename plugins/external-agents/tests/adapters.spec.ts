@@ -8,6 +8,7 @@ import {
   AgyAdapter,
   ClaudeCodeAdapter,
   CodexAdapter,
+  CursorAdapter,
   ExternalResumeRejectedError,
   PiAdapter,
   buildAcpPromptBlocks,
@@ -29,11 +30,15 @@ import {
   parseClaudeInitResponse,
   parseClaudeLine,
   parseCodexLine,
+  parseCursorAuthStatus,
+  parseCursorListModelsOutput,
+  parseCursorModelId,
   parsePiCommandsResponse,
   parsePiLine,
   parsePiListModelsOutput,
   parsePiListModelsWithContext,
   resolveAgentExecutable,
+  resolveCursorModelAndEffort,
   sanitizeExternalCliEnv,
 } from '../src/adapters/index.ts'
 import {
@@ -1528,5 +1533,433 @@ describe('external agent stream parsers and probes', () => {
     expect(acc.merge(u1!)).toMatchObject({ inputTokens: 600, outputTokens: 200, cacheReadTokens: 400 })
     const u2 = acc.merge({ inputTokens: 600, outputTokens: 250, cacheReadTokens: 400, isTurnTotal: true })
     expect(u2).toMatchObject({ inputTokens: 600, outputTokens: 250, cacheReadTokens: 400 })
+  })
+
+  it('supports CursorAdapter probe (agent/cursor-agent fallback, status, --list-models, parameterized ACP models), permissions, MCP, and session/load', async () => {
+    expect(parseCursorAuthStatus('\u001b[32m✓\u001b[39m Logged in as private@example.com\n', 0)).toEqual({
+      authenticated: true,
+      method: 'cursor_login',
+      summary: 'Logged in',
+    })
+    expect(parseCursorAuthStatus("Not logged in. Run 'agent login' first.\n", 1)).toEqual({
+      authenticated: false,
+      method: 'cursor_login',
+      summary: 'Not logged in',
+    })
+
+    expect(parseCursorModelId('claude-opus-5-5[context=300k,effort=medium,fast=false]')).toEqual({
+      rawId: 'claude-opus-5-5[context=300k,effort=medium,fast=false]',
+      baseId: 'claude-opus-5-5',
+      params: { context: '300k', effort: 'medium', fast: 'false' },
+      effort: 'medium',
+      contextWindow: 300_000,
+      fast: false,
+    })
+    expect(parseCursorModelId('gemini-4-neon[context=300k,reasoning_effort=high]')).toMatchObject({
+      baseId: 'gemini-4-neon',
+      effort: 'high',
+      contextWindow: 300_000,
+    })
+
+    expect(parseCursorListModelsOutput(
+      'Available models\n\nauto - Auto (current, default)\ngpt-5.3-codex-high - Codex 5.3 High\ngrok-4.7-low - Grok 4.7 Low Fast\u200b\u200b\n',
+    )).toEqual([
+      { id: 'default', name: 'Auto (Cursor default)' },
+      { id: 'gpt-5.3-codex-high', name: 'Codex 5.3 High' },
+      { id: 'grok-4.7-low', name: 'Grok 4.7 Low Fast' },
+    ])
+
+    const advertisedSet = new Set([
+      'default[]',
+      'claude-opus-5-5[context=300k,effort=medium,fast=false]',
+      'gpt-5.3-codex[reasoning=medium,fast=false]',
+      'gemini-4-hydrogen[context=300k,reasoning_effort=high]',
+    ])
+    expect(resolveCursorModelAndEffort('default', undefined, advertisedSet)).toEqual({ targetModelId: 'default[]' })
+    expect(resolveCursorModelAndEffort('claude-opus-5-5', 'medium', advertisedSet)).toEqual({
+      targetModelId: 'claude-opus-5-5[context=300k,effort=medium,fast=false]',
+    })
+    expect(resolveCursorModelAndEffort('gpt-5.3-codex-medium', undefined, advertisedSet)).toEqual({
+      targetModelId: 'gpt-5.3-codex[reasoning=medium,fast=false]',
+    })
+    expect(resolveCursorModelAndEffort('nonexistent-model', undefined, advertisedSet)).toEqual({
+      unknownModel: 'nonexistent-model',
+    })
+
+    // Unavailable when neither `agent` nor `cursor-agent` exists
+    const missingSubprocess = {
+      resolveExecutable: async (cmd: string) => {
+        throw new Error(`ENOENT: ${cmd} not found`)
+      },
+      spawn: () => {
+        throw new Error('should not spawn')
+      },
+    } as unknown as SubprocessRuntime
+    const cursorMissing = await new CursorAdapter().probe(missingSubprocess)
+    expect(cursorMissing.available).toBe(false)
+    expect(cursorMissing.command).toBe('agent')
+    expect(cursorMissing.permissionModes.map(m => m.id)).toEqual(['agent', 'plan', 'ask'])
+
+    // Falls back to `cursor-agent`, probes version + status + --list-models + ACP catalog, and runs turns
+    const seenConfigSets: Array<{ configId: string; value: string }> = []
+    const seenModes: string[] = []
+    const seenMcpServers: unknown[] = []
+    const planOutcomes: Record<string, unknown> = {}
+    const agentOutcomes: Record<string, unknown> = {}
+    const serverCfg = {
+      name: 'dsh-manager',
+      url: 'http://127.0.0.1:41234/mcp',
+      headers: { Authorization: 'Bearer tok-cursor' },
+      tools: [],
+    } as const
+
+    const fakeSubprocess = {
+      resolveExecutable: async (cmd: string) => {
+        if (cmd === 'cursor-agent') return '/Users/test/.local/bin/cursor-agent'
+        throw new Error('ENOENT: agent not found')
+      },
+      spawn: (opts: { argv: readonly string[]; cwd?: string }) => {
+        const args = opts.argv.slice(1)
+        const clientToAgent = new PassThrough()
+        const agentToClient = new PassThrough()
+        let doneResolve!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+        const done = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+          doneResolve = r
+        })
+
+        if (args[0] === '--version') {
+          queueMicrotask(() => {
+            agentToClient.end('2026.11.22-e9042b2\n')
+            doneResolve({ exitCode: 0, signal: null, stdout: '2026.11.22-e9042b2\n', stderr: '' })
+          })
+          return {
+            stdin: clientToAgent,
+            stdout: agentToClient,
+            done,
+            collected: { stdout: { readFrom: () => ({ text: '2026.11.22-e9042b2\n' }) }, stderr: { readFrom: () => ({ text: '' }) } },
+            terminate: async () => {},
+          } as unknown as SubprocessHandle
+        }
+
+        if (args[0] === 'status') {
+          const text = '✓ Logged in as hidden@example.com\n'
+          queueMicrotask(() => {
+            agentToClient.end(text)
+            doneResolve({ exitCode: 0, signal: null, stdout: text, stderr: '' })
+          })
+          return {
+            stdin: clientToAgent,
+            stdout: agentToClient,
+            done,
+            collected: { stdout: { readFrom: () => ({ text }) }, stderr: { readFrom: () => ({ text: '' }) } },
+            terminate: async () => {},
+          } as unknown as SubprocessHandle
+        }
+
+        if (args[0] === '--list-models') {
+          const text = 'Available models\n\nauto - Auto (current, default)\nclaude-opus-5-5 - Claude Opus 5.5\n'
+          queueMicrotask(() => {
+            agentToClient.end(text)
+            doneResolve({ exitCode: 0, signal: null, stdout: text, stderr: '' })
+          })
+          return {
+            stdin: clientToAgent,
+            stdout: agentToClient,
+            done,
+            collected: { stdout: { readFrom: () => ({ text }) }, stderr: { readFrom: () => ({ text: '' }) } },
+            terminate: async () => {},
+          } as unknown as SubprocessHandle
+        }
+
+        // ACP stdio mode (`cursor-agent acp`)
+        let buf = ''
+        let currentMode = 'agent'
+        let promptReqId: number | string | undefined
+        clientToAgent.on('data', (chunk: Buffer) => {
+          buf += chunk.toString('utf8')
+          let nl = buf.indexOf('\n')
+          while (nl !== -1) {
+            const line = buf.slice(0, nl).trim()
+            buf = buf.slice(nl + 1)
+            if (line !== '') {
+              const msg = JSON.parse(line) as { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown }
+              if (msg.method === 'initialize') {
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  result: {
+                    protocolVersion: 1,
+                    agentCapabilities: { loadSession: true, mcpCapabilities: { http: true }, promptCapabilities: { image: true } },
+                  },
+                })}\n`)
+              } else if (msg.method === 'session/new') {
+                seenMcpServers.push(msg.params?.mcpServers)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  id: msg.id,
+                  result: {
+                    sessionId: 'cursor-sess-1',
+                    modes: {
+                      currentModeId: 'agent',
+                      availableModes: [
+                        { id: 'agent', name: 'Agent' },
+                        { id: 'plan', name: 'Plan' },
+                        { id: 'ask', name: 'Ask' },
+                      ],
+                    },
+                    models: {
+                      currentModelId: 'default[]',
+                      availableModels: [
+                        { modelId: 'default[]', name: 'Auto' },
+                        { modelId: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'claude-opus-5-5' },
+                      ],
+                    },
+                    configOptions: [
+                      {
+                        id: 'model',
+                        name: 'Model',
+                        category: 'model',
+                        type: 'select',
+                        currentValue: 'default[]',
+                        options: [
+                          { value: 'default[]', name: 'Auto' },
+                          { value: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'claude-opus-5-5' },
+                        ],
+                      },
+                    ],
+                  },
+                })}\n`)
+                setTimeout(() => {
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'session/update',
+                    params: {
+                      sessionId: 'cursor-sess-1',
+                      update: {
+                        sessionUpdate: 'available_commands_update',
+                        availableCommands: [{ name: 'align', description: 'Align design' }],
+                      },
+                    },
+                  })}\n`)
+                }, 15)
+              } else if (msg.method === 'session/load') {
+                const sid = msg.params?.sessionId
+                if (sid === 'cursor-dead') {
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: msg.id,
+                    error: { code: -32602, message: 'Invalid params', data: { message: 'Session "cursor-dead" not found' } },
+                  })}\n`)
+                } else {
+                  seenMcpServers.push(msg.params?.mcpServers)
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: msg.id,
+                    result: {
+                      models: {
+                        currentModelId: 'default[]',
+                        availableModels: [
+                          { modelId: 'default[]', name: 'Auto' },
+                          { modelId: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'claude-opus-5-5' },
+                        ],
+                      },
+                    },
+                  })}\n`)
+                }
+              } else if (msg.method === 'session/set_mode') {
+                currentMode = String(msg.params?.modeId ?? 'agent')
+                seenModes.push(currentMode)
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+              } else if (msg.method === 'session/set_config_option') {
+                const cfgId = String(msg.params?.configId ?? '')
+                const val = String(msg.params?.value ?? '')
+                seenConfigSets.push({ configId: cfgId, value: val })
+                if (cfgId !== 'model') {
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: msg.id,
+                    error: { code: -32602, message: 'Invalid params', data: { message: `Unknown config option: ${cfgId}` } },
+                  })}\n`)
+                } else {
+                  agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+                }
+              } else if (msg.method === 'session/prompt') {
+                promptReqId = msg.id
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: {
+                    sessionId: 'cursor-sess-1',
+                    update: { sessionUpdate: 'session_info_update', title: 'Cursor Test' },
+                  },
+                })}\n`)
+                if (currentMode === 'plan') {
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 951,
+                    method: 'session/request_permission',
+                    params: {
+                      sessionId: 'cursor-sess-1',
+                      toolCall: {
+                        toolCallId: 'c-read',
+                        kind: 'other',
+                        title: 'dsh-manager-dsh_manager_board_summary: dsh_manager_board_summary',
+                      },
+                      options: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow' }],
+                    },
+                  })}\n`)
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 952,
+                    method: 'session/request_permission',
+                    params: {
+                      sessionId: 'cursor-sess-1',
+                      toolCall: {
+                        toolCallId: 'c-exec',
+                        kind: 'execute',
+                        title: 'Run shell command',
+                      },
+                      options: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow' }],
+                    },
+                  })}\n`)
+                } else {
+                  agentToClient.write(`${JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 953,
+                    method: 'session/request_permission',
+                    params: {
+                      sessionId: 'cursor-sess-1',
+                      toolCall: { toolCallId: 'c-edit', kind: 'edit', title: 'Edit file' },
+                      options: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow' }],
+                    },
+                  })}\n`)
+                }
+              } else if (msg.id === 951) {
+                planOutcomes.readMcp = (msg.result as { outcome?: unknown })?.outcome
+              } else if (msg.id === 952) {
+                planOutcomes.execute = (msg.result as { outcome?: unknown })?.outcome
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: {
+                    sessionId: 'cursor-sess-1',
+                    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Plan check done.' } },
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: promptReqId, result: { stopReason: 'end_turn' } })}\n`)
+              } else if (msg.id === 953) {
+                agentOutcomes.edit = (msg.result as { outcome?: unknown })?.outcome
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: {
+                    sessionId: 'cursor-sess-1',
+                    update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Agent edit done.' } },
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({
+                  jsonrpc: '2.0',
+                  method: 'session/update',
+                  params: {
+                    sessionId: 'cursor-sess-1',
+                    update: { sessionUpdate: 'session_info_update', title: 'Renamed after text' },
+                  },
+                })}\n`)
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: promptReqId, result: { stopReason: 'end_turn' } })}\n`)
+              } else if (msg.method === 'session/close') {
+                agentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+              }
+            }
+            nl = buf.indexOf('\n')
+          }
+        })
+        clientToAgent.once('finish', () => {
+          agentToClient.end()
+          doneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+        })
+        return {
+          stdin: clientToAgent,
+          stdout: agentToClient,
+          done,
+          collected: { stdout: { readFrom: () => ({ text: '' }) }, stderr: { readFrom: () => ({ text: '' }) } },
+          terminate: async () => {
+            agentToClient.end()
+            doneResolve({ exitCode: 0, signal: 'SIGTERM', stdout: '', stderr: '' })
+          },
+        } as unknown as SubprocessHandle
+      },
+    } as unknown as SubprocessRuntime
+
+    const cursor = new CursorAdapter()
+    const probed = await cursor.probe(fakeSubprocess)
+    expect(probed.available).toBe(true)
+    expect(probed.executablePath).toBe('/Users/test/.local/bin/cursor-agent')
+    expect(probed.version).toBe('2026.11.22-e9042b2')
+    expect(probed.authStatus).toEqual({ authenticated: true, method: 'cursor_login', summary: 'Logged in' })
+    expect(probed.models).toEqual([
+      { id: 'default', name: 'Auto (Cursor default)' },
+      { id: 'claude-opus-5-5[context=300k,effort=medium,fast=false]', name: 'claude-opus-5-5 (medium · 300k)' },
+    ])
+    expect(probed.modelContextWindows).toEqual({
+      'claude-opus-5-5[context=300k,effort=medium,fast=false]': 300_000,
+    })
+    expect(probed.commands).toEqual([{ name: 'align', description: 'Align design', source: 'acp' }])
+
+    // Turn 1: plan mode + MCP bridge + parameterized model + effort (no thought_level RPC!)
+    const planOutcome = await cursor.runTurn(fakeSubprocess, {
+      prompt: 'Check board in plan mode',
+      cwd: '/tmp',
+      model: 'claude-opus-5-5',
+      reasoningEffort: 'medium',
+      permissionMode: 'plan',
+      permissionPolicy: 'allow',
+      mcpServers: [serverCfg],
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    })
+    expect(planOutcome.externalSessionId).toBe('cursor-sess-1')
+    expect(planOutcome.finalText).toBe('Plan check done.')
+    expect(planOutcomes.readMcp).toEqual({ outcome: 'selected', optionId: 'allow-once' })
+    expect(planOutcomes.execute).toEqual({ outcome: 'cancelled' })
+    expect(seenModes).toContain('plan')
+    expect(seenConfigSets).toEqual([
+      { configId: 'model', value: 'claude-opus-5-5[context=300k,effort=medium,fast=false]' },
+    ])
+    expect(seenMcpServers[1]).toEqual([{
+      type: 'http',
+      name: 'dsh-manager',
+      url: 'http://127.0.0.1:41234/mcp',
+      headers: [{ name: 'Authorization', value: 'Bearer tok-cursor' }],
+    }])
+
+    // Turn 2: session/load resume in agent mode; session_info_update after text does NOT wipe finalText
+    const agentOutcome = await cursor.runTurn(fakeSubprocess, {
+      prompt: 'Resume in agent mode',
+      cwd: '/tmp',
+      model: 'default',
+      externalSessionId: 'cursor-sess-1',
+      permissionMode: 'agent',
+      permissionPolicy: 'allow',
+      mcpServers: [serverCfg],
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    })
+    expect(agentOutcome.finalText).toBe('Agent edit done.')
+    expect(agentOutcomes.edit).toEqual({ outcome: 'selected', optionId: 'allow-once' })
+    expect(seenMcpServers[2]).toEqual(seenMcpServers[1])
+
+    // Turn 3: dead session/load triggers ExternalResumeRejectedError
+    await expect(cursor.runTurn(fakeSubprocess, {
+      prompt: 'Dead session',
+      cwd: '/tmp',
+      model: 'default',
+      externalSessionId: 'cursor-dead',
+      permissionMode: 'agent',
+      permissionPolicy: 'allow',
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    })).rejects.toBeInstanceOf(ExternalResumeRejectedError)
+
+    await cursor.dispose()
   })
 })

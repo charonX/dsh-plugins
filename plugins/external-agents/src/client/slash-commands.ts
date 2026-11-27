@@ -1,7 +1,7 @@
 /**
  * Composer '/' slash-command source backed by the active third-party agent's
  * probed command catalog. Emits candidates only when the session uses an
- * external agent (`agy`, `claude-code`, `pi`, `codex`) and inserts plain
+ * external agent (`agy`, `claude-code`, `pi`, `codex`, `cursor`) and inserts plain
  * `/<command> ` text so the turn driver forwards it straight to that agent.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'

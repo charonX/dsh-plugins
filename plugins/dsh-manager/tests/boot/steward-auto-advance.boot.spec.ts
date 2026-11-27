@@ -123,7 +123,7 @@ test('compiles Playbook once (hash cache hit), runs non-git in-place knowledge f
     if (tail.includes('Route ticket ')) {
       return toolCallsResponse([{ name: 'record_route', args: { flowId: targetFlowId, rationale: 'matched compiled flow' } }])
     }
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('工单 ticket-')) {
       executorPrompts.push(tail)
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'step done' } }])
     }
@@ -226,7 +226,7 @@ test('review stage rework returns to the prior implementation stage, preserves p
       if (tail.includes('Route ticket ')) {
         return toolCallsResponse([{ name: 'record_route', args: { flowId: 'bug-flow', rationale: 'matched bug flow' } }])
       }
-      if (tail.includes('executor dispatched for ticket')) {
+      if (tail.includes('工单 ticket-')) {
         if (tail.includes('Bug Fixer')) {
           implAttempt += 1
           implPrompts.push(tail)
