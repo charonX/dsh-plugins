@@ -178,8 +178,8 @@
 }
 
 .badgeMissing {
-  border-color: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .metaGrid {

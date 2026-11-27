@@ -29,7 +29,6 @@ function fallbackQuotaFor(id: ExternalAgentId, probe: ExternalProbeResult): Agen
     return {
       status: 'unavailable',
       source: id === 'agy' ? 'active_cli' : 'passive_stream',
-      ...(probe.reason === undefined ? {} : { note: probe.reason }),
     }
   }
   if (id === 'agy') {

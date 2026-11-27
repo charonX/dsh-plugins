@@ -81,7 +81,7 @@ function QuotaSection({
           {observedText !== '' && (
             <span className={css.quotaObserved}>{t('settingsQuotaObservedAt', { time: observedText })}</span>
           )}
-          {agent.id !== 'pi' && (
+          {agent.available && agent.id !== 'pi' && (
             <button
               type="button"
               className={`${css.button} ${css.buttonSmall}`}
@@ -131,7 +131,9 @@ function QuotaSection({
         <span className={css.fieldHint}>
           {quota?.status === 'unsupported' || agent.id === 'pi'
             ? t('settingsQuotaUnsupported')
-            : quota?.note ?? (agent.id === 'agy' ? t('settingsQuotaActiveHint') : t('settingsQuotaPassiveHint'))}
+            : !agent.available
+              ? t('settingsQuotaNotInstalled')
+              : quota?.note ?? (agent.id === 'agy' ? t('settingsQuotaActiveHint') : t('settingsQuotaPassiveHint'))}
         </span>
       )}
     </div>
@@ -196,8 +198,8 @@ function AgentConfigCard({
             <span className={css.mono}>{agent.executablePath}</span>
           </span>
         )}
-        {!agent.available && agent.reason !== undefined && (
-          <span className={css.errorText}>{agent.reason}</span>
+        {!agent.available && (
+          <span className={css.fieldHint}>{t('settingsNotInstalledHint', { command: agent.command })}</span>
         )}
       </div>
 
