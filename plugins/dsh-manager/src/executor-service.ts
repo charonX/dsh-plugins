@@ -1715,7 +1715,7 @@ export class DshManagerExecutor extends TypertRemoteService {
         }
         const recent = userTurns.slice(-2).join('\n')
         if (recent !== '') {
-          lines.push('Recent user direction:', recent.slice(0, 320))
+          lines.push('最近的人类指令：', recent.slice(0, 320))
         }
       }
     }

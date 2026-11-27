@@ -58,7 +58,7 @@ function dispatchPromptText(options: GenerateOptions): string | undefined {
   const dispatched = options.messages
     .filter(message => message.role === 'user')
     .map(message => message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n'))
-    .filter(text => text.includes('submit_report: progress'))
+    .filter(text => text.includes('submit_report：progress'))
   return dispatched.at(-1)
 }
 
@@ -176,18 +176,18 @@ test('dispatch prompt stays inside the budget, points at repo rules, and lands t
     // The prompt is a pointer sheet, not an essay: an ordinary ticket stays small.
     expect(prompt.length).toBeLessThanOrEqual(2_500)
     // Repo rules are a pointer, never the body.
-    expect(prompt).toMatch(/Repo rules: read .*sample-plugin.*AGENTS\.md/)
-    expect(prompt.split('Repo rules: read ').length - 1).toBe(1)
+    expect(prompt).toMatch(/仓库规则：动手前读 .*sample-plugin.*AGENTS\.md/)
+    expect(prompt.split('仓库规则：动手前读 ').length - 1).toBe(1)
     expect(prompt).not.toContain(DOC_BODY_MARKER)
     // No whole-catalog skill dump.
     expect(prompt).not.toContain('Other available skills')
     // The worktree follows the repo the ticket named, not the workspace container.
-    expect(prompt).toMatch(/Worktree plan: repo=[^\n]*\/repos\/sample-plugin,/)
+    expect(prompt).toMatch(/工作树：repo=[^\n]*\/repos\/sample-plugin,/)
     // Artifacts resolve to a real scratch directory without doubled segments.
-    const scratchLine = prompt.split('\n').find(line => line.startsWith('Scratch: '))
+    const scratchLine = prompt.split('\n').find(line => line.startsWith('产出目录：'))
     expect(scratchLine).toBeDefined()
     expect(scratchLine).not.toContain('/home-repos/home-repos')
-    expect(scratchLine).toMatch(/\/scratch\/tasks\/sample-plugin \(artifacts only/)
+    expect(scratchLine).toMatch(/\/scratch\/tasks\/sample-plugin（只放过程产物/)
   } finally {
     await ctx.fiber.dispose()
   }

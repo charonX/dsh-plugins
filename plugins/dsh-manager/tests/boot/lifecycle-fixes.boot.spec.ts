@@ -102,7 +102,7 @@ class LifecycleAdapter extends LlmAdapter {
       }])) yield c
       return
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       this.executorPrompts.push(tail)
       // For the ask-and-resume test ticket: first dispatch asks a question and waits (no ready report);
       // resumed dispatch sees the human answer in prompt and reports ready.

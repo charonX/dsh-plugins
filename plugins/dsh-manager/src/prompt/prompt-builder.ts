@@ -82,21 +82,63 @@ export interface ExecutorPromptInput {
   readonly templateRevision: number
 }
 
+/**
+ * Fixed heading for each section id (undefined = the ticket line itself).
+ * Headings are Chinese because the whole skeleton is Chinese; ticket text
+ * (title, acceptance gates, human turns) stays verbatim in its own language.
+ */
+const SECTION_HEADINGS: Readonly<Record<string, string | undefined>> = {
+  identity: undefined,
+  mandate: '任务',
+  handoff: '上下文',
+  step: '流程',
+  upstream: '上游产出',
+  answers: '人类回答',
+  skills: '技能',
+  worktree: '环境',
+  artifacts: '环境',
+  repoRules: '约束',
+  scope: '约束',
+  report: '工具契约',
+  ask: '工具契约',
+  approval: '工具契约',
+  deliver: '工具契约',
+  headless: '工具契约',
+  rework: '返工要求',
+}
+
+/**
+ * Render sections under their headings, keeping section ids intact for the
+ * dispatch snapshot (TicketDetail, budget attribution, tests).
+ */
+export function renderSectionBlocks(sections: readonly DispatchPromptSectionRecord[]): string {
+  const groups: { heading: string | undefined; texts: string[] }[] = []
+  for (const section of sections) {
+    const heading = SECTION_HEADINGS[section.id]
+    const last = groups[groups.length - 1]
+    if (last !== undefined && last.heading === heading) last.texts.push(section.text)
+    else groups.push({ heading, texts: [section.text] })
+  }
+  return groups
+    .map(group => group.heading === undefined ? group.texts.join('\n') : `## ${group.heading}\n${group.texts.join('\n')}`)
+    .join('\n\n')
+}
+
 function buildSection(id: string, text: string, locked: boolean): DispatchPromptSectionRecord {
   return { id, text, source: 'builtin', locked }
 }
 
 function worktreeContextLine(worktree: TicketWorktreePlan | undefined): string | undefined {
   if (worktree === undefined) return undefined
-  if (worktree.mode === 'in-place') return 'Workspace mode: in-place (work directly in the target directory without creating a git worktree).'
-  if (worktree.mode === 'none') return 'Workspace mode: read-only inspection (no git worktree).'
+  if (worktree.mode === 'in-place') return '作业模式：就地（in-place），直接在目标目录改，不建工作树。'
+  if (worktree.mode === 'none') return '作业模式：只读检查，不建工作树。'
   const parts = [
     worktree.repoRoot === undefined ? undefined : `repo=${worktree.repoRoot}`,
     worktree.baseBranch === undefined ? undefined : `base=${worktree.baseBranch}`,
     worktree.branch === undefined ? undefined : `branch=${worktree.branch}`,
     worktree.mergeTarget === undefined ? undefined : `mergeTarget=${worktree.mergeTarget}`,
   ].filter((v): v is string => v !== undefined)
-  return parts.length === 0 ? undefined : `Worktree plan: ${parts.join(', ')}.`
+  return parts.length === 0 ? undefined : `工作树：${parts.join(', ')}`
 }
 
 /** Build the executor or external-cli prompt and its persisted snapshot record. */
@@ -112,14 +154,14 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   }
 
   const isExternal = input.turnId === 'external-cli'
-  add('identity', [`Ticket ${input.ticket.id}: ${input.ticket.title}.`])
+  add('identity', [`工单 ${input.ticket.id}：${input.ticket.title}`])
 
   if (input.alignCardPath !== undefined) {
     // The align card already holds scope, behaviours and slices: restating the
     // mandate in the prompt duplicates it and pushes the budget.
-    add('mandate', [`Follow ${input.alignCardPath} in order; the numbered gates below are the finish line.`])
+    add('mandate', [`按 ${input.alignCardPath} 的顺序执行；下方编号门禁即完成标准。`])
   } else if (input.ticket.mandate !== undefined) {
-    add('mandate', [`Scope: ${input.ticket.mandate.scope} (${input.ticket.mandate.strength}).`])
+    add('mandate', [`范围：${input.ticket.mandate.scope}（${input.ticket.mandate.strength}）`])
   }
 
   add('handoff', input.handoffLines ?? [])
@@ -128,18 +170,18 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
     const idx = (input.stepIndex ?? 0) + 1
     const total = input.stepCount ?? input.flow.steps.length
     add('step', [
-      `Flow "${input.flow.name}" — Step ${idx}/${total}: "${input.step.name}".`,
-      input.step.goal !== undefined && input.step.goal !== '' ? `Step goal: ${input.step.goal}` : undefined,
-      input.step.skills.length > 0 ? `Mounted skills: ${input.step.skills.join(', ')}.` : undefined,
+      `流程「${input.flow.name}」第 ${idx}/${total} 步：「${input.step.name}」`,
+      input.step.goal !== undefined && input.step.goal !== '' ? `本步目标：${input.step.goal}` : undefined,
+      input.step.skills.length > 0 ? `挂载技能：${input.step.skills.join('、')}` : undefined,
     ])
   }
 
   add('upstream', (input.upstreamLines ?? []).length > 0
-    ? ['Upstream step outputs:', ...(input.upstreamLines ?? [])]
+    ? ['上游产出：', ...(input.upstreamLines ?? [])]
     : [])
 
   add('answers', (input.answeredLines ?? []).length > 0
-    ? ['Recent human answers / confirmations for this ticket:', ...(input.answeredLines ?? [])]
+    ? ['人类回答与确认：', ...(input.answeredLines ?? [])]
     : [])
 
   const mountedSkills = input.step?.skills ?? []
@@ -149,47 +191,47 @@ export function buildExecutorTurnPrompt(input: ExecutorPromptInput): {
   const wtLine = worktreeContextLine(input.worktree)
   add('worktree', wtLine === undefined ? [] : [wtLine])
 
+  if (input.scratchDir !== undefined) {
+    add('artifacts', [
+      `产出目录：${input.scratchDir}（只放过程产物，不要写进仓库）。`,
+      input.readOnly
+        ? `只读模式：把结论写进 ${input.scratchDir}/review-report.md 与 ${input.scratchDir}/test-report.log。`
+        : `若目录里已有 review-report.md 或 test-report.log，ready 前逐条处理未关闭项。`,
+    ])
+  }
+
   if (input.repoRulesPath !== undefined) {
     // The agent reads its own repo rules: harness/Claude/Codex inject cwd AGENTS.md,
     // so inlining the body only duplicates it and burns the prompt budget.
-    add('repoRules', [`Repo rules: read ${input.repoRulesPath} before acting; they are not inlined in this prompt.`])
-  }
-
-  if (input.scratchDir !== undefined) {
-    add('artifacts', [
-      `Scratch: ${input.scratchDir} (artifacts only, never inside the repo).`,
-      input.readOnly
-        ? `Read-only: write findings to ${input.scratchDir}/review-report.md and ${input.scratchDir}/test-report.log.`
-        : `If an earlier review-report.md or test-report.log is there, address every open finding before ready.`,
-    ])
+    add('repoRules', [`仓库规则：动手前读 ${input.repoRulesPath}（正文不在这里重复）。`])
   }
 
   // Locked deterministic boundary & tool contracts.
   const mapped = input.projectId !== undefined
   const scopeText = !mapped
-    ? 'No mapped project: analyze read-only; do not write or modify files.'
+    ? '未映射项目：只分析，不修改文件。'
     : input.readOnly
-      ? `Work in ${input.cwd} strictly read-only against tracked files.`
-      : `Work in ${input.cwd}; local edits and checks are pre-approved, external actions are not.`
+      ? `在 ${input.cwd} 内只读作业，不修改任何被跟踪文件。`
+      : `在 ${input.cwd} 内作业；本地编辑与自测已授权，外部动作需用户批准。`
   add('scope', [scopeText], true)
 
   if (!isExternal) {
-    add('report', ['submit_report: progress / waiting / blocked / failed / not-needed / ready.'], true)
-    add('ask', ['ask_user: one concrete question, then end the turn.'], true)
+    add('report', ['submit_report：progress / waiting / blocked / failed / not-needed / ready'], true)
+    add('ask', ['ask_user：提出一个具体问题后结束本轮。'], true)
     add('approval', [
-      'External writes and landing (local_merge_branch, push_branch, create_mr_or_pr, …) need user approval; check_branch_rebase first when landing.',
+      '外部写与落地（local_merge_branch、push_branch、create_mr_or_pr 等）需用户批准；落地前先跑 check_branch_rebase。',
     ], true)
-    add('deliver', ['present: declare deliverables before ready.'], true)
+    add('deliver', ['present：ready 前先声明交付物。'], true)
   } else {
     add('headless', [
-      'You are running in non-interactive headless CLI mode: do NOT call interactive ask_question or ask_user tools. Summarize results and any open decisions concisely in your final Markdown output.',
+      '非交互 headless CLI 模式：不要调用 ask_question / ask_user 等交互工具；把结果与待决事项写进最终 Markdown 回复。',
     ], true)
   }
 
   add('rework', input.reworkLines ?? [])
 
   const sectionSizes: PromptSectionSize[] = sections.map(section => ({ id: section.id, chars: section.text.length }))
-  const rawText = sections.map(s => s.text).join('\n\n')
+  const rawText = renderSectionBlocks(sections)
   if (rawText.length > MAX_DISPATCH_PROMPT_CHARS) {
     throw new PromptBudgetExceededError(rawText.length, sectionSizes)
   }

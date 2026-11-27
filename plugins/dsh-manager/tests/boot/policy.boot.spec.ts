@@ -124,7 +124,7 @@ function adaptiveTurn(plan: PolicyPlan): (options: GenerateOptions) => Promise<S
         },
       ])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'the work is done' } }])
     }
     return textResponse('done')

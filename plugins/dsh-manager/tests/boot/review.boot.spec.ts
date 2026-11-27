@@ -132,7 +132,7 @@ function adaptiveTurn(plan: ReviewPlan): (options: GenerateOptions) => Promise<S
         args: { verdict: next.verdict, feedback: next.feedback, dispatchId: 'whatever the service is reviewing' },
       }])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       // The dispatch prompt sits one message under the fresh session's
       // session-info reminder; take the user text block itself so opinions
       // keep their un-escaped quotes.
@@ -141,7 +141,7 @@ function adaptiveTurn(plan: ReviewPlan): (options: GenerateOptions) => Promise<S
         .flatMap(message => (message.content as readonly { type: string; text?: string }[] | undefined) ?? [])
         .filter(block => block.type === 'text')
         .map(block => block.text ?? '')
-        .find(text => text.includes('Ticket ticket-'))
+        .find(text => text.includes('工单 ticket-'))
       if (prompt !== undefined) plan.dispatchPrompts.push(prompt)
       const message = plan.reports.shift() ?? 'the work is done'
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message } }])
