@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+### Patch Changes
+
+- a04dcd1: Align package verification and release workflow with the dsh-plugins monorepo npm OIDC pipeline.
+
 ## 0.1.4
 
 - Support installing skills via GitHub `owner/repo` shorthand (with optional `@branch`/`@tag`), GitHub browser URLs (including `/tree/...`), and pasted `npx skill(s) add` CLI commands in both the backend installer and the Add Skill Source dialog.
