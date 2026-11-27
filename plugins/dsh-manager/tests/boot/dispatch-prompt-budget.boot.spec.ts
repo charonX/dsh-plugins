@@ -58,7 +58,7 @@ function dispatchPromptText(options: GenerateOptions): string | undefined {
   const dispatched = options.messages
     .filter(message => message.role === 'user')
     .map(message => message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n'))
-    .filter(text => text.includes('executor dispatched for ticket'))
+    .filter(text => text.includes('submit_report: progress'))
   return dispatched.at(-1)
 }
 
@@ -173,6 +173,8 @@ test('dispatch prompt stays inside the budget, points at repo rules, and lands t
 
     const prompt = adapter.seenPrompts[0] ?? ''
     expect(prompt.length).toBeLessThanOrEqual(8_000)
+    // The prompt is a pointer sheet, not an essay: an ordinary ticket stays small.
+    expect(prompt.length).toBeLessThanOrEqual(2_500)
     // Repo rules are a pointer, never the body.
     expect(prompt).toMatch(/Repo rules: read .*sample-plugin.*AGENTS\.md/)
     expect(prompt.split('Repo rules: read ').length - 1).toBe(1)
@@ -182,10 +184,10 @@ test('dispatch prompt stays inside the budget, points at repo rules, and lands t
     // The worktree follows the repo the ticket named, not the workspace container.
     expect(prompt).toMatch(/Worktree plan: repo=[^\n]*\/repos\/sample-plugin,/)
     // Artifacts resolve to a real scratch directory without doubled segments.
-    const scratchLine = prompt.split('\n').find(line => line.startsWith('Task scratch directory: '))
+    const scratchLine = prompt.split('\n').find(line => line.startsWith('Scratch: '))
     expect(scratchLine).toBeDefined()
     expect(scratchLine).not.toContain('/home-repos/home-repos')
-    expect(scratchLine).toMatch(/\/scratch\/tasks\/sample-plugin /)
+    expect(scratchLine).toMatch(/\/scratch\/tasks\/sample-plugin \(artifacts only/)
   } finally {
     await ctx.fiber.dispose()
   }

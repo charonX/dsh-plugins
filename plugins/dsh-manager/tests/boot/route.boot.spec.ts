@@ -135,7 +135,7 @@ function adaptiveTurn(pick: { flowId?: string; none?: boolean }): (options: Gene
         args: { ...(pick.flowId === undefined ? {} : { flowId: pick.flowId }), ...(pick.none === true ? { none: true } : {}), rationale: 'the routed call' },
       }])
     }
-    if (tail.includes('executor dispatched for ticket')) {
+    if (tail.includes('Ticket ticket-')) {
       return toolCallsResponse([
         { name: 'present', args: { files: [{ path: 'stage-note.md', description: 'The stage note' }] } },
         { name: 'submit_report', args: { kind: 'ready', message: 'the stage work is complete' } },
