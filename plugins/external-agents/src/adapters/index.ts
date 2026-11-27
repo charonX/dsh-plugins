@@ -1,4 +1,4 @@
-import type { ExternalAgentId } from '../types.ts'
+import type { AgentModelOption, ExternalAgentId } from '../types.ts'
 import type { ExternalAgentAdapter } from './base.ts'
 import { AgyAdapter } from './agy.ts'
 import { ClaudeCodeAdapter } from './claude.ts'
@@ -11,14 +11,23 @@ export { CLAUDE_REASONING, ClaudeCodeAdapter, buildClaudeRunArgs, buildClaudeStr
 export { PI_REASONING, PiAdapter, buildPiRunArgs, parsePiCommandsResponse, parsePiLine, parsePiListModelsOutput, parsePiListModelsWithContext } from './pi.ts'
 export { CODEX_REASONING, CodexAdapter, buildCodexRunArgs, parseCodexLine } from './codex.ts'
 
+export type CustomModelsResolver =
+  | Partial<Record<ExternalAgentId, readonly AgentModelOption[]>>
+  | ((id: ExternalAgentId) => readonly AgentModelOption[])
+
 export function createAdapterMap(
-  customModels: Partial<Record<ExternalAgentId, readonly { readonly id: string; readonly name: string }[]>> = {},
+  customModels: CustomModelsResolver = {},
 ): ReadonlyMap<ExternalAgentId, ExternalAgentAdapter> {
+  const resolve = (id: ExternalAgentId): (() => readonly AgentModelOption[]) =>
+    typeof customModels === 'function'
+      ? () => customModels(id)
+      : () => customModels[id] ?? []
+
   const list: ExternalAgentAdapter[] = [
-    new AgyAdapter(customModels.agy ?? []),
-    new ClaudeCodeAdapter(customModels['claude-code'] ?? []),
-    new PiAdapter(customModels.pi ?? []),
-    new CodexAdapter(customModels.codex ?? []),
+    new AgyAdapter(resolve('agy')),
+    new ClaudeCodeAdapter(resolve('claude-code')),
+    new PiAdapter(resolve('pi')),
+    new CodexAdapter(resolve('codex')),
   ]
   return new Map(list.map(adapter => [adapter.id, adapter]))
 }

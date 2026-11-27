@@ -27,10 +27,13 @@ import type {} from '@deepseek-ai/dsh-llm/types'
 import { TOOL_NOT_STARTED, type SessionSeq, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { estimateTokensFromText, resolveFallbackContextWindow } from './context-windows.ts'
+import type {
+  AgentQuotaSnapshot,
+  ExternalAgentId,
+} from './types.ts'
 import {
   agentIdFromPreset,
   agentIdFromProvider,
-  type ExternalAgentId,
 } from './types.ts'
 import type {
   ExternalAgentAdapter,
@@ -364,8 +367,11 @@ export interface TurnDriverDeps {
   readonly getSubprocess: () => SubprocessRuntime | undefined
   readonly getPermissionPolicy: () => ExternalPermissionPolicy
   readonly resolvePresetForSession: (agent: Agent) => string | null
+  readonly getDefaultModel?: (agentId: ExternalAgentId) => string | undefined
+  readonly getDefaultReasoningEffort?: (agentId: ExternalAgentId) => string | undefined
   readonly getModelContextWindow?: (agentId: ExternalAgentId, model: string) => number | undefined
   readonly resolveMcpServers?: (dshSessionId: string) => Promise<readonly ExternalMcpServerConfig[]>
+  readonly onQuotaUpdate?: (agentId: ExternalAgentId, snapshot: AgentQuotaSnapshot) => void
 }
 
 /**
@@ -579,7 +585,17 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
     const releaseLock = deps.store.acquireRun(agent.id, priorBinding?.externalSessionId)
     const counters = getCounter(agent)
     const providerLabel = `ext-${externalAgentId}`
-    const effectiveModel = modelAgent === externalAgentId ? modelSelection.model : 'default'
+    const boundModel = priorBinding?.agentId === externalAgentId ? priorBinding.model : undefined
+    const boundEffort = priorBinding?.agentId === externalAgentId ? priorBinding.reasoningEffort : undefined
+    const effectiveModel = boundModel
+      ?? (modelAgent === externalAgentId ? modelSelection.model : undefined)
+      ?? deps.getDefaultModel?.(externalAgentId)
+      ?? 'default'
+    const effectiveReasoningEffort = boundEffort !== undefined
+      ? (boundEffort === null ? undefined : boundEffort)
+      : (modelAgent === externalAgentId && modelSelection.reasoningEffort !== undefined
+          ? String(modelSelection.reasoningEffort)
+          : deps.getDefaultReasoningEffort?.(externalAgentId))
     const cwd = agent.session.header.cwd ?? process.cwd()
 
     let step = 1
@@ -836,6 +852,10 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
         deps.store.recordExternalSessionId(agent.id, externalAgentId, event.externalSessionId)
         return
       }
+      if (event.type === 'rate_limit') {
+        deps.onQuotaUpdate?.(externalAgentId, event.snapshot)
+        return
+      }
       if (event.type === 'usage') {
         if (event.contextWindow !== undefined) {
           latestContextWindow = event.contextWindow
@@ -1044,7 +1064,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           cwd,
           dshSessionId: agent.id,
           model: effectiveModel,
-          ...(modelSelection.reasoningEffort === undefined ? {} : { reasoningEffort: modelSelection.reasoningEffort }),
+          ...(effectiveReasoningEffort === undefined ? {} : { reasoningEffort: effectiveReasoningEffort }),
           ...(priorBinding?.externalSessionId === undefined ? {} : { externalSessionId: priorBinding.externalSessionId }),
           ...(effectivePermissionMode === undefined ? {} : { permissionMode: effectivePermissionMode }),
           permissionPolicy: deps.getPermissionPolicy(),

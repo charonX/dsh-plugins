@@ -1,6 +1,7 @@
 /**
- * Durable per-DSH-session agent bindings, native fallback model memory, and
- * exclusive run locks preventing concurrent external-session writes.
+ * Durable per-DSH-session agent bindings, per-session external model/effort
+ * selections, native fallback model memory, and exclusive run locks preventing
+ * concurrent external-session writes.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -12,6 +13,8 @@ export interface PersistedSessionBinding {
   readonly agentId: SessionAgentId
   readonly externalSessionId?: string
   readonly nativeFallbackModel?: SavedModelSelection
+  readonly model?: string
+  readonly reasoningEffort?: string | null
   readonly permissionMode?: string
   readonly updatedAt: string
 }
@@ -108,22 +111,63 @@ export class ExternalSessionStore {
     options?: {
       readonly nativeFallbackModel?: SavedModelSelection
       readonly externalSessionId?: string
+      readonly model?: string
+      readonly reasoningEffort?: string
       readonly permissionMode?: string
     },
   ): PersistedSessionBinding {
     const existing = this.bindings.get(sessionId)
     const fallback = options?.nativeFallbackModel ?? existing?.nativeFallbackModel
+    const sameAgent = existing?.agentId === agentId
     const nextExternal = agentId === 'native'
       ? undefined
-      : (options?.externalSessionId ?? (existing?.agentId === agentId ? existing.externalSessionId : undefined))
+      : (options?.externalSessionId ?? (sameAgent ? existing?.externalSessionId : undefined))
+    const nextModel = agentId === 'native'
+      ? undefined
+      : (options?.model ?? (sameAgent ? existing?.model : undefined))
+    const nextEffort = agentId === 'native'
+      ? undefined
+      : (options?.reasoningEffort ?? (sameAgent ? existing?.reasoningEffort : undefined))
     const nextPermission = agentId === 'native'
       ? undefined
-      : (options?.permissionMode ?? (existing?.agentId === agentId ? existing.permissionMode : undefined))
+      : (options?.permissionMode ?? (sameAgent ? existing?.permissionMode : undefined))
     const next: PersistedSessionBinding = {
       agentId,
       ...(nextExternal === undefined ? {} : { externalSessionId: nextExternal }),
       ...(fallback === undefined ? {} : { nativeFallbackModel: fallback }),
+      ...(nextModel === undefined ? {} : { model: nextModel }),
+      ...(nextEffort === undefined ? {} : { reasoningEffort: nextEffort }),
       ...(nextPermission === undefined ? {} : { permissionMode: nextPermission }),
+      updatedAt: new Date().toISOString(),
+    }
+    this.bindings.set(sessionId, next)
+    this.save()
+    return next
+  }
+
+  setModelSelection(
+    sessionId: string,
+    agentId: ExternalAgentId,
+    selection: {
+      readonly model?: string
+      readonly reasoningEffort?: string | null
+    },
+  ): PersistedSessionBinding {
+    const existing = this.bindings.get(sessionId)
+    const sameAgent = existing?.agentId === agentId
+    const nextModel = selection.model !== undefined
+      ? selection.model
+      : (sameAgent ? existing?.model : undefined)
+    const nextEffort = selection.reasoningEffort !== undefined
+      ? selection.reasoningEffort
+      : (sameAgent ? existing?.reasoningEffort : undefined)
+    const next: PersistedSessionBinding = {
+      agentId,
+      ...(sameAgent && existing?.externalSessionId !== undefined ? { externalSessionId: existing.externalSessionId } : {}),
+      ...(existing?.nativeFallbackModel === undefined ? {} : { nativeFallbackModel: existing.nativeFallbackModel }),
+      ...(nextModel === undefined ? {} : { model: nextModel }),
+      ...(nextEffort === undefined ? {} : { reasoningEffort: nextEffort }),
+      ...(sameAgent && existing?.permissionMode !== undefined ? { permissionMode: existing.permissionMode } : {}),
       updatedAt: new Date().toISOString(),
     }
     this.bindings.set(sessionId, next)
@@ -133,12 +177,15 @@ export class ExternalSessionStore {
 
   setPermissionMode(sessionId: string, agentId: ExternalAgentId, permissionMode: string): PersistedSessionBinding {
     const existing = this.bindings.get(sessionId)
+    const sameAgent = existing?.agentId === agentId
     const next: PersistedSessionBinding = {
       agentId,
-      ...(existing?.agentId === agentId && existing.externalSessionId !== undefined
+      ...(sameAgent && existing?.externalSessionId !== undefined
         ? { externalSessionId: existing.externalSessionId }
         : {}),
       ...(existing?.nativeFallbackModel === undefined ? {} : { nativeFallbackModel: existing.nativeFallbackModel }),
+      ...(sameAgent && existing?.model !== undefined ? { model: existing.model } : {}),
+      ...(sameAgent && existing?.reasoningEffort !== undefined ? { reasoningEffort: existing.reasoningEffort } : {}),
       permissionMode,
       updatedAt: new Date().toISOString(),
     }
@@ -150,11 +197,14 @@ export class ExternalSessionStore {
   recordExternalSessionId(sessionId: string, agentId: ExternalAgentId, externalSessionId: string): void {
     const existing = this.bindings.get(sessionId)
     if (existing?.agentId === agentId && existing.externalSessionId === externalSessionId) return
+    const sameAgent = existing?.agentId === agentId
     this.bindings.set(sessionId, {
       agentId,
       externalSessionId,
       ...(existing?.nativeFallbackModel === undefined ? {} : { nativeFallbackModel: existing.nativeFallbackModel }),
-      ...(existing?.agentId === agentId && existing.permissionMode !== undefined ? { permissionMode: existing.permissionMode } : {}),
+      ...(sameAgent && existing?.model !== undefined ? { model: existing.model } : {}),
+      ...(sameAgent && existing?.reasoningEffort !== undefined ? { reasoningEffort: existing.reasoningEffort } : {}),
+      ...(sameAgent && existing?.permissionMode !== undefined ? { permissionMode: existing.permissionMode } : {}),
       updatedAt: new Date().toISOString(),
     })
     this.save()

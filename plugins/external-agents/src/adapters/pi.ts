@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentCommandOption, AgentModelOption, AgentReasoning } from '../types.ts'
+import type { AgentCommandOption, AgentModelOption, AgentQuotaSnapshot, AgentReasoning } from '../types.ts'
 import { parseContextSizeString } from '../context-windows.ts'
 import {
   nonNegativeInt,
@@ -277,9 +277,14 @@ export class PiAdapter implements ExternalAgentAdapter {
   readonly permissionModes = [] as const
   readonly reasoning = PI_REASONING
 
-  constructor(private readonly configuredModels: readonly AgentModelOption[] = []) {}
+  private readonly readConfiguredModels: () => readonly AgentModelOption[]
+
+  constructor(configuredModels: readonly AgentModelOption[] | (() => readonly AgentModelOption[]) = []) {
+    this.readConfiguredModels = typeof configuredModels === 'function' ? configuredModels : () => configuredModels
+  }
 
   async probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult> {
+    const configured = this.readConfiguredModels()
     let executablePath: string
     try {
       executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
@@ -288,7 +293,7 @@ export class PiAdapter implements ExternalAgentAdapter {
         available: false,
         command: this.command,
         reason: error instanceof Error ? error.message : String(error),
-        models: normalizeModelList(this.configuredModels.length > 0 ? this.configuredModels : DEFAULT_PI_MODELS),
+        models: normalizeModelList(configured.length > 0 ? configured : DEFAULT_PI_MODELS),
         defaultModel: 'default',
         reasoning: PI_REASONING,
         permissionModes: this.permissionModes,
@@ -307,12 +312,20 @@ export class PiAdapter implements ExternalAgentAdapter {
       command: this.command,
       executablePath,
       ...(version === undefined ? {} : { version }),
-      models: normalizeModelList([...this.configuredModels, ...discoveredModels.models]),
+      models: normalizeModelList([...configured, ...discoveredModels.models]),
       modelContextWindows: discoveredModels.modelContextWindows,
       defaultModel: 'default',
       reasoning: PI_REASONING,
       permissionModes: this.permissionModes,
       commands: discoveredCommands,
+    }
+  }
+
+  async probeQuota(): Promise<AgentQuotaSnapshot> {
+    return {
+      status: 'unsupported',
+      source: 'unsupported',
+      note: 'Pi Agent CLI does not expose subscription quota.',
     }
   }
 

@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentModelOption, AgentReasoning } from '../types.ts'
+import type { AgentModelOption, AgentQuotaSnapshot, AgentReasoning } from '../types.ts'
 import {
   nonNegativeInt,
   normalizeModelList,
@@ -219,9 +219,14 @@ export class CodexAdapter implements ExternalAgentAdapter {
   readonly reasoning = CODEX_REASONING
   readonly defaultPermissionMode = 'workspace-write'
 
-  constructor(private readonly configuredModels: readonly AgentModelOption[] = []) {}
+  private readonly readConfiguredModels: () => readonly AgentModelOption[]
+
+  constructor(configuredModels: readonly AgentModelOption[] | (() => readonly AgentModelOption[]) = []) {
+    this.readConfiguredModels = typeof configuredModels === 'function' ? configuredModels : () => configuredModels
+  }
 
   async probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult> {
+    const configured = this.readConfiguredModels()
     let executablePath: string
     try {
       executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
@@ -230,7 +235,7 @@ export class CodexAdapter implements ExternalAgentAdapter {
         available: false,
         command: this.command,
         reason: error instanceof Error ? error.message : String(error),
-        models: normalizeModelList(this.configuredModels.length > 0 ? this.configuredModels : DEFAULT_CODEX_MODELS),
+        models: normalizeModelList(configured.length > 0 ? configured : DEFAULT_CODEX_MODELS),
         defaultModel: 'default',
         reasoning: CODEX_REASONING,
         defaultPermissionMode: this.defaultPermissionMode,
@@ -244,12 +249,29 @@ export class CodexAdapter implements ExternalAgentAdapter {
       command: this.command,
       executablePath,
       ...(version === undefined ? {} : { version }),
-      models: normalizeModelList(this.configuredModels.length > 0 ? this.configuredModels : DEFAULT_CODEX_MODELS),
+      models: normalizeModelList(configured.length > 0 ? configured : DEFAULT_CODEX_MODELS),
       defaultModel: 'default',
       reasoning: CODEX_REASONING,
       defaultPermissionMode: this.defaultPermissionMode,
       permissionModes: this.permissionModes,
       commands: [],
+    }
+  }
+
+  async probeQuota(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<AgentQuotaSnapshot> {
+    try {
+      await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        source: 'passive_stream',
+        note: error instanceof Error ? error.message : String(error),
+      }
+    }
+    return {
+      status: 'unavailable',
+      source: 'passive_stream',
+      note: 'Codex CLI quota is observed passively or requires app-server session telemetry.',
     }
   }
 

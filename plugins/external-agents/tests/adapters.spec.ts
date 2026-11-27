@@ -942,4 +942,36 @@ describe('external agent stream parsers and probes', () => {
     expect(outcomes.read).toEqual({ outcome: 'selected', optionId: 'allow-1' })
     expect(outcomes.write).toEqual({ outcome: 'cancelled' })
   })
+
+  it('parses Claude Code rate_limit_event into rate_limit turn events', () => {
+    const state = { sawStreamDeltas: false, lastText: '' }
+    const events = parseClaudeLine(JSON.stringify({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed_warning',
+        rateLimitType: 'five_hour',
+        utilization: 0.82,
+        resetsAt: 1_800_000_000,
+        unifiedWindows: {
+          seven_day: { utilization: 0.45, resetsAt: 1_800_500_000 },
+        },
+      },
+    }), state)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.type).toBe('rate_limit')
+    if (events[0]?.type === 'rate_limit') {
+      expect(events[0].snapshot.status).toBe('ok')
+      expect(events[0].snapshot.source).toBe('passive_stream')
+      const buckets = events[0].snapshot.groups?.[0]?.buckets ?? []
+      expect(buckets.find(b => b.id === 'claude-5h')).toMatchObject({
+        remainingPercent: 18,
+        usedPercent: 82,
+        status: 'warning',
+      })
+      expect(buckets.find(b => b.id === 'claude-weekly')).toMatchObject({
+        remainingPercent: 55,
+        usedPercent: 45,
+      })
+    }
+  })
 })

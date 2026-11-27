@@ -24,7 +24,7 @@ describe('ExternalAgentsService', () => {
     }
   })
 
-  it('registers ext-* LLM routes, switches agents only while blank, and locks after first turn', async () => {
+  it('does not register ext-* LLM providers or presets by default, switches agents without mutating agent.model, and manages config/session model state', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ext-svc-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -39,19 +39,37 @@ describe('ExternalAgentsService', () => {
     await ctx.plugin(SubprocessLocalPlugin)
     await ctx.plugin(AgentRegistryPlugin)
     await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const registeredPresetIds: string[] = []
+    ctx.provide('agentPresets')
+    ;(ctx as unknown as { agentPresets: unknown }).agentPresets = {
+      defaultId: 'standard',
+      presetForSession: () => null,
+      register: async (def: { id: string }) => {
+        registeredPresetIds.push(def.id)
+        return async () => {}
+      },
+      select: async () => {},
+    }
+
     await ctx.plugin(ExternalAgentsService, {
       storeFile: join(dir, 'sessions.json'),
-      registerAgentPresets: false,
+      configFile: join(dir, 'config.json'),
+      quotaFile: join(dir, 'quotas.json'),
       registerSubagents: false,
     })
 
     const svc = ctx.externalAgents
     expect(svc).toBeDefined()
 
+    // No fake ext-* providers in ctx.llm and no ext-* AgentPresets registered.
+    expect(ctx.llm.listProviders().some(p => p.id.startsWith('ext-'))).toBe(false)
+    expect(registeredPresetIds).toEqual([])
+
     const catalog = await svc.getCatalog()
     expect(catalog.agents.map(a => a.id)).toEqual(['native', 'agy', 'claude-code', 'pi', 'codex'])
 
-    // Verify per-agent permission systems differ and Pi has none.
+    // Catalog exposes reasoning, permission modes, and quota snapshots for settings & dsh-manager flow nodes.
     const agyDesc = catalog.agents.find(a => a.id === 'agy')
     const claudeDesc = catalog.agents.find(a => a.id === 'claude-code')
     const piDesc = catalog.agents.find(a => a.id === 'pi')
@@ -60,27 +78,22 @@ describe('ExternalAgentsService', () => {
     expect(agyDesc?.permissionModes.map(m => m.id)).toContain('accept-edits')
     expect(claudeDesc?.permissionModes.map(m => m.id)).toContain('dontAsk')
     expect(codexDesc?.permissionModes.map(m => m.id)).toContain('workspace-write')
+    expect(codexDesc?.reasoning?.efforts.map(e => e.id)).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
     expect(piDesc?.permissionModes).toEqual([])
+    expect(piDesc?.quota?.status).toBe('unsupported')
 
-    // ext-agy models and provider availability label should reflect live probe after getCatalog()
-    const agyModels = await ctx.llm.listModels('ext-agy')
-    expect(agyModels.length).toBeGreaterThan(0)
-    const piModels = await ctx.llm.listModels('ext-pi')
-    expect(piModels.length).toBeGreaterThan(0)
-    const providers = ctx.llm.listProviders()
-    if (agyDesc?.available) {
-      expect(providers.find(p => p.id === 'ext-agy')?.name).toBe('Antigravity')
-    }
-    if (claudeDesc?.available) {
-      expect(providers.find(p => p.id === 'ext-claude-code')?.name).toBe('Claude Code')
-    }
-
-    // Reasoning levels ride the ext-* routes so the composer model menu exposes them.
-    const codexModelInfo = await ctx.llm.resolveModelInfo('ext-codex', 'default')
-    expect(codexModelInfo.reasoning?.efforts.map(effort => effort.id))
-      .toEqual(['minimal', 'low', 'medium', 'high', 'xhigh'])
-    const agyModelInfo = await ctx.llm.resolveModelInfo('ext-agy', 'default')
-    expect(agyModelInfo.reasoning?.efforts.length).toBeGreaterThan(0)
+    // Global config defaults & per-agent settings round-trip.
+    const updatedCfg = await svc.updateConfig({
+      defaultAgent: 'native',
+      agentId: 'pi',
+      settings: {
+        defaultModel: 'custom/pi-model',
+        defaultReasoningEffort: 'high',
+        customModels: [{ id: 'custom/pi-model', name: 'Custom Pi' }],
+      },
+    })
+    expect(updatedCfg.agents.pi?.defaultModel).toBe('custom/pi-model')
+    expect(updatedCfg.agents.pi?.defaultReasoningEffort).toBe('high')
 
     const handle = await ctx.agents.create({
       sessionId: brandString<SessionId>('sess-svc-1'),
@@ -89,14 +102,37 @@ describe('ExternalAgentsService', () => {
     })
     cleanups.push(() => handle.dispose())
 
-    // Before first turn, switching to an installed agent (e.g. pi) or back to native works.
-    const piInfo = catalog.agents.find(a => a.id === 'pi')
-    if (piInfo?.available) {
+    // Before first turn, switching to an installed agent (e.g. pi) preserves native agent.model and seeds configured defaults.
+    if (piDesc?.available) {
       const switched = await svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'pi' })
       expect(switched.agentId).toBe('pi')
       expect(switched.permissionMode).toBeUndefined()
       expect(switched.locked).toBe(false)
-      expect(handle.agent.model.current()?.provider).toBe('ext-pi')
+      expect(switched.selectedExternalModel).toEqual({
+        model: 'custom/pi-model',
+        reasoningEffort: 'high',
+      })
+      // Underlying DSH native model stays clean instead of being overwritten with `ext-*`.
+      expect(handle.agent.model.current()?.provider).toBe('deepseek')
+
+      // Updating external model & effort via selectSessionModel updates session state without touching native agent.model.
+      const updatedModel = await svc.selectSessionModel({
+        sessionId: 'sess-svc-1',
+        model: 'default',
+        reasoningEffort: 'xhigh',
+      })
+      expect(updatedModel.selectedExternalModel).toEqual({
+        model: 'default',
+        reasoningEffort: 'xhigh',
+      })
+      expect(handle.agent.model.current()?.provider).toBe('deepseek')
+
+      // Passing reasoningEffort: null clears explicit effort back to CLI default.
+      const clearedEffort = await svc.selectSessionModel({
+        sessionId: 'sess-svc-1',
+        reasoningEffort: null,
+      })
+      expect(clearedEffort.selectedExternalModel).toEqual({ model: 'default' })
 
       // Pi has no permission mode system -> updating permissionMode rejects.
       await expect(
@@ -105,25 +141,10 @@ describe('ExternalAgentsService', () => {
 
       const back = await svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'native' })
       expect(back.agentId).toBe('native')
+      expect(back.selectedExternalModel).toBeUndefined()
       expect(handle.agent.model.current()?.provider).toBe('deepseek')
       expect(handle.agent.model.current()?.model).toBe('deepseek-chat')
     }
-
-    // Regression: synchronous agent-preset/selected emitted inside session/event
-    // publication must NOT reenter Session.append() synchronously.
-    const unsubRepro = ctx.on('session/event', (session, event) => {
-      if (event.type === 'agent-preset/selected') {
-        ctx.emit('agent-preset/selected', session.id, event.data.agentPreset)
-      }
-    }, { global: true })
-    cleanups.push(() => { unsubRepro() })
-    expect(() => {
-      handle.agent.session.append('agent-preset/selected', { agentPreset: 'ext-claude-code' })
-    }).not.toThrow()
-    await Promise.resolve()
-    expect(handle.agent.model.current()?.provider).toBe('ext-claude-code')
-    // Reset back to deepseek before testing Antigravity below.
-    handle.agent.model.select({ provider: 'deepseek', model: 'deepseek-chat' })
 
     if (agyDesc?.available) {
       const switchedAgy = await svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'agy' })
@@ -136,14 +157,13 @@ describe('ExternalAgentsService', () => {
     }
 
     // Switching to an uninstalled agent (codex, if absent on host) fails loudly.
-    const codexInfo = catalog.agents.find(a => a.id === 'codex')
-    if (codexInfo && !codexInfo.available) {
+    if (codexDesc && !codexDesc.available) {
       await expect(
         svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'codex' }),
       ).rejects.toThrow()
     }
 
-    // Simulate a started turn -> agent selection must lock.
+    // Simulate a started turn -> agent selection must lock, while model selection remains editable.
     handle.agent.session.append('turn/start', { turn: 1 })
     handle.agent.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'hi' }],
@@ -155,12 +175,24 @@ describe('ExternalAgentsService', () => {
     expect(lockedState.locked).toBe(true)
 
     await expect(
-      svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'agy' }),
+      svc.selectSessionAgent({ sessionId: 'sess-svc-1', agentId: 'claude-code' }),
     ).rejects.toThrow(/cannot be switched/i)
+
+    if (agyDesc?.available) {
+      const midTurnModel = await svc.selectSessionModel({
+        sessionId: 'sess-svc-1',
+        model: 'gemini-4-neon',
+        reasoningEffort: 'high',
+      })
+      expect(midTurnModel.selectedExternalModel).toEqual({
+        model: 'gemini-4-neon',
+        reasoningEffort: 'high',
+      })
+    }
   }, 20_000)
 
-  it('registers ext-* AgentPresets even when agentPresets service starts AFTER ExternalAgentsService (cold boot race)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ext-preset-race-'))
+  it('auto-binds newly created blank sessions when config.defaultAgent is set to an available CLI', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-default-agent-'))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
 
     const ctx = new Context()
@@ -175,28 +207,34 @@ describe('ExternalAgentsService', () => {
     await ctx.plugin(AgentRegistryPlugin)
     await ctx.plugin(AgentLoopPlugin, { agents: [] })
 
-    // Start ExternalAgentsService BEFORE agentPresets is provided (mirrors cold boot order).
     await ctx.plugin(ExternalAgentsService, {
       storeFile: join(dir, 'sessions.json'),
-      registerAgentPresets: true,
+      configFile: join(dir, 'config.json'),
+      quotaFile: join(dir, 'quotas.json'),
       registerSubagents: false,
     })
 
-    const registeredIds: string[] = []
-    ctx.provide('agentPresets')
-    ;(ctx as unknown as { agentPresets: unknown }).agentPresets = {
-      defaultId: 'default',
-      presetForSession: () => null,
-      register: async (def: { id: string }) => {
-        registeredIds.push(def.id)
-        return async () => {}
-      },
-      select: async () => {},
-    }
-    await new Promise(resolve => setTimeout(resolve, 20))
+    const svc = ctx.externalAgents
+    const catalog = await svc.getCatalog()
+    const availableExt = catalog.agents.find(a => a.id !== 'native' && a.available)
+    if (availableExt === undefined) return
 
-    expect(registeredIds).toEqual(
-      expect.arrayContaining(['ext-agy', 'ext-claude-code', 'ext-pi', 'ext-codex']),
-    )
-  })
+    await svc.updateConfig({
+      defaultAgent: availableExt.id,
+      agentId: availableExt.id as never,
+      settings: { defaultReasoningEffort: 'medium' },
+    })
+
+    const handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-auto-default'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+    cleanups.push(() => handle.dispose())
+
+    await new Promise(resolve => setTimeout(resolve, 100))
+    const state = await svc.getSessionState('sess-auto-default')
+    expect(state.agentId).toBe(availableExt.id)
+    expect(state.selectedExternalModel?.reasoningEffort).toBe('medium')
+  }, 20_000)
 })

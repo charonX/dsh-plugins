@@ -7,10 +7,16 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session-panel/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session-status/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import type { AgentDescriptor } from '../types.ts'
+import type { AgentDescriptor, ExternalAgentId, ExternalAgentsConfigSnapshot } from '../types.ts'
 import remote from '../remote.ts'
 import { AgentSwitcher, type AgentSwitcherInjected } from './AgentSwitcher.tsx'
+import {
+  ExternalAgentsSettings,
+  ExternalAgentsSettingsIcon,
+  type ExternalAgentsSettingsInjected,
+} from './ExternalAgentsSettings.tsx'
 import {
   ExternalTasksInputDock,
   ExternalTasksPanelIndicator,
@@ -18,13 +24,17 @@ import {
   createExternalTasksStore,
 } from './ExternalTasksUi.tsx'
 import {
+  ExternalModelControl,
+  type ExternalModelControlInjected,
+} from './ModelControl.tsx'
+import {
   PermissionGate,
   type NativePermissionFallback,
   type PermissionGateInjected,
 } from './PermissionControl.tsx'
+import { ClientSessionAgentStore } from './session-agent-store.ts'
 import { WorktreeEnvironmentRow } from './WorktreeEnvironmentRow.tsx'
 import { en, NS, zh } from './locales.ts'
-import { installSessionModelFilter } from './model-filter.ts'
 import { installExternalSlashCommands } from './slash-commands.ts'
 
 export const inject = ['remote', 'slots', 'locale', 'sessions']
@@ -75,26 +85,63 @@ export function bindInjectedHooks(face: Record<string, unknown>): Record<string,
 export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
   const unmountRemote = await ctx.remote.$mount(remote)
   const disposeLocale = ctx.locale.register(NS, { zh, en })
-  const modelFilter = installSessionModelFilter(ctx)
+  const agentStore = new ClientSessionAgentStore()
 
   const uiScope = ctx.inject(['remote.externalAgents', 'slots', 'sessions', 'locale'], (scope) => {
     const api = scope.remote.externalAgents
     const sessions = scope.sessions
+    let cachedConfig: ExternalAgentsConfigSnapshot | undefined
 
-    let cachedCatalog: readonly AgentDescriptor[] | undefined
     const fetchCatalog = async (): Promise<readonly AgentDescriptor[]> => {
       const res = await api.getCatalog()
       if (!res.ok) throw new Error(res.error.message)
-      cachedCatalog = res.value.agents
+      agentStore.setCatalog(res.value.agents)
       return res.value.agents
     }
-    const readCachedCatalog = (): readonly AgentDescriptor[] | undefined => cachedCatalog
+    const refreshQuota = async (agentId?: ExternalAgentId): Promise<readonly AgentDescriptor[]> => {
+      const res = await api.refreshQuota(agentId === undefined ? {} : { agentId })
+      if (!res.ok) throw new Error(res.error.message)
+      agentStore.setCatalog(res.value.agents)
+      return res.value.agents
+    }
+    const fetchConfig = async (): Promise<ExternalAgentsConfigSnapshot> => {
+      const res = await api.getConfig()
+      if (!res.ok) throw new Error(res.error.message)
+      cachedConfig = res.value
+      return res.value
+    }
+    const updateConfig: ExternalAgentsSettingsInjected['updateConfig'] = async (input) => {
+      const res = await api.updateConfig(input)
+      if (!res.ok) throw new Error(res.error.message)
+      cachedConfig = res.value
+      return res.value
+    }
     const tasksStore = createExternalTasksStore(async (sid) => {
       const res = await api.getSessionState(sid)
       if (!res.ok) throw new Error(res.error.message)
+      agentStore.setSessionState(res.value)
       return res.value
     })
     const translate = scope.locale.bind(NS)
+
+    scope.effect(() => scope.slots.inject('settings.section', () => scope.slots.register({
+      name: 'settings.section',
+      id: 'external-agents',
+      order: 75,
+      label: () => translate('settingsNavLabel'),
+      locale: NS,
+      inject: (): ExternalAgentsSettingsInjected => ({
+        fetchCatalog,
+        refreshQuota,
+        fetchConfig,
+        updateConfig,
+      }),
+    }, ExternalAgentsSettings)), 'external-agents: settings section')
+
+    scope.effect(() => scope.slots.inject('settings.section.icon', () => scope.slots.register({
+      name: 'settings.section.icon',
+      id: 'external-agents',
+    }, ExternalAgentsSettingsIcon)), 'external-agents: settings section icon')
 
     scope.effect(() => scope.slots.inject('conversation.session.panel.environment.row', () => scope.slots.register({
       name: 'conversation.session.panel.environment.row',
@@ -142,16 +189,19 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
       locale: NS,
       inject: (sessionId: SessionId): AgentSwitcherInjected => {
         const sid = String(sessionId)
-        modelFilter.registry.ensureFiltered(sid)
         return {
           sessionId: sid,
           isBlank: () => sessions.list.getSnapshot().byId[sessionId]?.blank !== false,
           subscribeBlank: listener => sessions.list.subscribe(listener),
+          getCachedCatalog: () => agentStore.getCachedCatalog(),
+          subscribeCatalog: listener => agentStore.subscribeCatalog(listener),
+          getCachedState: () => agentStore.getSessionState(sid),
+          subscribeState: listener => agentStore.subscribeSession(sid, listener),
           fetchCatalog,
           fetchSessionState: async () => {
             const res = await api.getSessionState(sid)
             if (!res.ok) throw new Error(res.error.message)
-            modelFilter.registry.set(sid, res.value.agentId)
+            agentStore.setSessionState(res.value)
             return res.value
           },
           selectAgent: async (agentId) => {
@@ -160,22 +210,57 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
               agentId,
             })
             if (!res.ok) throw new Error(res.error.message)
-            modelFilter.registry.set(sid, res.value.agentId)
+            agentStore.setSessionState(res.value)
             return res.value
           },
         }
       },
     }, AgentSwitcher)), 'external-agents: composer switcher')
 
+    scope.effect(() => scope.slots.inject('conversation.input.right', () => scope.slots.register({
+      name: 'conversation.input.right',
+      id: 'external-agents-model',
+      order: 20,
+      locale: NS,
+      inject: (sessionId: SessionId): ExternalModelControlInjected => {
+        const sid = String(sessionId)
+        return {
+          getAgentId: () => agentStore.getAgentId(sid),
+          subscribeAgent: listener => agentStore.subscribeSession(sid, listener),
+          getCachedCatalog: () => agentStore.getCachedCatalog(),
+          subscribeCatalog: listener => agentStore.subscribeCatalog(listener),
+          getCachedState: () => agentStore.getSessionState(sid),
+          getCachedConfig: () => cachedConfig,
+          fetchCatalog,
+          fetchConfig,
+          fetchSessionState: async () => {
+            const res = await api.getSessionState(sid)
+            if (!res.ok) throw new Error(res.error.message)
+            agentStore.setSessionState(res.value)
+            return res.value
+          },
+          selectModel: async (input) => {
+            const res = await api.selectSessionModel({
+              sessionId: sid,
+              ...input,
+            })
+            if (!res.ok) throw new Error(res.error.message)
+            agentStore.setSessionState(res.value)
+            return res.value
+          },
+        }
+      },
+    }, ExternalModelControl)), 'external-agents: composer model picker')
+
     scope.effect(() => installExternalSlashCommands(scope, {
-      getAgentId: sid => modelFilter.registry.get(sid),
+      getAgentId: sid => agentStore.getAgentId(sid),
       fetchSessionAgentId: async (sid) => {
         const res = await api.getSessionState(sid)
         if (!res.ok) throw new Error(res.error.message)
-        modelFilter.registry.set(sid, res.value.agentId)
+        agentStore.setSessionState(res.value)
         return res.value.agentId
       },
-      getCachedCatalog: readCachedCatalog,
+      getCachedCatalog: () => agentStore.getCachedCatalog(),
       fetchCatalog,
       sectionLabel: agent => `${agent.label} ${scope.locale.bind(NS)('slashSectionSuffix')}`,
     }), 'external-agents: slash command source')
@@ -187,14 +272,14 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
       inject: (sessionId: SessionId): PermissionGateInjected => {
         const sid = String(sessionId)
         return {
-          getAgentId: () => modelFilter.registry.get(sid),
-          subscribeAgent: listener => modelFilter.registry.subscribe(sid, listener),
-          getCachedCatalog: readCachedCatalog,
+          getAgentId: () => agentStore.getAgentId(sid),
+          subscribeAgent: listener => agentStore.subscribeSession(sid, listener),
+          getCachedCatalog: () => agentStore.getCachedCatalog(),
           fetchCatalog,
           fetchSessionState: async () => {
             const res = await api.getSessionState(sid)
             if (!res.ok) throw new Error(res.error.message)
-            modelFilter.registry.set(sid, res.value.agentId)
+            agentStore.setSessionState(res.value)
             return res.value
           },
           selectPermission: async (permissionMode) => {
@@ -203,6 +288,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
               permissionMode,
             })
             if (!res.ok) throw new Error(res.error.message)
+            agentStore.setSessionState(res.value)
             return res.value
           },
           resolveNativeFallback: (): NativePermissionFallback | undefined => {
@@ -228,7 +314,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
 
   return async () => {
     uiScope.dispose()
-    modelFilter.dispose()
+    agentStore.dispose()
     disposeLocale()
     await unmountRemote()
   }
