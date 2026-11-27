@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistryPlugin from '@deepseek-ai/dsh-agent'
 import AgentLoopPlugin from '@deepseek-ai/dsh-agent-loop'
@@ -8,6 +9,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import LlmPlugin, { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionPlugin, { type SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionPlugin from '@deepseek-ai/dsh-session-projection'
+import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import SubprocessLocalPlugin from '@deepseek-ai/dsh-subprocess-local'
 import SystemPromptPlugin from '@deepseek-ai/dsh-system-prompt'
 import * as NativeToolExecutorPlugin from '@deepseek-ai/dsh-tool-executor-native'
@@ -198,5 +200,132 @@ describe('ExternalAgentsService', () => {
     expect(registeredIds).toEqual(
       expect.arrayContaining(['ext-agy', 'ext-claude-code', 'ext-pi', 'ext-codex']),
     )
+  })
+
+  it('probes and caches session slash commands using each session workspace cwd', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ext-cwd-cmds-'))
+    const dirA = join(root, 'workspace-a')
+    const dirB = join(root, 'workspace-b')
+    mkdirSync(dirA, { recursive: true })
+    mkdirSync(dirB, { recursive: true })
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+
+    const spawnLog: Array<{ bin: string; cwd?: string | undefined; args: readonly string[] }> = []
+    const fakeSubprocess = {
+      resolveExecutable: async (cmd: string) => `/fake/bin/${cmd}`,
+      spawn: ((opts: { argv: readonly string[]; cwd?: string }) => {
+        const bin = opts.argv[0] ?? ''
+        spawnLog.push({ bin, cwd: opts.cwd, args: opts.argv })
+        const stdout = new PassThrough()
+        const stdin = new PassThrough()
+        let resolveDone!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+        const done = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+          resolveDone = r
+        })
+
+        if (opts.argv.includes('--version')) {
+          queueMicrotask(() => {
+            stdout.end('1.0.0\n')
+            resolveDone({ exitCode: 0, signal: null, stdout: '1.0.0\n', stderr: '' })
+          })
+        } else if (bin.endsWith('/claude')) {
+          stdin.on('data', () => {
+            const cmds = opts.cwd === dirA
+              ? [{ name: 'align', description: 'Skill from A', builtin: false }]
+              : opts.cwd === dirB
+                ? [{ name: 'how', description: 'Skill from B', builtin: false }]
+                : [{ name: 'global-only', description: 'Global', builtin: true }]
+            stdout.write(`${JSON.stringify({
+              type: 'control_response',
+              response: { subtype: 'success', response: { commands: cmds, models: [] } },
+            })}\n`)
+          })
+        } else {
+          queueMicrotask(() => {
+            stdout.end()
+            resolveDone({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+          })
+        }
+
+        return {
+          stdin,
+          stdout,
+          done,
+          collected: {
+            stdout: { readFrom: () => ({ text: opts.argv.includes('--version') ? '1.0.0\n' : '' }) },
+            stderr: { readFrom: () => ({ text: '' }) },
+          },
+          terminate: async () => {
+            stdout.end()
+            resolveDone({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+          },
+        } as unknown as SubprocessHandle
+      }) as SubprocessRuntime['spawn'],
+    } as unknown as SubprocessRuntime
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    ctx.provide('subprocess')
+    ;(ctx as unknown as { subprocess: SubprocessRuntime }).subprocess = fakeSubprocess
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+    await ctx.plugin(ExternalAgentsService, {
+      storeFile: join(root, 'sessions.json'),
+      registerAgentPresets: false,
+      registerSubagents: false,
+    })
+
+    const svc = ctx.externalAgents
+
+    const handleA = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-cwd-a'),
+      meta: { cwd: dirA },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+    cleanups.push(() => handleA.dispose())
+
+    const handleB = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-cwd-b'),
+      meta: { cwd: dirB },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
+    })
+    cleanups.push(() => handleB.dispose())
+
+    // Native session returns empty external commands.
+    expect(await svc.getSessionCommands('sess-cwd-a')).toEqual({
+      agentId: 'native',
+      commands: [],
+    })
+
+    await svc.selectSessionAgent({ sessionId: 'sess-cwd-a', agentId: 'claude-code' })
+    await svc.selectSessionAgent({ sessionId: 'sess-cwd-b', agentId: 'claude-code' })
+
+    const beforeCount = spawnLog.filter(s => s.bin.endsWith('/claude') && s.cwd === dirA).length
+    expect(beforeCount).toBe(0)
+
+    const [resA1, resA2] = await Promise.all([
+      svc.getSessionCommands('sess-cwd-a'),
+      svc.getSessionCommands('sess-cwd-a'),
+    ])
+    expect(resA1).toEqual({
+      agentId: 'claude-code',
+      commands: [{ name: 'align', description: 'Skill from A', source: 'custom' }],
+    })
+    expect(resA2).toEqual(resA1)
+    // Concurrent calls for the same (agentId, cwd) share a single probe.
+    expect(spawnLog.filter(s => s.bin.endsWith('/claude') && s.cwd === dirA)).toHaveLength(1)
+
+    const resB = await svc.getSessionCommands('sess-cwd-b')
+    expect(resB).toEqual({
+      agentId: 'claude-code',
+      commands: [{ name: 'how', description: 'Skill from B', source: 'custom' }],
+    })
+    expect(spawnLog.filter(s => s.bin.endsWith('/claude') && s.cwd === dirB)).toHaveLength(1)
   })
 })

@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session-panel/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session-status/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import type { AgentDescriptor } from '../types.ts'
+import type { AgentCommandOption, AgentDescriptor, ExternalAgentId } from '../types.ts'
 import remote from '../remote.ts'
 import { AgentSwitcher, type AgentSwitcherInjected } from './AgentSwitcher.tsx'
 import {
@@ -89,6 +89,32 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
       return res.value.agents
     }
     const readCachedCatalog = (): readonly AgentDescriptor[] | undefined => cachedCatalog
+
+    const COMMAND_CACHE_TTL_MS = 15_000
+    const sessionCommandsCache = new Map<string, { readonly commands: readonly AgentCommandOption[]; readonly fetchedAt: number }>()
+    const clearSessionCommands = (sid: string): void => {
+      for (const key of sessionCommandsCache.keys()) {
+        if (key.startsWith(`${sid}\0`)) sessionCommandsCache.delete(key)
+      }
+    }
+    const getCachedSessionCommands = (sid: string, agentId: ExternalAgentId): readonly AgentCommandOption[] | undefined => {
+      const cached = sessionCommandsCache.get(`${sid}\0${agentId}`)
+      if (cached === undefined) return undefined
+      if (Date.now() - cached.fetchedAt >= COMMAND_CACHE_TTL_MS) return undefined
+      return cached.commands
+    }
+    const fetchSessionCommands = async (sid: string, agentId: ExternalAgentId): Promise<readonly AgentCommandOption[]> => {
+      const res = await api.getSessionCommands(sid)
+      if (!res.ok) throw new Error(res.error.message)
+      modelFilter.registry.set(sid, res.value.agentId)
+      if (res.value.agentId !== 'native') {
+        sessionCommandsCache.set(`${sid}\0${res.value.agentId}`, {
+          commands: res.value.commands,
+          fetchedAt: Date.now(),
+        })
+      }
+      return res.value.agentId === agentId ? res.value.commands : []
+    }
     const tasksStore = createExternalTasksStore(async (sid) => {
       const res = await api.getSessionState(sid)
       if (!res.ok) throw new Error(res.error.message)
@@ -160,6 +186,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
               agentId,
             })
             if (!res.ok) throw new Error(res.error.message)
+            clearSessionCommands(sid)
             modelFilter.registry.set(sid, res.value.agentId)
             return res.value
           },
@@ -177,6 +204,8 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
       },
       getCachedCatalog: readCachedCatalog,
       fetchCatalog,
+      getCachedSessionCommands,
+      fetchSessionCommands,
       sectionLabel: agent => `${agent.label} ${scope.locale.bind(NS)('slashSectionSuffix')}`,
     }), 'external-agents: slash command source')
 

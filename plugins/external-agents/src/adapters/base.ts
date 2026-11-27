@@ -143,6 +143,7 @@ export interface ExternalAgentAdapter {
   readonly reasoning?: AgentReasoning
   readonly defaultPermissionMode?: string
   probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult>
+  probeCommands?(subprocess: SubprocessRuntime, cwd: string, signal?: AbortSignal): Promise<readonly AgentCommandOption[]>
   runTurn(subprocess: SubprocessRuntime, request: ExternalTurnRequest): Promise<ExternalTurnOutcome>
   subscribeBackground?(dshSessionId: string, listener: (event: ExternalAsyncEvent) => void): () => void
   consumeBufferedAsyncEvents?(dshSessionId: string): readonly ExternalTurnEvent[]

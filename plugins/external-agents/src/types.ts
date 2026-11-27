@@ -150,3 +150,8 @@ export interface SelectSessionPermissionInput {
   readonly sessionId: string
   readonly permissionMode: string
 }
+
+export interface SessionCommandsResult {
+  readonly agentId: SessionAgentId
+  readonly commands: readonly AgentCommandOption[]
+}

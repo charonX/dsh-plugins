@@ -299,7 +299,7 @@ export class PiAdapter implements ExternalAgentAdapter {
     const [version, discoveredModels, discoveredCommands] = await Promise.all([
       probeAgentVersion(subprocess, executablePath),
       this.probePiModels(subprocess, executablePath),
-      this.probePiCommands(subprocess, executablePath, signal),
+      this.probePiCommands(subprocess, executablePath, homedir(), signal),
     ])
 
     return {
@@ -314,6 +314,21 @@ export class PiAdapter implements ExternalAgentAdapter {
       permissionModes: this.permissionModes,
       commands: discoveredCommands,
     }
+  }
+
+  async probeCommands(
+    subprocess: SubprocessRuntime,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch {
+      return []
+    }
+    const targetCwd = cwd.trim() === '' ? homedir() : cwd
+    return await this.probePiCommands(subprocess, executablePath, targetCwd, signal).catch(() => [])
   }
 
   private async probePiModels(subprocess: SubprocessRuntime, executablePath: string): Promise<{
@@ -341,6 +356,7 @@ export class PiAdapter implements ExternalAgentAdapter {
   private async probePiCommands(
     subprocess: SubprocessRuntime,
     executablePath: string,
+    cwd: string = homedir(),
     signal?: AbortSignal,
   ): Promise<readonly AgentCommandOption[]> {
     const controller = new AbortController()
@@ -350,7 +366,7 @@ export class PiAdapter implements ExternalAgentAdapter {
     try {
       const handle = subprocess.spawn({
         argv: [executablePath, '--mode', 'rpc', '--no-session'],
-        cwd: homedir(),
+        cwd,
         stdio: {
           stdin: { data: `${JSON.stringify({ id: 'probe-cmds', type: 'get_commands' })}\n` },
           stdout: 'pipe',

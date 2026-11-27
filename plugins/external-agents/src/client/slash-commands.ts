@@ -13,13 +13,15 @@ import type {
   InputTriggerServiceContract,
   InputTriggerSource,
 } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
-import type { AgentCommandOption, AgentDescriptor, SessionAgentId } from '../types.ts'
+import type { AgentCommandOption, AgentDescriptor, ExternalAgentId, SessionAgentId } from '../types.ts'
 
 export interface SlashCommandSourceDeps {
   readonly getAgentId: (sessionId: string) => SessionAgentId
   readonly fetchSessionAgentId: (sessionId: string) => Promise<SessionAgentId>
   readonly getCachedCatalog: () => readonly AgentDescriptor[] | undefined
   readonly fetchCatalog: () => Promise<readonly AgentDescriptor[]>
+  readonly getCachedSessionCommands?: (sessionId: string, agentId: ExternalAgentId) => readonly AgentCommandOption[] | undefined
+  readonly fetchSessionCommands?: (sessionId: string, agentId: ExternalAgentId) => Promise<readonly AgentCommandOption[]>
   readonly sectionLabel?: (agent: AgentDescriptor) => string
 }
 
@@ -28,13 +30,15 @@ export function buildAgentSlashCandidates(
   agent: AgentDescriptor | undefined,
   query: string,
   sectionLabel?: (agent: AgentDescriptor) => string,
+  commandsOverride?: readonly AgentCommandOption[],
 ): readonly InputTriggerCandidate[] {
-  if (agent === undefined || agent.id === 'native' || agent.commands.length === 0) return []
+  const commands = commandsOverride ?? agent?.commands ?? []
+  if (agent === undefined || agent.id === 'native' || commands.length === 0) return []
   const needle = query.trim().toLowerCase()
   const prefixMatches: AgentCommandOption[] = []
   const nameMatches: AgentCommandOption[] = []
   const descriptionMatches: AgentCommandOption[] = []
-  for (const cmd of agent.commands) {
+  for (const cmd of commands) {
     if (needle === '') {
       prefixMatches.push(cmd)
       continue
@@ -65,6 +69,7 @@ export function buildAgentSlashCandidates(
 
 export function createExternalSlashSource(deps: SlashCommandSourceDeps): InputTriggerSource {
   let lastCatalogAttemptAt = 0
+  const lastSessionAttemptAt = new Map<string, number>()
 
   return {
     trigger: '/',
@@ -85,7 +90,8 @@ export function createExternalSlashSource(deps: SlashCommandSourceDeps): InputTr
       let catalog = deps.getCachedCatalog()
       let agent = catalog?.find(item => item.id === agentId)
       const now = Date.now()
-      if ((catalog === undefined || (agent?.commands.length ?? 0) === 0) && now - lastCatalogAttemptAt > 5_000) {
+      if ((catalog === undefined || (deps.fetchSessionCommands === undefined && (agent?.commands.length ?? 0) === 0))
+        && now - lastCatalogAttemptAt > 5_000) {
         lastCatalogAttemptAt = now
         try {
           catalog = await deps.fetchCatalog()
@@ -95,14 +101,42 @@ export function createExternalSlashSource(deps: SlashCommandSourceDeps): InputTr
         }
       }
       if (req.signal.aborted) return []
-      return buildAgentSlashCandidates(agent, req.query, deps.sectionLabel)
+
+      let sessionCommands: readonly AgentCommandOption[] | undefined
+      if (deps.fetchSessionCommands !== undefined) {
+        sessionCommands = deps.getCachedSessionCommands?.(sid, agentId)
+        const key = `${sid}\0${agentId}`
+        const lastAttempt = lastSessionAttemptAt.get(key) ?? 0
+        if ((sessionCommands === undefined || sessionCommands.length === 0) && now - lastAttempt > 5_000) {
+          lastSessionAttemptAt.set(key, now)
+          try {
+            sessionCommands = await deps.fetchSessionCommands(sid, agentId)
+          } catch {
+            // Fall back to cached session commands or global catalog commands.
+          }
+        }
+        if (req.signal.aborted) return []
+      }
+
+      return buildAgentSlashCandidates(agent, req.query, deps.sectionLabel, sessionCommands)
     },
     warm(session: ClientSessionContext): void {
+      const sid = String(session.sessionId)
       if (deps.getCachedCatalog() === undefined) {
         lastCatalogAttemptAt = Date.now()
         void deps.fetchCatalog().catch(() => {})
       }
-      void deps.fetchSessionAgentId(String(session.sessionId)).catch(() => {})
+      const warmCommands = (agentId: SessionAgentId): void => {
+        if (agentId === 'native' || deps.fetchSessionCommands === undefined) return
+        if (deps.getCachedSessionCommands?.(sid, agentId) !== undefined) return
+        lastSessionAttemptAt.set(`${sid}\0${agentId}`, Date.now())
+        void deps.fetchSessionCommands(sid, agentId).catch(() => {})
+      }
+      const currentAgentId = deps.getAgentId(sid)
+      if (currentAgentId !== 'native') {
+        warmCommands(currentAgentId)
+      }
+      void deps.fetchSessionAgentId(sid).then(warmCommands).catch(() => {})
     },
     onPick({ candidate }) {
       return { text: `/${candidate.name} ` }
