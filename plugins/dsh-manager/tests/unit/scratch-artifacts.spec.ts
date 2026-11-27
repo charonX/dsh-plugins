@@ -37,4 +37,35 @@ describe('scratch-artifacts', () => {
       await rm(home, { recursive: true, force: true })
     }
   })
+
+  test('anchors an explicit workspace-prefixed scratchDir instead of doubling the base path', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-scratch-explicit-'))
+    try {
+      const workspace = join(home, 'home-repos')
+      await mkdir(join(workspace, 'scratch', 'tasks', '2026-11-27-demo'), { recursive: true })
+
+      // Tickets carry the workspace-prefixed form even though basePath is the workspace itself,
+      // which used to resolve to <workspace>/home-repos/scratch/tasks/2026-11-27-demo.
+      expect(resolveTaskScratchDir({
+        scratchDir: 'home-repos/scratch/tasks/2026-11-27-demo',
+        rootTicketId: 'ticket-root',
+        basePath: workspace,
+      })).toBe(join(workspace, 'scratch', 'tasks', '2026-11-27-demo'))
+
+      expect(resolveTaskScratchDir({
+        scratchDir: 'scratch/prototypes/card-demo',
+        rootTicketId: 'ticket-root',
+        basePath: workspace,
+      })).toBe(join(workspace, 'scratch', 'prototypes', 'card-demo'))
+
+      // Absolute paths are used verbatim.
+      expect(resolveTaskScratchDir({
+        scratchDir: join(workspace, 'scratch', 'tasks', '2026-11-27-demo'),
+        rootTicketId: 'ticket-root',
+        basePath: '/tmp/unrelated',
+      })).toBe(join(workspace, 'scratch', 'tasks', '2026-11-27-demo'))
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
 })

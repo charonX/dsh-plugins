@@ -11,7 +11,7 @@
  */
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -38,9 +38,9 @@ import { attentionAnswerInputSchema, attentionListInputSchema, type AttentionAns
 import { cancelDispatch, enqueueDispatch, latestExternalSession, recordDispatchPrompt, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchPromptRecord, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
 import { buildExternalCliPrompt, runCliBackend, type ExternalAgentKind } from './dispatch/cli-backend.ts'
 import type { AgentKind, FlowDef, FlowStepDef } from './flow/flow-ir.ts'
-import { probeProjectFacts, type ProjectFactsSnapshot } from './prompt/project-facts.ts'
-import { MAX_RENDERED_PROMPT_BYTES, buildExecutorTurnPrompt, truncateUtf8Bytes } from './prompt/prompt-builder.ts'
+import { MAX_RENDERED_PROMPT_BYTES, PromptBudgetExceededError, buildExecutorTurnPrompt, truncateUtf8Bytes } from './prompt/prompt-builder.ts'
 import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor, worktreePathFor } from './dispatch/worktree.ts'
+import { decideRepoRoot, detectTicketTargetRepo } from './dispatch/worktree-target.ts'
 import { resolveTaskScratchDir } from './dispatch/scratch-artifacts.ts'
 import { discoverWorkspaceSkills, type DiscoveredSkill, type HostSkillsPort } from './dispatch/workspace-skills.ts'
 import { discoverProjectLandingFacts, type ProjectLandingFacts } from './dispatch/landing-discovery.ts'
@@ -1046,6 +1046,10 @@ export class DshManagerExecutor extends TypertRemoteService {
       scratchBase = workspace.path
     }
     const worktreeSpec = this.resolveWorktreeSpec(ticket, workspacePath)
+    if (worktreeSpec.targetRepoError !== undefined) {
+      await this.escalateTargetRepo(store, record, ticket, worktreeSpec.targetRepoError)
+      return
+    }
     if (projectId !== undefined) {
       if (worktreeSpec.mode === 'worktree' && worktreeSpec.repoRoot !== undefined) {
         try {
@@ -1084,16 +1088,13 @@ export class DshManagerExecutor extends TypertRemoteService {
     const landingFacts = projectId !== undefined && isGitRepo && worktreeSpec.mode !== 'none' && this.isLandingStep(ticket, step)
       ? await discoverProjectLandingFacts(this.ctx.subprocess, cwd).catch(() => undefined)
       : undefined
-    const projectFacts = projectId === undefined
-      ? undefined
-      : await probeProjectFacts(cwd, landingFacts).catch(() => undefined)
     const agentKind: AgentKind = step?.agent?.kind ?? 'builtin'
     const lastRework = [...this.reviewStore().listReviews()]
       .filter(review => review.ticketId === ticket.id && review.verdict === 'rework')
       .sort((left, right) => right.decidedAt - left.decidedAt)[0]
 
     if (agentKind !== 'builtin') {
-      await this.runExternalCliExecutor(store, record, ticket, agentKind, step, projectId, workspacePath, cwd, lastRework, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec)
+      await this.runExternalCliExecutor(store, record, ticket, agentKind, step, projectId, workspacePath, cwd, lastRework, taskScratchDir, readOnly, landingFacts, worktreeSpec)
       return
     }
 
@@ -1109,7 +1110,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     try {
       const skills = await discoverWorkspaceSkills(cwd, this.hostSkills())
       const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
-      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec, lastRework)
+      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, readOnly, landingFacts, worktreeSpec, lastRework)
       await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
       agent.followup(createUserMessage({ content: [{ type: 'text', text: rendered.text }], source: { kind: 'user' } }))
       const settlement = this.runTrackedTurn(record, agent, executorSessionId).finally(() => {
@@ -1118,6 +1119,10 @@ export class DshManagerExecutor extends TypertRemoteService {
       this.activeSettlers.set(record.id, settlement)
       await settlement
     } catch (error) {
+      if (error instanceof PromptBudgetExceededError) {
+        await this.escalatePromptBudget(store, record, ticket, error)
+        return
+      }
       // A crashed prompt render leaves the dispatch running with its history;
       // the watchdog and the boot sweep account for it.
       this.ctx.logger?.error(error)
@@ -1361,14 +1366,22 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     readOnly = false,
     landingFacts?: ProjectLandingFacts,
-    projectFacts?: ProjectFactsSnapshot,
     worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): Promise<void> {
     const resumeSessionId = latestExternalSession(store, ticket.id, agentKind)
     await recordExternalSession(store, record.id, agentKind, resumeSessionId, Date.now())
     const skills = resumeSessionId !== undefined && lastRework !== undefined ? [] : await discoverWorkspaceSkills(cwd, this.hostSkills())
     const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
-    const rendered = this.renderExternalCliPrompt(ticket, projectId, projectName, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec)
+    let rendered: { readonly text: string; readonly record: DispatchPromptRecord }
+    try {
+      rendered = this.renderExternalCliPrompt(ticket, projectId, projectName, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, readOnly, landingFacts, worktreeSpec)
+    } catch (error) {
+      if (error instanceof PromptBudgetExceededError) {
+        await this.escalatePromptBudget(store, record, ticket, error)
+        return
+      }
+      throw error
+    }
     await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
     const prompt = rendered.text
     const idleTimeoutMs = this.config.turnTimeoutMs
@@ -1531,6 +1544,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     readonly branch: string
     readonly path?: string
     readonly mergeTarget?: string
+    readonly targetRepoError?: string
   } {
     const root = ticket.flow === undefined
       ? undefined
@@ -1542,7 +1556,15 @@ export class DshManagerExecutor extends TypertRemoteService {
       return pid === undefined ? undefined : this.ctx.workspaceRegistry.get(pid as WorkspaceId)?.path
     })()
     const { flow } = this.stepMetaOf(ticket)
-    const repoRoot = plan?.repoRoot !== undefined && existsSync(plan.repoRoot) ? plan.repoRoot : mappedRoot
+    // The ticket text wins over a plan/workspace root: only the sub-repo that
+    // holds the code can commit it, while the aggregate workspace keeps it as
+    // an untracked directory.
+    const detection = detectTicketTargetRepo(
+      { title: ticket.title, mandateScope: ticket.mandate?.scope, acceptanceCriteria: ticket.acceptanceCriteria },
+      [mappedRoot, fallbackRepoRoot],
+    )
+    const decision = decideRepoRoot({ detection, planRepoRoot: plan?.repoRoot, mappedRoot })
+    const repoRoot = decision.repoRoot
     const hasGitRepo = repoRoot !== undefined && existsSync(join(repoRoot, '.git'))
     let mode: 'worktree' | 'in-place' | 'none'
     if (flow?.workspaceMode === 'in-place') {
@@ -1559,8 +1581,13 @@ export class DshManagerExecutor extends TypertRemoteService {
     }
     const branch = worktreeBranchFor(rootTicketId, plan?.branch)
     const baseBranch = plan?.baseBranch?.trim() || 'main'
-    const path = plan?.path !== undefined && plan.path.trim() !== ''
-      ? plan.path.trim()
+    // A planned worktree path that sits in a different root (the stale
+    // aggregate-workspace plan) is recomputed under the corrected root.
+    const plannedPath = plan?.path !== undefined && plan.path.trim() !== '' ? plan.path.trim() : undefined
+    const plannedPathInsideRoot = plannedPath !== undefined && repoRoot !== undefined
+      && resolve(plannedPath).startsWith(`${resolve(repoRoot)}/`)
+    const path = plannedPathInsideRoot
+      ? plannedPath
       : (repoRoot === undefined ? undefined : worktreePathFor(repoRoot, rootTicketId, { branch: plan?.branch }))
     const mergeTarget = plan?.mergeTarget?.trim() || undefined
     return {
@@ -1571,6 +1598,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       branch,
       ...(path === undefined ? {} : { path }),
       ...(mergeTarget === undefined ? {} : { mergeTarget }),
+      ...(decision.targetRepoError === undefined ? {} : { targetRepoError: decision.targetRepoError }),
     }
   }
 
@@ -1651,7 +1679,12 @@ export class DshManagerExecutor extends TypertRemoteService {
     ]
   }
 
-  /** Structured hand-off metadata and recent alignment excerpt from the originating discussion Session. */
+  /**
+   * Structured hand-off metadata plus the user's recent direction from the
+   * originating discussion. Only human turns are carried: assistant replies are
+   * re-derivable from the mandate and align-card, and quoting them back turned
+   * the prompt into a transcript. Budget: last 3 user turns, <=200 chars each.
+   */
   private handoffContextLines(ticket: TicketRecord): readonly string[] {
     const lines: string[] = []
     if (ticket.acceptanceCriteria !== undefined && ticket.acceptanceCriteria !== '') {
@@ -1661,36 +1694,71 @@ export class DshManagerExecutor extends TypertRemoteService {
       lines.push(`Origin discussion session: ${ticket.handoffSessionId}`)
       const originSession = this.ctx.sessions.get(ticket.handoffSessionId as SessionId)
       if (originSession !== undefined) {
-        const excerpt: string[] = []
+        const userTurns: string[] = []
         for (const event of originSession.snapshotEvents()) {
-          let role: 'user' | 'assistant' | undefined
-          let blocks: readonly { readonly type?: string; readonly text?: string }[] | undefined
-          if (event.type === 'user/message') {
-            role = 'user'
-            blocks = (event.data as { readonly content?: readonly { readonly type?: string; readonly text?: string }[] }).content
-          } else if (event.type === 'assistant/message') {
-            role = 'assistant'
-            blocks = (event.data as { readonly message?: { readonly content?: readonly { readonly type?: string; readonly text?: string }[] } }).message?.content
-          }
-          if (role === undefined || !Array.isArray(blocks)) continue
+          if (event.type !== 'user/message') continue
+          const blocks = (event.data as { readonly content?: readonly { readonly type?: string; readonly text?: string }[] }).content
+          if (!Array.isArray(blocks)) continue
           const text = blocks
             .filter(block => block?.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '')
             .map(block => block.text!.trim())
             .join(' ')
             .replace(/\s+/g, ' ')
-          if (text !== '') excerpt.push(`${role}: ${text.slice(0, 240)}`)
+          if (text !== '') userTurns.push(text.slice(0, 200))
         }
-        const recent = excerpt.slice(-4).join('\n')
+        const recent = userTurns.slice(-3).join('\n')
         if (recent !== '') {
-          lines.push('Recent context from requirement discussion:', recent.slice(0, 1000))
+          lines.push('Recent user direction:', recent.slice(0, 600))
         }
       }
     }
     return lines
   }
 
-  private teamConfigRevision(): number {
-    const svc = (this.ctx as unknown as {
+  /**
+   * Fail a dispatch whose rendered prompt exceeds the budget: no session is
+   * started, the dispatch reports failed, and one attention records the
+   * over-budget sections so the ticket data itself gets fixed.
+   */
+  private async escalatePromptBudget(
+    store: DispatchStorePort,
+    record: DispatchRecord,
+    ticket: TicketRecord,
+    error: PromptBudgetExceededError,
+  ): Promise<void> {
+    const now = Date.now()
+    await recordReport(store, record.id, 'failed', error.message, now)
+    await askAttention(this.attentionStore(), {
+      ticketId: ticket.id,
+      dispatchId: record.id,
+      kind: 'question',
+      question: `Dispatch prompt for ticket ${ticket.id} is ${error.chars} chars, over the ${error.limit}-char budget; trim the mandate or acceptance criteria and retry.`,
+      details: error.sectionSizes.map(entry => `${entry.id}: ${entry.chars} chars`).join('\n'),
+    }, now)
+  }
+
+  /**
+   * Refuse a dispatch whose ticket names a sub-repo that cannot be resolved:
+   * creating the worktree in the aggregate workspace only yields an
+   * uncommittable untracked directory, discovered after the work is done.
+   */
+  private async escalateTargetRepo(
+    store: DispatchStorePort,
+    record: DispatchRecord,
+    ticket: TicketRecord,
+    reason: string,
+  ): Promise<void> {
+    const now = Date.now()
+    await recordReport(store, record.id, 'failed', reason, now)
+    await askAttention(this.attentionStore(), {
+      ticketId: ticket.id,
+      dispatchId: record.id,
+      kind: 'question',
+      question: `Cannot dispatch ticket ${ticket.id}: ${reason}. Fix the worktree plan or ticket text (the target must be the git repo that holds the code), then retry.`,
+    }, now)
+  }
+
+  private teamConfigRevision(): number {    const svc = (this.ctx as unknown as {
       get?: (key: string) => { status?: () => { readonly revision: number } } | undefined
     }).get?.('dshManagerTeamConfig')
     return svc?.status?.().revision ?? 1
@@ -1707,7 +1775,6 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir: string | undefined,
     readOnly: boolean,
     landingFacts: ProjectLandingFacts | undefined,
-    projectFacts: ProjectFactsSnapshot | undefined,
     worktreeSpec: ReturnType<DshManagerExecutor['resolveWorktreeSpec']> | undefined,
     reworkLines: readonly string[],
   ): {
@@ -1719,6 +1786,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     const handoffLines = this.handoffContextLines(ticket)
     const upstreamLines = this.upstreamStageLines(ticket).slice(1)
     const answeredLines = this.answeredAttentionLines(ticket.id).slice(1)
+    const repoRulesPath = [join(cwd, 'AGENTS.md'), join(cwd, 'CLAUDE.md')].find(path => existsSync(path))
     const worktreePlan: TicketWorktreePlan | undefined = worktreeSpec === undefined
       ? undefined
       : {
@@ -1746,7 +1814,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       readOnly,
       ...(worktreePlan === undefined ? {} : { worktree: worktreePlan }),
       ...(landingFacts === undefined ? {} : { landingFacts }),
-      ...(projectFacts === undefined ? {} : { projectFacts }),
+      ...(repoRulesPath === undefined ? {} : { repoRulesPath }),
       handoffLines,
       upstreamLines,
       answeredLines,
@@ -1769,7 +1837,6 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     readOnly = false,
     landingFacts?: ProjectLandingFacts,
-    projectFacts?: ProjectFactsSnapshot,
     worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
     lastRework?: { readonly origin: 'steward' | 'human'; readonly feedback: string },
   ): { readonly text: string; readonly record: DispatchPromptRecord } {
@@ -1790,7 +1857,6 @@ export class DshManagerExecutor extends TypertRemoteService {
       taskScratchDir,
       readOnly,
       landingFacts,
-      projectFacts,
       worktreeSpec,
       reworkLines,
     )
@@ -1809,7 +1875,6 @@ export class DshManagerExecutor extends TypertRemoteService {
     taskScratchDir?: string,
     readOnly = false,
     landingFacts?: ProjectLandingFacts,
-    projectFacts?: ProjectFactsSnapshot,
     worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): { readonly text: string; readonly record: DispatchPromptRecord } {
     const revision = this.teamConfigRevision()
@@ -1862,7 +1927,6 @@ export class DshManagerExecutor extends TypertRemoteService {
       taskScratchDir,
       readOnly,
       landingFacts,
-      projectFacts,
       worktreeSpec,
       reworkLines,
     )
