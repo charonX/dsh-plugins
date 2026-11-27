@@ -210,6 +210,32 @@ export class ExternalSessionStore {
     this.save()
   }
 
+  /**
+   * Clear a stale/rejected `externalSessionId` while keeping the session's agent,
+   * model, effort, permission mode, and native fallback intact.
+   */
+  clearExternalSessionId(
+    sessionId: string,
+    agentId?: ExternalAgentId,
+    expectedExternalSessionId?: string,
+  ): boolean {
+    const existing = this.bindings.get(sessionId)
+    if (existing === undefined || existing.externalSessionId === undefined) return false
+    if (agentId !== undefined && existing.agentId !== agentId) return false
+    if (expectedExternalSessionId !== undefined && existing.externalSessionId !== expectedExternalSessionId) return false
+    const next: PersistedSessionBinding = {
+      agentId: existing.agentId,
+      ...(existing.nativeFallbackModel === undefined ? {} : { nativeFallbackModel: existing.nativeFallbackModel }),
+      ...(existing.model === undefined ? {} : { model: existing.model }),
+      ...(existing.reasoningEffort === undefined ? {} : { reasoningEffort: existing.reasoningEffort }),
+      ...(existing.permissionMode === undefined ? {} : { permissionMode: existing.permissionMode }),
+      updatedAt: new Date().toISOString(),
+    }
+    this.bindings.set(sessionId, next)
+    this.save()
+    return true
+  }
+
   isRunning(sessionId: string): boolean {
     return this.activeDshSessions.has(sessionId)
   }

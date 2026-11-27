@@ -134,7 +134,12 @@ export function createEffectQueue(options: EffectQueueOptions): EffectQueue {
     if (record === undefined || stopped) return
     if (record.status === 'in-flight' && !allowInFlight) return
     if (record.status !== 'pending' && record.status !== 'in-flight') return
-    if (record.status === 'pending' && !due(record)) return
+    if (record.status === 'pending' && !due(record)) {
+      // Node/libuv timers can fire ~1ms before wall-clock `now()` reaches `nextAttemptAt`;
+      // re-arm instead of dropping the record into an unscheduled state.
+      schedule()
+      return
+    }
     const attemptsBefore = record.attempts
     await transition(record, { status: 'in-flight', attempts: attemptsBefore + 1 })
     try {

@@ -16,7 +16,7 @@ import TokenMeterPlugin from '@deepseek-ai/dsh-token-meter'
 import * as NativeToolExecutorPlugin from '@deepseek-ai/dsh-tool-executor-native'
 import ToolsPlugin from '@deepseek-ai/dsh-tools'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ExternalAgentAdapter, ExternalAsyncEvent, ExternalTurnEvent } from '../src/adapters/base.ts'
+import { ExternalResumeRejectedError, type ExternalAgentAdapter, type ExternalAsyncEvent, type ExternalTurnEvent } from '../src/adapters/base.ts'
 import type { ExternalAgentId } from '../src/types.ts'
 import { ExternalSessionStore } from '../src/session-store.ts'
 import { installExternalTurnDriver } from '../src/turn-driver.ts'
@@ -1085,5 +1085,254 @@ describe('external turn driver', () => {
     assertV4ToolStepLifecycle(events)
     const turnEnd = events.findLast(e => e.type === 'turn/end')
     expect(turnEnd?.type === 'turn/end' ? turnEnd.data.reason.kind : undefined).toBe('aborted')
+  })
+
+  it('fails closed when terminalConfirmed is false and isolates pre-tool interim narration from final step', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-fail-closed-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    await ctx.plugin(SubprocessLocalPlugin)
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const store = new ExternalSessionStore(join(dir, 'sessions.json'))
+    store.setAgent('sess-fc-1', 'claude-code')
+    store.setAgent('sess-nar-1', 'agy')
+    store.setAgent('sess-nar-2', 'agy')
+
+    const truncatedClaude: ExternalAgentAdapter = {
+      id: 'claude-code',
+      label: 'Claude Code',
+      command: 'claude',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'claude',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        await request.onEvent({ type: 'text_delta', delta: 'Partial pre-crash narration' })
+        return {
+          finalText: 'Partial pre-crash narration',
+          terminalConfirmed: false,
+          error: 'claude stream ended without terminal result',
+        }
+      },
+    }
+
+    let agyMode: 'empty-after-tool' | 'final-after-tool' = 'empty-after-tool'
+    const narrationAgy: ExternalAgentAdapter = {
+      id: 'agy',
+      label: 'Antigravity',
+      command: 'agy',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'agy',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        await request.onEvent({ type: 'text_delta', delta: 'Let me inspect the files first.' })
+        await request.onEvent({ type: 'tool_start', callId: 't-1', name: 'read_file', arguments: '{}' })
+        await request.onEvent({ type: 'tool_result', callId: 't-1', content: 'ok', isError: false })
+        return agyMode === 'empty-after-tool'
+          ? { finalText: '', terminalConfirmed: true }
+          : { finalText: 'Delivered final answer', terminalConfirmed: true }
+      },
+    }
+
+    cleanups.push(installExternalTurnDriver({
+      ctx,
+      adapters: new Map<ExternalAgentId, ExternalAgentAdapter>([
+        ['claude-code', truncatedClaude],
+        ['agy', narrationAgy],
+      ]),
+      store,
+      getSubprocess: () => ctx.get('subprocess') as SubprocessRuntime | undefined,
+      getPermissionPolicy: () => 'allow',
+      resolvePresetForSession: () => null,
+    }))
+
+    const eventsBySession = new Map<string, SessionEvent[]>()
+    const errors: unknown[] = []
+    ctx.on('session/event', (session, event) => {
+      const list = eventsBySession.get(session.id) ?? []
+      list.push(event)
+      eventsBySession.set(session.id, list)
+    }, { global: true })
+    ctx.on('agent/error', ({ error }) => { errors.push(error) }, { global: true })
+
+    // 1. Fail-Closed when terminalConfirmed is false
+    const fcHandle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-fc-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-claude-code', model: 'default' },
+    })
+    cleanups.push(() => fcHandle.dispose())
+    fcHandle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Run task' }],
+      source: { kind: 'user' },
+    }))
+    await fcHandle.agent.whenIdle()
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0])).toContain('without terminal result')
+    const fcEvents = eventsBySession.get('sess-fc-1') ?? []
+    assertV4ToolStepLifecycle(fcEvents)
+    const fcTurnEnd = fcEvents.findLast(e => e.type === 'turn/end')
+    expect(fcTurnEnd?.type === 'turn/end' ? fcTurnEnd.data.reason.kind : undefined).toBe('error')
+
+    // 2. Pre-tool narration followed by tool call and empty finalText must NOT create an empty Step 2 assistant/message
+    agyMode = 'empty-after-tool'
+    const nar1Handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-nar-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => nar1Handle.dispose())
+    nar1Handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Check files' }],
+      source: { kind: 'user' },
+    }))
+    await nar1Handle.agent.whenIdle()
+    const nar1Events = eventsBySession.get('sess-nar-1') ?? []
+    assertV4ToolStepLifecycle(nar1Events)
+    const nar1Msgs = nar1Events.filter((e): e is Extract<SessionEvent, { type: 'assistant/message' }> => e.type === 'assistant/message')
+    expect(nar1Msgs).toHaveLength(1)
+
+    // 3. Pre-tool narration must NOT block finalText when no post-tool text_delta was streamed
+    agyMode = 'final-after-tool'
+    const nar2Handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-nar-2'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => nar2Handle.dispose())
+    nar2Handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Check and summarize' }],
+      source: { kind: 'user' },
+    }))
+    await nar2Handle.agent.whenIdle()
+    const nar2Events = eventsBySession.get('sess-nar-2') ?? []
+    assertV4ToolStepLifecycle(nar2Events)
+    const nar2Msgs = nar2Events.filter((e): e is Extract<SessionEvent, { type: 'assistant/message' }> => e.type === 'assistant/message')
+    expect(nar2Msgs).toHaveLength(2)
+    expect(nar2Msgs[1]?.data.message.content).toEqual([{ type: 'text', text: 'Delivered final answer' }])
+  })
+
+  it('self-heals ResumeRejected by clearing externalSessionId and retrying once fresh, while preserving healthy pointers on transient errors', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-resume-heal-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    await ctx.plugin(SubprocessLocalPlugin)
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const store = new ExternalSessionStore(join(dir, 'sessions.json'))
+    store.setAgent('sess-heal-1', 'agy', { externalSessionId: 'dead-ext-1' })
+    store.setAgent('sess-transient-1', 'agy', { externalSessionId: 'healthy-ext-9' })
+
+    const seenResumeArgs: Array<{ session: string | undefined; extId: string | undefined }> = []
+    let mode: 'heal' | 'transient' = 'heal'
+
+    const fakeAgy: ExternalAgentAdapter = {
+      id: 'agy',
+      label: 'Antigravity',
+      command: 'agy',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'agy',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        seenResumeArgs.push({ session: request.dshSessionId, extId: request.externalSessionId })
+        if (mode === 'heal') {
+          if (request.externalSessionId === 'dead-ext-1') {
+            throw new ExternalResumeRejectedError('Invalid session identifier dead-ext-1')
+          }
+          await request.onEvent({ type: 'session', externalSessionId: 'fresh-ext-2' })
+          await request.onEvent({ type: 'text_delta', delta: 'Recovered cleanly' })
+          return { externalSessionId: 'fresh-ext-2', finalText: 'Recovered cleanly', terminalConfirmed: true }
+        }
+        throw new Error('HTTP 503 Service Unavailable')
+      },
+    }
+
+    cleanups.push(installExternalTurnDriver({
+      ctx,
+      adapters: new Map([['agy', fakeAgy]]),
+      store,
+      getSubprocess: () => ctx.get('subprocess') as SubprocessRuntime | undefined,
+      getPermissionPolicy: () => 'allow',
+      resolvePresetForSession: () => null,
+    }))
+
+    const errors: unknown[] = []
+    ctx.on('agent/error', ({ error }) => { errors.push(error) }, { global: true })
+    const events: SessionEvent[] = []
+    ctx.on('session/event', (s, e) => { if (s.id === 'sess-heal-1') events.push(e) }, { global: true })
+
+    // 1. ResumeRejected clears dead-ext-1, retries once with undefined, and commits fresh-ext-2
+    const healHandle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-heal-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => healHandle.dispose())
+    healHandle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Continue work' }],
+      source: { kind: 'user' },
+    }))
+    await healHandle.agent.whenIdle()
+
+    expect(errors).toEqual([])
+    expect(seenResumeArgs).toEqual([
+      { session: 'sess-heal-1', extId: 'dead-ext-1' },
+      { session: 'sess-heal-1', extId: undefined },
+    ])
+    expect(store.get('sess-heal-1')?.externalSessionId).toBe('fresh-ext-2')
+    assertV4ToolStepLifecycle(events)
+
+    // 2. Transient error keeps healthy-ext-9 intact and does NOT retry
+    mode = 'transient'
+    seenResumeArgs.length = 0
+    const trHandle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-transient-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => trHandle.dispose())
+    trHandle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Try again' }],
+      source: { kind: 'user' },
+    }))
+    await trHandle.agent.whenIdle()
+
+    expect(seenResumeArgs).toEqual([{ session: 'sess-transient-1', extId: 'healthy-ext-9' }])
+    expect(store.get('sess-transient-1')?.externalSessionId).toBe('healthy-ext-9')
+    expect(errors).toHaveLength(1)
+    expect(String(errors[0])).toContain('HTTP 503')
   })
 })
