@@ -100,7 +100,7 @@ class LandingAdapter extends LlmAdapter {
       for (const c of textResponse('Title')) yield c
       return
     }
-    if (last.role === 'user' && tail.includes('Ticket ticket-')) {
+    if (last.role === 'user' && tail.includes('工单 ticket-')) {
       this.seenPrompts.push(tail)
       this.step = 1
       for (const c of toolCallsResponse([{ name: 'check_branch_rebase', args: { targetBranch: 'main' } }])) yield c
@@ -180,7 +180,7 @@ test('discovers AGENTS.md landing policy, allows non-destructive check_branch_re
     }, { timeout: 20_000 })
 
     // Repo rules are pointed at, not inlined: the executor's own runtime loads AGENTS.md.
-    expect(adapter.seenPrompts[0]).toContain('Repo rules: read ')
+    expect(adapter.seenPrompts[0]).toContain('仓库规则：动手前读 ')
     expect(adapter.seenPrompts[0]).toContain('AGENTS.md')
     expect(adapter.seenPrompts[0]).not.toContain('Local repository merges directly into main.')
     // `main` has NOT been mutated before human approval.

@@ -139,7 +139,7 @@ function adaptiveTurn(gates: {
     if (lastSerialized.includes('Generate the session title')) return textResponse('Session title')
     if (last.role !== 'user') return textResponse('done')
     if (/eval (eval-[0-9a-f-]+)/.test(tail)) return stewardAccept(options)
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       executorCalls += 1
       if (executorCalls === 1) await gates.releaseFirst
       if (executorCalls === 3) await gates.hangThird(options.signal)

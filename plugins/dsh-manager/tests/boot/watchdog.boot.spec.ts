@@ -124,7 +124,7 @@ function silentTurn(): (options: GenerateOptions) => Promise<StreamChunk[]> {
         },
       }])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'progress', message: 'working on it' } }])
     }
     // The turn after the progress report: plain text, no terminal report.

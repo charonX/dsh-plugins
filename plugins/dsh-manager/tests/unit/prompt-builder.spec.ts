@@ -59,14 +59,35 @@ describe('prompt-builder', () => {
       templateRevision: 3,
     })
 
-    expect(out.text).toContain('Flow "知识创作" — Step 1/1: "资料梳理".')
-    expect(out.text).toContain('Mounted skills: how.')
+    expect(out.text).toContain('流程「知识创作」第 1/1 步：「资料梳理」')
+    expect(out.text).toContain('挂载技能：how')
     expect(out.text).toContain('Required step skills')
-    expect(out.text).toContain('Workspace mode: in-place')
-    expect(out.text).toContain('Work in /tmp/knowledge strictly read-only against tracked files.')
+    expect(out.text).toContain('作业模式：就地（in-place）')
+    expect(out.text).toContain('在 /tmp/knowledge 内只读作业')
     expect(out.text).toContain('/tmp/scratch/t1/review-report.md')
     expect(out.text).toContain('submit_report')
     expect(out.record.sections.filter(s => s.locked).map(s => s.id)).toEqual(['scope', 'report', 'ask', 'approval', 'deliver'])
+  })
+
+  test('renders fixed Chinese headings in one deterministic order', () => {
+    const out = buildExecutorTurnPrompt({
+      turnId: 'executor',
+      ticket: sampleTicket,
+      cwd: '/tmp/knowledge',
+      skills: [],
+      readOnly: false,
+      scratchDir: '/tmp/scratch/t1',
+      alignCardPath: '/tmp/scratch/t1/align-card.md',
+      repoRulesPath: '/tmp/knowledge/AGENTS.md',
+      worktree: { mode: 'worktree', repoRoot: '/tmp/repos/knowledge', baseBranch: 'main', branch: 'feat-x', mergeTarget: 'test' },
+      templateRevision: 3,
+    })
+
+    const headings = out.text.split('\n').filter(line => line.startsWith('## '))
+    expect(headings).toEqual(['## 任务', '## 环境', '## 约束', '## 工具契约'])
+    expect(out.text).toContain('工作树：repo=/tmp/repos/knowledge, base=main, branch=feat-x, mergeTarget=test')
+    expect(out.text).toContain('产出目录：/tmp/scratch/t1（只放过程产物，不要写进仓库）')
+    expect(out.text).toContain('submit_report：progress / waiting / blocked / failed / not-needed / ready')
   })
 
   test('points at the align card instead of restating the mandate', () => {
@@ -82,7 +103,7 @@ describe('prompt-builder', () => {
       templateRevision: 3,
     })
 
-    expect(out.text).toContain('Follow /tmp/scratch/t1/align-card.md in order')
+    expect(out.text).toContain('按 /tmp/scratch/t1/align-card.md 的顺序执行')
     expect(out.text).not.toContain('summarize docs')
     expect(out.record.sections.map(s => s.id)).not.toContain('landing')
   })
@@ -98,7 +119,7 @@ describe('prompt-builder', () => {
       templateRevision: 3,
     })
 
-    expect(out.text).toContain('Repo rules: read /tmp/knowledge/AGENTS.md')
+    expect(out.text).toContain('仓库规则：动手前读 /tmp/knowledge/AGENTS.md')
     expect(out.text).not.toContain('Project instructions')
     expect(out.record.sections.map(s => s.id)).not.toContain('projectIndex')
   })

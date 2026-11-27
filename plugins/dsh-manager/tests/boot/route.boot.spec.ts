@@ -135,7 +135,7 @@ function adaptiveTurn(pick: { flowId?: string; none?: boolean }): (options: Gene
         args: { ...(pick.flowId === undefined ? {} : { flowId: pick.flowId }), ...(pick.none === true ? { none: true } : {}), rationale: 'the routed call' },
       }])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       return toolCallsResponse([
         { name: 'present', args: { files: [{ path: 'stage-note.md', description: 'The stage note' }] } },
         { name: 'submit_report', args: { kind: 'ready', message: 'the stage work is complete' } },
@@ -302,7 +302,7 @@ test(
           if (prompt.includes('Stage Worker')) {
             expect(prompt).toContain('produce the stage note')
             expect(prompt).toContain('tdd')
-            expect(prompt).toContain('Step 1/1')
+            expect(prompt).toContain('第 1/1 步')
             break
           }
         }

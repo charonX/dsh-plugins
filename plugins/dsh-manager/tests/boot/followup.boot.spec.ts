@@ -141,7 +141,7 @@ function adaptiveTurn(plan: FollowUpPlan): (options: GenerateOptions) => Promise
       if (calls.length === 0) return textResponse('nothing to do')
       return toolCallsResponse(calls)
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       const message = plan.reports.shift() ?? 'the work is done'
       return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message } }])
     }

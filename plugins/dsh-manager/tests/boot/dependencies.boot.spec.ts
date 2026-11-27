@@ -88,7 +88,7 @@ class ReadyAdapter extends LlmAdapter {
       for (const c of textResponse('Title')) yield c
       return
     }
-    if (last.role === 'user' && tail.includes('Ticket ticket-')) {
+    if (last.role === 'user' && tail.includes('工单 ticket-')) {
       this.dispatchedPrompts.push(tail)
       for (const c of toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'finished stage cleanly' } }])) yield c
       return

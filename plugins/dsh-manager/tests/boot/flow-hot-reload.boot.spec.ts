@@ -170,7 +170,7 @@ test('expanding a flow mid-flight walks into the newly added step and uses updat
     if (tail.includes('Route ticket ')) {
       return toolCallsResponse([{ name: 'record_route', args: { flowId, rationale: 'matched' } }])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       executorPrompts.push(tail)
       return toolCallsResponse([
         { name: 'submit_report', args: { kind: 'ready', message: 'stage finished' } },
@@ -308,7 +308,7 @@ test('shortening a flow mid-flight stops cleanly at the new end and asks accepta
     if (tail.includes('Route ticket ')) {
       return toolCallsResponse([{ name: 'record_route', args: { flowId, rationale: 'matched' } }])
     }
-    if (tail.includes('Ticket ticket-')) {
+    if (tail.includes('工单 ticket-')) {
       return toolCallsResponse([
         { name: 'submit_report', args: { kind: 'ready', message: 'stage finished' } },
       ])
