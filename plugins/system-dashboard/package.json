@@ -85,6 +85,9 @@
     "vitest": "^4.1.11"
   },
   "author": "charonX",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/charonX/dsh-plugins.git",
