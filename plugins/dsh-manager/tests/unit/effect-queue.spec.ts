@@ -149,6 +149,38 @@ describe('effect queue', () => {
     await queue.stop()
   })
 
+  test('re-arms scheduling if a timer fires before now() reaches nextAttemptAt', async () => {
+    const store = memoryStore()
+    let clock = 1_000
+    let delivererRegistered = false
+    const deliver = vi.fn(async (delivery: Delivery) => {
+      if (!delivererRegistered) throw new MissingDelivererError(delivery.kind)
+    })
+    const queue = createEffectQueue({
+      store,
+      deliver,
+      now: () => clock,
+      missingDelivererRetryMs: 15,
+    })
+
+    const id = await queue.enqueue({ kind: 'late', payload: {} })
+    await vi.waitFor(() => {
+      expect(store.writes.some(record => record.id === id && record.lastError === 'no deliverer for kind: late')).toBe(true)
+    }, WAIT_OPTS)
+
+    // Wait past the 15ms timer while `clock` is still 1000 (< nextAttemptAt 1015)
+    // so the timer callback runs early; queue must re-arm rather than stall.
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(store.list().find(record => record.id === id)?.status).toBe('pending')
+
+    delivererRegistered = true
+    clock = 1_020
+    await vi.waitFor(() => {
+      expect(store.list().find(record => record.id === id)?.status).toBe('done')
+    }, WAIT_OPTS)
+    await queue.stop()
+  })
+
   test('stop stops scheduling without abandoning durable state', async () => {
     const store = memoryStore()
     const deliver = vi.fn(async () => { throw new Error('never succeeds') })
