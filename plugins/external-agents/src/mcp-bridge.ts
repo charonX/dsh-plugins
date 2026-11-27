@@ -13,6 +13,27 @@ import type { ToolsService } from '@deepseek-ai/dsh-tools'
 import type { ExternalMcpServerConfig, ExternalMcpToolSpec } from './adapters/base.ts'
 
 const DEFAULT_TOOL_PREFIXES = ['dsh_manager_'] as const
+const DEFAULT_ALLOWED_TOOL_NAMES = new Set<string>([
+  // Dsh Manager executor session tools (scoped to executor Agent)
+  'submit_report',
+  'ask_user',
+  'post_mr_comment',
+  'set_jira_status',
+  'check_branch_rebase',
+  'local_merge_branch',
+  'push_branch',
+  'create_mr_or_pr',
+  'register_worktree',
+  // Dsh Manager steward session tools (scoped to steward Agent)
+  'record_triage_batch',
+  'record_decision',
+  'record_route',
+  'suggest_end',
+  'keep_open',
+  'propose_policy',
+  'record_followup',
+  'record_review',
+])
 const MAX_BODY_BYTES = 1_048_576
 const MCP_SERVER_NAME = 'dsh-manager'
 
@@ -90,6 +111,7 @@ function extractResultText(content: readonly { readonly type: string; readonly t
 export class HostToolsMcpBridge {
   private readonly token = randomBytes(24).toString('hex')
   private readonly toolPrefixes: readonly string[]
+  private readonly allowedToolNames: ReadonlySet<string>
   private server: Server | undefined
   private startPromise: Promise<string> | undefined
   private url: string | undefined
@@ -98,12 +120,14 @@ export class HostToolsMcpBridge {
   constructor(
     private readonly ctx: Context,
     toolPrefixes: readonly string[] = DEFAULT_TOOL_PREFIXES,
+    allowedToolNames: ReadonlySet<string> = DEFAULT_ALLOWED_TOOL_NAMES,
   ) {
     this.toolPrefixes = toolPrefixes
+    this.allowedToolNames = allowedToolNames
   }
 
   private isAllowedToolName(name: string): boolean {
-    return this.toolPrefixes.some(prefix => name.startsWith(prefix))
+    return this.allowedToolNames.has(name) || this.toolPrefixes.some(prefix => name.startsWith(prefix))
   }
 
   private toolsSvc(): ToolsService | undefined {

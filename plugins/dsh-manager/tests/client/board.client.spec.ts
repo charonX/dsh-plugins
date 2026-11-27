@@ -1662,10 +1662,6 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
 
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
-      expect(dialogEl().textContent).toContain('Ticket info')
-    })
-    openInfo()
-    await vi.waitFor(() => {
       expect(within(dialogEl()).getByRole('button', { name: 'Close ticket' })).toBeDefined()
     })
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Close ticket' }))

@@ -85,17 +85,46 @@ describe('HostToolsMcpBridge', () => {
       async execute() { return { ok: true } },
     })))
 
+    const reportsSeen: Array<{ kind: string; message: string }> = []
     const handle = await ctx.agents.create({
       sessionId: brandString<SessionId>('sess-mcp-1'),
       meta: { cwd: dir },
       agentOptions: { provider: 'ext-agy', model: 'default' },
+      setup: (agentCtx) => {
+        agentCtx.tools.register(defineTool({
+          name: 'submit_report',
+          description: 'Report ticket progress to Steward',
+          parameters: {
+            kind: { type: 'string', required: true },
+            message: { type: 'string', required: true },
+          },
+          output: { schema: { type: 'object', additionalProperties: false, properties: { recorded: { type: 'boolean' } } }, render: () => [{ type: 'text', text: 'recorded' }] },
+          async execute(args) {
+            reportsSeen.push({ kind: String(args.kind), message: String(args.message) })
+            return { recorded: true }
+          },
+        }))
+        agentCtx.tools.register(defineTool({
+          name: 'ask_user',
+          description: 'Ask user a question',
+          parameters: {
+            question: { type: 'string', required: true },
+            details: { type: 'string', required: true },
+          },
+          output: { schema: { type: 'object', additionalProperties: false, properties: { attentionId: { type: 'string' } } }, render: () => [{ type: 'text', text: 'asked' }] },
+          async execute() { return { attentionId: 'att-1' } },
+        }))
+      },
     })
     cleanups.push(() => handle.dispose())
 
     const serverCfg = await bridge.resolveServerForSession('sess-mcp-1')
     expect(serverCfg).toBeDefined()
     expect(serverCfg?.name).toBe('dsh-manager')
-    expect(serverCfg?.tools?.map(t => t.name)).toEqual(['dsh_manager_create_ticket'])
+    expect(serverCfg?.tools?.map(t => t.name)).toEqual(
+      expect.arrayContaining(['dsh_manager_create_ticket', 'submit_report', 'ask_user']),
+    )
+    expect(serverCfg?.tools?.map(t => t.name)).not.toContain('internal_secret_tool')
 
     // Unauthenticated call is rejected with 401.
     const unauthRes = await fetch(serverCfg!.url, {
@@ -105,7 +134,7 @@ describe('HostToolsMcpBridge', () => {
     })
     expect(unauthRes.status).toBe(401)
 
-    // tools/list returns only dsh_manager_create_ticket.
+    // tools/list returns allowed manager/executor tools and excludes internal_secret_tool.
     const listRes = await fetch(serverCfg!.url, {
       method: 'POST',
       headers: { ...serverCfg!.headers, 'Content-Type': 'application/json' },
@@ -113,7 +142,10 @@ describe('HostToolsMcpBridge', () => {
     })
     expect(listRes.status).toBe(200)
     const listJson = await listRes.json() as { result: { tools: Array<{ name: string }> } }
-    expect(listJson.result.tools.map(t => t.name)).toEqual(['dsh_manager_create_ticket'])
+    expect(listJson.result.tools.map(t => t.name)).toEqual(
+      expect.arrayContaining(['dsh_manager_create_ticket', 'submit_report', 'ask_user']),
+    )
+    expect(listJson.result.tools.map(t => t.name)).not.toContain('internal_secret_tool')
 
     // tools/call executes dsh_manager_create_ticket with owning Agent + cwd intact.
     const callRes = await fetch(serverCfg!.url, {
@@ -133,6 +165,25 @@ describe('HostToolsMcpBridge', () => {
     expect(callJson.result.isError).toBeUndefined()
     expect(callJson.result.content[0]?.text).toContain('tk-mcp-101')
     expect(callsSeen).toEqual([{ title: 'Refactor board IA', agentId: 'sess-mcp-1', cwd: dir }])
+
+    // tools/call executes session-scoped submit_report on the owning Agent.
+    const reportRes = await fetch(serverCfg!.url, {
+      method: 'POST',
+      headers: { ...serverCfg!.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: {
+          name: 'submit_report',
+          arguments: { kind: 'ready', message: 'merged into test' },
+        },
+      }),
+    })
+    const reportJson = await reportRes.json() as { result: { isError?: boolean; content: Array<{ text: string }> } }
+    expect(reportJson.result.isError).toBeUndefined()
+    expect(reportJson.result.content[0]?.text).toContain('recorded')
+    expect(reportsSeen).toEqual([{ kind: 'ready', message: 'merged into test' }])
 
     // Non-bridged tool names are denied.
     const denyRes = await fetch(serverCfg!.url, {

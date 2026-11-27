@@ -154,6 +154,9 @@ export class DshManagerExecutor extends TypertRemoteService {
   /** The live executor agents by dispatch id; answer delivery follows up here. */
   /** Last assistant sentence mirrored per dispatch; re-emissions of it are not new speech. */
   private readonly lastAssistantBody = new Map<string, string>()
+  private readonly sessionEventUnsubs = new Map<string, () => void>()
+  private readonly nudgedMissingReportDispatches = new Set<string>()
+  private readonly activeSettlers = new Map<string, Promise<void>>()
   private liveAgents = new Map<string, Agent>()
   /** The owning handles by dispatch id; a resumed turn disposes its predecessor first. */
   private liveHandles = new Map<string, AgentHandle>()
@@ -209,6 +212,10 @@ export class DshManagerExecutor extends TypertRemoteService {
       for (const controller of this.activeControllers.values()) {
         controller.abort(new Error('dsh-manager: executor disposed'))
       }
+      for (const unsub of this.sessionEventUnsubs.values()) {
+        unsub()
+      }
+      this.sessionEventUnsubs.clear()
       if (this.activeRuns.size > 0) {
         await Promise.allSettled([...this.activeRuns])
       }
@@ -290,7 +297,17 @@ export class DshManagerExecutor extends TypertRemoteService {
       const [prior, agent] = live
       if (agent !== undefined) {
         await this.appendEvent(ticket.id, 'instruction', 'user', 'sent', text, now, prior.id)
+        const sessionId = (prior.sessionId ?? `dsh-manager-exec-${prior.id}`) as SessionId
+        this.ensureSessionEventListener(prior, sessionId)
         agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+        if (!this.activeSettlers.has(prior.id)) {
+          const settlement = this.runTrackedTurn(prior, agent, sessionId).finally(() => {
+            this.activeRuns.delete(settlement)
+            if (this.activeSettlers.get(prior.id) === settlement) this.activeSettlers.delete(prior.id)
+          })
+          this.activeRuns.add(settlement)
+          this.activeSettlers.set(prior.id, settlement)
+        }
         return { ok: true, mode: 'delivered', dispatchId: prior.id }
       }
     }
@@ -511,8 +528,7 @@ export class DshManagerExecutor extends TypertRemoteService {
             await cancelDispatch(dispatchStore, targetDispatchId, now, 'cancelled from stall attention')
           }
           this.activeControllers.get(targetDispatchId)?.abort(new Error('dsh-manager: cancelled by user'))
-          this.activeControllers.delete(targetDispatchId)
-          this.liveAgents.delete(targetDispatchId)
+          this.cleanupDispatchLiveState(targetDispatchId, true)
         } else if (target !== undefined && target.state !== 'ended') {
           await touchDispatch(dispatchStore, targetDispatchId, now)
         }
@@ -600,8 +616,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       if (record.ticketId !== ticketId || record.state === 'ended') continue
       await cancelDispatch(dispatchStore, record.id, now, cancelReason)
       this.activeControllers.get(record.id)?.abort(new Error(`dsh-manager: ${cancelReason}`))
-      this.activeControllers.delete(record.id)
-      this.liveAgents.delete(record.id)
+      this.cleanupDispatchLiveState(record.id, true)
     }
     const attentionStore = this.attentionStore()
     const closeAnswer = reason?.trim() ? `rejected: ${reason.trim()}` : 'rejected: closed by user'
@@ -678,7 +693,9 @@ export class DshManagerExecutor extends TypertRemoteService {
     if (attention.kind === 'approval') return
     const dispatch = this.ctx.dshManagerBoard.dispatchStore().getDispatch(attention.dispatchId)
     const agent = dispatch?.state === 'running' ? this.liveAgents.get(attention.dispatchId) : undefined
-    if (agent !== undefined) {
+    if (agent !== undefined && dispatch !== undefined) {
+      const sessionId = (dispatch.sessionId ?? `dsh-manager-exec-${dispatch.id}`) as SessionId
+      this.ensureSessionEventListener(dispatch, sessionId)
       agent.followup(createUserMessage({
         content: [{
           type: 'text',
@@ -686,7 +703,16 @@ export class DshManagerExecutor extends TypertRemoteService {
         }],
         source: { kind: 'user' },
       }))
-      await agent.whenIdle()
+      const existing = this.activeSettlers.get(dispatch.id)
+      if (existing !== undefined) {
+        await existing
+      } else {
+        const settlement = this.runTrackedTurn(dispatch, agent, sessionId).finally(() => {
+          if (this.activeSettlers.get(dispatch.id) === settlement) this.activeSettlers.delete(dispatch.id)
+        })
+        this.activeSettlers.set(dispatch.id, settlement)
+        await settlement
+      }
       return
     }
     // Session ended, headless CLI stopped, or host restarted before user replied:
@@ -725,6 +751,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     const updated = await cancelDispatch(store, input.dispatchId, Date.now(), 'cancelled by user')
     const controller = this.activeControllers.get(input.dispatchId)
     controller?.abort(new Error('dsh-manager: cancelled by user'))
+    this.cleanupDispatchLiveState(input.dispatchId, true)
     return { cancelled: updated !== undefined, dispatch: this.viewOf(updated ?? current) }
   }
 
@@ -953,9 +980,9 @@ export class DshManagerExecutor extends TypertRemoteService {
       const dispatches = store.listDispatches()
       const ticketsWithDispatches = new Set(dispatches.map(record => record.ticketId))
       const pendingAttentions = this.ctx.dshManagerBoard.pendingAttentionTicketIds()
-      // Wake routed tickets whose prerequisite dependencies have all ended.
+      // Wake tickets (both flow stages and single-step fallbacks) whose prerequisite dependencies have all ended.
       for (const candidate of tickets) {
-        if (candidate.state !== 'todo' || candidate.flow === undefined || candidate.flow.pendingSkip !== undefined) continue
+        if (candidate.state !== 'todo' || candidate.flow?.pendingSkip !== undefined) continue
         if (candidate.dependsOn === undefined || candidate.dependsOn.length === 0) continue
         if (ticketsWithDispatches.has(candidate.id) || pendingAttentions.has(candidate.id)) continue
         if (unresolvedDependencies(tickets, candidate).length > 0) continue
@@ -1078,15 +1105,29 @@ export class DshManagerExecutor extends TypertRemoteService {
       await recordReport(store, record.id, 'failed', `the executor session failed to start: ${String(error)}`, Date.now())
       return
     }
-    const controller = new AbortController()
-    this.activeControllers.set(record.id, controller)
-    const onCancel = (): void => { agent.cancel({ kind: 'hook', reason: 'dsh-manager: cancelled by user' }) }
-    controller.signal.addEventListener('abort', onCancel, { once: true })
-    const timer = this.config.turnTimeoutMs === undefined
-      ? undefined
-      : setTimeout(() => {
-          agent.cancel({ kind: 'hook', reason: 'dsh-manager: executor turn timed out' })
-        }, this.config.turnTimeoutMs)
+    this.ensureSessionEventListener(record, executorSessionId)
+    try {
+      const skills = await discoverWorkspaceSkills(cwd, this.hostSkills())
+      const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
+      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec, lastRework)
+      await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: rendered.text }], source: { kind: 'user' } }))
+      const settlement = this.runTrackedTurn(record, agent, executorSessionId).finally(() => {
+        if (this.activeSettlers.get(record.id) === settlement) this.activeSettlers.delete(record.id)
+      })
+      this.activeSettlers.set(record.id, settlement)
+      await settlement
+    } catch (error) {
+      // A crashed prompt render leaves the dispatch running with its history;
+      // the watchdog and the boot sweep account for it.
+      this.ctx.logger?.error(error)
+    }
+  }
+
+  /** Keep mirroring session events and heartbeats across all turns of a live dispatch. */
+  private ensureSessionEventListener(record: DispatchRecord, executorSessionId: SessionId): void {
+    if (this.sessionEventUnsubs.has(record.id)) return
+    const store = this.ctx.dshManagerBoard.dispatchStore()
     let lastHeartbeatAt = Date.now()
     const offSessionEvent = this.ctx.on('session/event', (session, event) => {
       if (session.id !== executorSessionId) return
@@ -1096,23 +1137,108 @@ export class DshManagerExecutor extends TypertRemoteService {
       lastHeartbeatAt = now
       void touchDispatch(store, record.id, now).catch(() => undefined)
     })
+    this.sessionEventUnsubs.set(record.id, offSessionEvent)
+  }
+
+  /** Dispose live session mirroring and per-dispatch turn tracking once a dispatch settles or is replaced. */
+  private cleanupDispatchLiveState(dispatchId: string, clearAgent = false): void {
+    const unsub = this.sessionEventUnsubs.get(dispatchId)
+    if (unsub !== undefined) {
+      this.sessionEventUnsubs.delete(dispatchId)
+      unsub()
+    }
+    this.lastAssistantBody.delete(dispatchId)
+    this.nudgedMissingReportDispatches.delete(dispatchId)
+    this.activeControllers.delete(dispatchId)
+    if (clearAgent) {
+      this.liveAgents.delete(dispatchId)
+    }
+  }
+
+  /** Run one live executor turn under the abort controller and turn timeout budget. */
+  private async runTrackedTurn(
+    record: DispatchRecord,
+    agent: Agent,
+    executorSessionId: SessionId,
+  ): Promise<void> {
+    const controller = new AbortController()
+    this.activeControllers.set(record.id, controller)
+    const onCancel = (): void => { agent.cancel({ kind: 'hook', reason: 'dsh-manager: cancelled by user' }) }
+    controller.signal.addEventListener('abort', onCancel, { once: true })
+    const timer = this.config.turnTimeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          agent.cancel({ kind: 'hook', reason: 'dsh-manager: executor turn timed out' })
+        }, this.config.turnTimeoutMs)
     try {
-      const skills = await discoverWorkspaceSkills(cwd, this.hostSkills())
-      const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
-      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec, lastRework)
-      await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
-      agent.followup(createUserMessage({ content: [{ type: 'text', text: rendered.text }], source: { kind: 'user' } }))
-      await agent.whenIdle()
+      await this.awaitAndSettleBuiltinTurn(record, agent, executorSessionId)
     } catch (error) {
-      // A crashed turn leaves the dispatch running with its history; the
-      // watchdog and the boot sweep account for it.
       this.ctx.logger?.error(error)
     } finally {
-      offSessionEvent()
-      this.lastAssistantBody.delete(record.id)
       if (timer !== undefined) clearTimeout(timer)
       controller.signal.removeEventListener('abort', onCancel)
-      this.activeControllers.delete(record.id)
+      if (this.activeControllers.get(record.id) === controller) {
+        this.activeControllers.delete(record.id)
+      }
+    }
+  }
+
+  /**
+   * Wait for the current turn to go idle and handle post-turn settlement:
+   * - Clean up live listeners when the dispatch already ended.
+   * - Fail-closed when the session recorded an error/abort/interrupted turn end.
+   * - Nudge once when a turn completed with zero reports and no pending attention.
+   */
+  private async awaitAndSettleBuiltinTurn(
+    record: DispatchRecord,
+    agent: Agent,
+    executorSessionId: SessionId,
+  ): Promise<void> {
+    const store = this.ctx.dshManagerBoard.dispatchStore()
+    await agent.whenIdle()
+    if (this.disposed) return
+    const current = store.getDispatch(record.id)
+    if (current === undefined || current.state === 'ended') {
+      this.cleanupDispatchLiveState(record.id, true)
+      return
+    }
+    const session = this.ctx.sessions.get(executorSessionId)
+    const lastTurnEnd = session?.snapshotEvents()
+      .filter((evt): evt is Extract<SessionEvent, { type: 'turn/end' }> => evt.type === 'turn/end')
+      .at(-1)
+    const endReason = lastTurnEnd?.data.reason
+    if (endReason !== undefined && (endReason.kind === 'error' || endReason.kind === 'aborted' || endReason.kind === 'interrupted')) {
+      const detail = endReason.kind === 'error'
+        ? endReason.error.message
+        : endReason.kind === 'aborted'
+          ? `executor turn aborted (${endReason.reason.kind})`
+          : 'executor turn interrupted'
+      const failedAt = Date.now()
+      await recordReport(store, record.id, 'failed', detail, failedAt, { category: 'error', target: 'failed' })
+      await settleMatchingPendingAttentions(
+        this.attentionStore(),
+        att => att.details === `watchdog:stall:${record.id}`,
+        'dispatch ended',
+        failedAt,
+        record.ticketId,
+      )
+      this.cleanupDispatchLiveState(record.id, true)
+      return
+    }
+    const hasPendingAttention = this.attentionStore().listAttentions()
+      .some(att => att.ticketId === record.ticketId && att.status === 'pending')
+    if (hasPendingAttention) return
+
+    if (current.reports.length === 0 && !this.nudgedMissingReportDispatches.has(record.id)) {
+      this.nudgedMissingReportDispatches.add(record.id)
+      agent.followup(createUserMessage({
+        content: [{
+          type: 'text',
+          text: 'You finished the turn without calling submit_report or ask_user. Call submit_report now (ready, waiting, blocked, or failed), or call ask_user if you need the user to decide or confirm.',
+        }],
+        source: { kind: 'user' },
+      }))
+      await this.awaitAndSettleBuiltinTurn(record, agent, executorSessionId)
     }
   }
 
@@ -1840,7 +1966,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     const priorHandle = priorDispatchId === undefined ? undefined : this.liveHandles.get(priorDispatchId)
     if (priorHandle !== undefined) {
       this.liveHandles.delete(priorDispatchId!)
-      this.liveAgents.delete(priorDispatchId!)
+      this.cleanupDispatchLiveState(priorDispatchId!, true)
       await priorHandle.dispose()
     }
     const handle = priorDispatchId !== undefined

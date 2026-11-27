@@ -293,6 +293,95 @@ test(
     // dispatch lifecycle.
     expect((await restarted.dshManagerBoard.ticketList()).tickets
       .find(ticket => ticket.id === manualTicket!.id)?.state).toBe('todo')
+
+    // Turn ending without submit_report is nudged once and settles cleanly;
+    // live follow-up via continueTicket still mirrors Turn 2 timeline events.
+    const nudgeHome = await mkdtemp(join(tmpdir(), 'dsh-dispatch-nudge-'))
+    try {
+      const nudgeOverlay = join(nudgeHome, 'nudge.patch.yml')
+      await writeFile(nudgeOverlay, [
+        '- insert:',
+        '    - id: dsh-manager',
+        '      name: "@charonx/dsh-manager"',
+        '      config:',
+        '        steward:',
+        '          provider: mock',
+        '          model: steward-test',
+        '          tickMs: 3600000',
+        '        executor:',
+        '          provider: mock',
+        '          model: executor-test',
+        '          maxConcurrent: 1',
+        '          tickMs: 3600000',
+        '          turnTimeoutMs: 30000',
+        `          cwd: ${JSON.stringify(execCwd)}`,
+        '',
+      ].join('\n'))
+      const nudgeAdapter = new AdaptiveAdapter(async (options) => {
+        const last = options.messages.at(-1)
+        const tail = JSON.stringify(options.messages.slice(-2))
+        if (JSON.stringify(last ?? '').includes('Generate the session title')) return textResponse('Title')
+        if (last?.role !== 'user') return textResponse('done')
+        if (tail.includes('without calling submit_report')) {
+          return toolCallsResponse([{ name: 'submit_report', args: { kind: 'ready', message: 'reported after nudge' } }])
+        }
+        if (tail.includes('确认合入')) {
+          return toolCallsResponse([
+            { name: 'present', args: { files: [{ path: 'analysis.md', description: 'Turn 2 deliverable' }] } },
+            { name: 'submit_report', args: { kind: 'ready', message: 'merged after confirm' } },
+          ])
+        }
+        if (tail.includes('Live followup ticket')) {
+          return toolCallsResponse([{ name: 'submit_report', args: { kind: 'progress', message: 'waiting confirmation' } }])
+        }
+        return textResponse('done without tool call')
+      })
+      const nudgeCtx = await bootTestProfile({
+        binName: 'dsh-manager-test', profile: 'web', overlayPaths: [nudgeOverlay], home: nudgeHome,
+      })
+      try {
+        await waitUntilService(nudgeCtx, 'dshManagerExecutor')
+        nudgeCtx.llm.registerAdapter(['mock'], nudgeAdapter)
+        const ticket = await nudgeCtx.dshManagerBoard.mintDirectTicket({
+          title: 'Forgetful executor',
+          scope: 'complete and report',
+        }, Date.now())
+        await nudgeCtx.dshManagerExecutor.dispatchTicket({ ticketId: ticket.id })
+        await vi.waitFor(async () => {
+          const d = (await dispatchesOf(nudgeCtx, ticket.id))[0]
+          expect(d?.state).toBe('ended')
+          expect(d?.outcome).toBe('ready')
+        }, { timeout: 20_000 })
+
+        // Live follow-up after Turn 1 went idle still mirrors Turn 2 events & settles.
+        const followupTicket = await nudgeCtx.dshManagerBoard.mintDirectTicket({
+          title: 'Live followup ticket',
+          scope: 'report progress then confirm',
+        }, Date.now())
+        await nudgeCtx.dshManagerExecutor.dispatchTicket({ ticketId: followupTicket.id })
+        await vi.waitFor(async () => {
+          const d = (await dispatchesOf(nudgeCtx, followupTicket.id))[0]
+          expect(d?.state).toBe('running')
+          expect(d?.reports.some(r => r.kind === 'progress')).toBe(true)
+        }, { timeout: 20_000 })
+        const continued = await nudgeCtx.dshManagerExecutor.continueTicket({
+          ticketId: followupTicket.id,
+          text: '确认合入',
+        })
+        expect(continued).toMatchObject({ ok: true, mode: 'delivered' })
+        await vi.waitFor(async () => {
+          const detail2 = await nudgeCtx.dshManagerExecutor.ticketDetail({ ticketId: followupTicket.id })
+          expect(detail2.dispatches[0]?.state).toBe('ended')
+          expect(detail2.dispatches[0]?.outcome).toBe('ready')
+          expect(detail2.deliverables.some(ref => ref.description === 'Turn 2 deliverable')).toBe(true)
+        }, { timeout: 20_000 })
+      } finally {
+        await nudgeCtx.fiber.dispose()
+      }
+    } finally {
+      await rm(nudgeHome, { recursive: true, force: true }).catch(() => {})
+    }
+
     await restarted.fiber.dispose()
   },
   300_000,

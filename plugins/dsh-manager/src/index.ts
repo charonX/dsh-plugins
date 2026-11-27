@@ -386,8 +386,7 @@ export class DshManagerBoard extends TypertRemoteService {
         validated.length === 0
         && (record.dependsOn?.length ?? 0) > 0
         && next.state === 'todo'
-        && next.flow !== undefined
-        && next.flow.pendingSkip === undefined
+        && next.flow?.pendingSkip === undefined
       ) {
         void executor.dispatchTicket({ ticketId: record.id }).catch(() => {})
       } else {
