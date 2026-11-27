@@ -215,11 +215,19 @@ export function PermissionGate(props: PermissionGateProps) {
   const [agentId, setAgentId] = useState<SessionAgentId>(() => getAgentId())
 
   useEffect(() => {
+    let active = true
     setAgentId(getAgentId())
-    return subscribeAgent(() => {
+    const unsub = subscribeAgent(() => {
       setAgentId(getAgentId())
     })
-  }, [getAgentId, subscribeAgent, preset])
+    void fetchSessionState().then((state) => {
+      if (active) setAgentId(state.agentId)
+    }).catch(() => {})
+    return () => {
+      active = false
+      unsub()
+    }
+  }, [fetchSessionState, getAgentId, subscribeAgent, preset])
 
   if (agentId === 'native') {
     const fallback = resolveNativeFallback()

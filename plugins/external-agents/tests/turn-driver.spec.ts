@@ -19,7 +19,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ExternalAgentAdapter, ExternalAsyncEvent, ExternalTurnEvent } from '../src/adapters/base.ts'
 import type { ExternalAgentId } from '../src/types.ts'
 import { ExternalSessionStore } from '../src/session-store.ts'
-import { ExternalAgentCatalog, registerExternalLlmProviders } from '../src/llm-providers.ts'
 import { installExternalTurnDriver } from '../src/turn-driver.ts'
 
 /**
@@ -884,8 +883,7 @@ describe('external turn driver', () => {
     }
 
     const adapters = new Map<ExternalAgentId, ExternalAgentAdapter>([['agy', fakeAgy]])
-    const catalog = new ExternalAgentCatalog(adapters, () => ctx.get('subprocess') as SubprocessRuntime | undefined)
-    cleanups.push(registerExternalLlmProviders(ctx, adapters, catalog))
+    store.setModelSelection('sess-ext-preset-1', 'agy', { model: 'gemini-4-hydrogen', reasoningEffort: 'high' })
 
     cleanups.push(installExternalTurnDriver({
       ctx,
@@ -906,7 +904,7 @@ describe('external turn driver', () => {
     const handle = await ctx.agents.create({
       sessionId: brandString<SessionId>('sess-ext-preset-1'),
       meta: { cwd: dir },
-      agentOptions: { provider: 'ext-agy', model: 'gemini-4-hydrogen' },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
       setup: (agentCtx) => {
         agentCtx.on('agent/pre-step', async (_payload, next) => {
           const decision = await next()

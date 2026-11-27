@@ -15,6 +15,10 @@ export interface AgentSwitcherInjected {
   readonly sessionId: string
   readonly isBlank: () => boolean
   readonly subscribeBlank: (listener: () => void) => () => void
+  readonly getCachedCatalog: () => readonly AgentDescriptor[] | undefined
+  readonly subscribeCatalog: (listener: () => void) => () => void
+  readonly getCachedState: () => SessionAgentState | undefined
+  readonly subscribeState: (listener: () => void) => () => void
   readonly fetchCatalog: () => Promise<readonly AgentDescriptor[]>
   readonly fetchSessionState: () => Promise<SessionAgentState>
   readonly selectAgent: (agentId: SessionAgentId) => Promise<SessionAgentState>
@@ -43,6 +47,10 @@ export function AgentSwitcher({
   useProjection,
   isBlank,
   subscribeBlank,
+  getCachedCatalog,
+  subscribeCatalog,
+  getCachedState,
+  subscribeState,
   fetchCatalog,
   fetchSessionState,
   selectAgent,
@@ -50,8 +58,8 @@ export function AgentSwitcher({
 }: AgentSwitcherProps) {
   const preset = useProjection('agentPreset')
   const [blank, setBlank] = useState<boolean>(() => isBlank())
-  const [agents, setAgents] = useState<readonly AgentDescriptor[]>([])
-  const [sessionState, setSessionState] = useState<SessionAgentState | null>(null)
+  const [agents, setAgents] = useState<readonly AgentDescriptor[]>(() => getCachedCatalog() ?? [])
+  const [sessionState, setSessionState] = useState<SessionAgentState | null>(() => getCachedState() ?? null)
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -62,6 +70,24 @@ export function AgentSwitcher({
       setBlank(isBlank())
     })
   }, [isBlank, subscribeBlank])
+
+  useEffect(() => {
+    const syncState = (): void => {
+      const next = getCachedState()
+      if (next !== undefined) setSessionState(next)
+    }
+    syncState()
+    return subscribeState(syncState)
+  }, [getCachedState, subscribeState])
+
+  useEffect(() => {
+    const syncCatalog = (): void => {
+      const next = getCachedCatalog()
+      if (next !== undefined) setAgents(next)
+    }
+    syncCatalog()
+    return subscribeCatalog(syncCatalog)
+  }, [getCachedCatalog, subscribeCatalog])
 
   useEffect(() => {
     let active = true
@@ -135,7 +161,7 @@ export function AgentSwitcher({
   const label = COMPACT_LABELS[activeAgentId]
 
   return (
-    <div className={css.root}>
+    <div className={css.root} data-ext-agent-control="">
       <Menu
         open={open}
         items={items}

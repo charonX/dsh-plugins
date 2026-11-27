@@ -1,14 +1,16 @@
 /**
  * Host entry point for `@charonx/dsh-external-agents`:
- * provides the `externalAgents` TypertRemoteService, registers `ext-*` LLM
- * providers and AgentPresets, attaches the `agent/pre-step` external turn
- * driver, and shares the same adapters with `ctx.subagents`.
+ * provides the `externalAgents` TypertRemoteService, manages durable per-CLI
+ * configuration & subscription quota snapshots, attaches the `agent/pre-step`
+ * external turn driver, and shares the same adapters with `ctx.subagents` and
+ * `dsh-manager` flow catalogs without registering fake LLM providers or presets.
  */
 import { existsSync } from 'node:fs'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry'
 import { brandString } from '@deepseek-ai/dsh-brand'
+import type LlmService from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -21,18 +23,24 @@ import {
   providerIdForAgent,
   type AgentDescriptor,
   type ExternalAgentId,
+  type ExternalAgentsConfigSnapshot,
+  type ExternalModelSelection,
   type SavedModelSelection,
   type SelectSessionAgentInput,
+  type SelectSessionModelInput,
   type SelectSessionPermissionInput,
   type SessionAgentId,
   type SessionAgentState,
   type SessionCommandsResult,
+  type UpdateExternalAgentsConfigInput,
   type WorkspaceGitStatus,
 } from './types.ts'
 import { createAdapterMap, type ExternalAgentAdapter, type ExternalPermissionPolicy } from './adapters/index.ts'
+import { ExternalAgentConfigStore } from './config-store.ts'
 import { inspectWorkspaceGitStatus } from './git-status.ts'
-import { ExternalAgentCatalog, registerExternalLlmProviders } from './llm-providers.ts'
+import { ExternalAgentCatalog } from './llm-providers.ts'
 import { HostToolsMcpBridge } from './mcp-bridge.ts'
+import { ExternalQuotaStore } from './quota-store.ts'
 import { ExternalSessionStore } from './session-store.ts'
 import { registerExternalSubagents } from './subagent-bridge.ts'
 import { installExternalTurnDriver } from './turn-driver.ts'
@@ -48,6 +56,8 @@ export interface Config {
   registerSubagents?: boolean | undefined
   customModels?: Record<string, ConfigModelOption[]> | undefined
   storeFile?: string | undefined
+  configFile?: string | undefined
+  quotaFile?: string | undefined
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -63,18 +73,22 @@ const modelOptionSchema: z<ConfigModelOption> = z.object({
 
 export const Config: z<Config> = z.object({
   permissionPolicy: z.union(['allow', 'reject']).default('allow'),
-  registerAgentPresets: z.boolean().default(true),
+  registerAgentPresets: z.boolean().default(false),
   registerSubagents: z.boolean().default(true),
   customModels: z.dict(z.array(modelOptionSchema)).default({}),
   storeFile: z.string(),
+  configFile: z.string(),
+  quotaFile: z.string(),
 }) as unknown as z<Config>
 
 export class ExternalAgentsService extends TypertRemoteService {
-  static inject = ['agents', 'llm']
+  static inject = ['agents']
   static Config: z<Config> = Config
 
   private catalog!: ExternalAgentCatalog
   private store!: ExternalSessionStore
+  private configStore!: ExternalAgentConfigStore
+  private quotaStore!: ExternalQuotaStore
   private adapters: ReadonlyMap<ExternalAgentId, ExternalAgentAdapter> = new Map()
   private readonly cfg: Config
 
@@ -85,19 +99,26 @@ export class ExternalAgentsService extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const permissionPolicy: ExternalPermissionPolicy = this.cfg.permissionPolicy ?? 'allow'
-    const registerPresetsFlag = this.cfg.registerAgentPresets ?? true
+    const registerPresetsFlag = this.cfg.registerAgentPresets ?? false
     const registerSubagentsFlag = this.cfg.registerSubagents ?? true
-    const adapters = createAdapterMap(this.cfg.customModels ?? {})
-    this.adapters = adapters
+
     this.store = new ExternalSessionStore(this.cfg.storeFile)
+    this.configStore = new ExternalAgentConfigStore(
+      this.cfg.configFile ?? ExternalAgentConfigStore.defaultFilePath(this.cfg.storeFile),
+      this.cfg.customModels ?? {},
+    )
+    this.quotaStore = new ExternalQuotaStore(
+      this.cfg.quotaFile ?? ExternalQuotaStore.defaultFilePath(this.cfg.storeFile),
+    )
+
+    const adapters = createAdapterMap(id => this.configStore.getCustomModels(id))
+    this.adapters = adapters
+
     const getSubprocess = (): SubprocessRuntime | undefined => this.ctx.get('subprocess') as SubprocessRuntime | undefined
-    this.catalog = new ExternalAgentCatalog(adapters, getSubprocess)
+    this.catalog = new ExternalAgentCatalog(adapters, getSubprocess, this.quotaStore)
 
     // Probe available external CLIs asynchronously so host startup stays non-blocking.
     void this.catalog.refreshAll().catch(() => {})
-
-    const disposeProviders = registerExternalLlmProviders(this.ctx, adapters, this.catalog)
-    this.ctx.effect(() => disposeProviders, 'external-agents: llm providers')
 
     if (registerSubagentsFlag) {
       const disposeSubagents = registerExternalSubagents(this.ctx, adapters, getSubprocess, () => permissionPolicy)
@@ -150,10 +171,15 @@ export class ExternalAgentsService extends TypertRemoteService {
       getSubprocess,
       getPermissionPolicy: () => permissionPolicy,
       resolvePresetForSession: agent => this.presetSvc()?.presetForSession(agent.session) ?? null,
+      getDefaultModel: agentId => this.configStore.getAgentSettings(agentId).defaultModel,
+      getDefaultReasoningEffort: agentId => this.configStore.getAgentSettings(agentId).defaultReasoningEffort,
       getModelContextWindow: (agentId, model) => this.catalog.getProbe(agentId).modelContextWindows?.[model],
       resolveMcpServers: async (sessionId) => {
         const srv = await mcpBridge.resolveServerForSession(sessionId)
         return srv === undefined ? [] : [srv]
+      },
+      onQuotaUpdate: (agentId, snapshot) => {
+        this.quotaStore.set(agentId, snapshot)
       },
     })
     this.ctx.effect(() => disposeTurnDriver, 'external-agents: turn driver')
@@ -170,88 +196,36 @@ export class ExternalAgentsService extends TypertRemoteService {
     }, { global: true })
     this.ctx.effect(() => disposeAgentCleanup, 'external-agents: agent/disposed session cleanup')
 
-    const resolveFallbackNativeModel = async (): Promise<SavedModelSelection | undefined> => {
-      const remembered = this.store.getLastNativeModel()
-      if (remembered !== undefined) return remembered
-      const providers = this.ctx.llm.listProviders().filter(p => !p.id.startsWith('ext-'))
-      const preferredOrder = ['deepseek-account', 'deepseek-official']
-      providers.sort((a, b) => {
-        const ai = preferredOrder.indexOf(a.id)
-        const bi = preferredOrder.indexOf(b.id)
-        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+    const applyDefaultAgentToBlankSession = async (agent: Agent): Promise<void> => {
+      const boundary = this.agentsSvc.turnBoundaryOf(agent.session)
+      if (boundary.lastTurn > 0 || boundary.openTurnStartSeq !== null) return
+      if (this.store.get(agent.id) !== undefined) return
+
+      const presetId = this.presetSvc()?.presetForSession(agent.session) ?? null
+      if (agentIdFromPreset(presetId) !== undefined) return
+
+      const configuredDefault = this.configStore.getDefaultAgent()
+      if (configuredDefault === 'native') return
+
+      const cached = this.catalog.getProbe(configuredDefault)
+      const probe = cached.available ? cached : await this.catalog.refreshOne(configuredDefault).catch(() => cached)
+      if (!probe.available) return
+      if (this.store.get(agent.id) !== undefined) return
+
+      const settings = this.configStore.getAgentSettings(configuredDefault)
+      this.store.setAgent(agent.id, configuredDefault, {
+        model: settings.defaultModel ?? probe.defaultModel,
+        ...(settings.defaultReasoningEffort === undefined ? {} : { reasoningEffort: settings.defaultReasoningEffort }),
+        ...(probe.defaultPermissionMode === undefined ? {} : { permissionMode: probe.defaultPermissionMode }),
       })
-      for (const provider of providers) {
-        const models = await this.ctx.llm.listModels(provider.id).catch(() => [])
-        const first = models[0]
-        if (first !== undefined) {
-          return { provider: provider.id, model: first.id }
-        }
-      }
-      return undefined
-    }
-
-    const syncPresetSelectionToModel = async (agent: Agent, presetId: string | null): Promise<void> => {
-      const externalAgentId = agentIdFromPreset(presetId)
-      const current = agent.model.current()
-      if (externalAgentId !== undefined) {
-        if (current !== undefined && !current.provider.startsWith('ext-')) {
-          this.store.rememberLastNativeModel({
-            provider: current.provider,
-            model: current.model,
-            ...(current.reasoningEffort === undefined ? {} : { reasoningEffort: String(current.reasoningEffort) }),
-          })
-        }
-        const expectedProvider = providerIdForAgent(externalAgentId)
-        if (current?.provider === expectedProvider) return
-        const probe = this.catalog.getProbe(externalAgentId)
-        agent.model.select({
-          provider: expectedProvider,
-          model: probe.defaultModel,
-        })
-        return
-      }
-
-      const explicit = this.store.get(agent.id)
-      if (explicit === undefined || explicit.agentId === 'native') {
-        if (current !== undefined && !current.provider.startsWith('ext-')) {
-          this.store.rememberLastNativeModel({
-            provider: current.provider,
-            model: current.model,
-            ...(current.reasoningEffort === undefined ? {} : { reasoningEffort: String(current.reasoningEffort) }),
-          })
-        } else if (current === undefined || current.provider.startsWith('ext-')) {
-          const boundary = this.agentsSvc.turnBoundaryOf(agent.session)
-          if (boundary.lastTurn === 0 && boundary.openTurnStartSeq === null) {
-            const fallback = await resolveFallbackNativeModel()
-            if (fallback !== undefined) {
-              agent.model.select({
-                provider: fallback.provider,
-                model: fallback.model,
-                ...(fallback.reasoningEffort === undefined ? {} : { reasoningEffort: fallback.reasoningEffort as never }),
-              })
-            }
-          }
-        }
-      }
     }
 
     const disposeCreatedSync = this.ctx.on('agent/created', ({ agent }) => {
-      const presetId = this.presetSvc()?.presetForSession(agent.session) ?? null
       queueMicrotask(() => {
-        void syncPresetSelectionToModel(agent, presetId).catch(() => {})
+        void applyDefaultAgentToBlankSession(agent).catch(() => {})
       })
     }, { global: true })
-    this.ctx.effect(() => disposeCreatedSync, 'external-agents: agent/created model sync')
-
-    const disposePresetSync = this.ctx.on('agent-preset/selected', (sessionId, presetId) => {
-      const live = this.agentsSvc.get(sessionId)
-      if (live === undefined) return
-      // Defer past Session.append()'s publication lock before appending model/selection.
-      queueMicrotask(() => {
-        void syncPresetSelectionToModel(live, presetId).catch(() => {})
-      })
-    })
-    this.ctx.effect(() => disposePresetSync, 'external-agents: preset/selected model sync')
+    this.ctx.effect(() => disposeCreatedSync, 'external-agents: agent/created default agent sync')
   }
 
   private get agentsSvc(): AgentRegistry {
@@ -260,6 +234,32 @@ export class ExternalAgentsService extends TypertRemoteService {
 
   private presetSvc(): AgentPresetRegistry | undefined {
     return this.ctx.get('agentPresets') as AgentPresetRegistry | undefined
+  }
+
+  private llmSvc(): LlmService | undefined {
+    return this.ctx.get('llm') as LlmService | undefined
+  }
+
+  private async resolveFallbackNativeModel(): Promise<SavedModelSelection | undefined> {
+    const remembered = this.store.getLastNativeModel()
+    if (remembered !== undefined) return remembered
+    const llm = this.llmSvc()
+    if (llm === undefined) return undefined
+    const providers = llm.listProviders().filter(p => !p.id.startsWith('ext-'))
+    const preferredOrder = ['deepseek-account', 'deepseek-official']
+    providers.sort((a, b) => {
+      const ai = preferredOrder.indexOf(a.id)
+      const bi = preferredOrder.indexOf(b.id)
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+    })
+    for (const provider of providers) {
+      const models = await llm.listModels(provider.id).catch(() => [])
+      const first = models[0]
+      if (first !== undefined) {
+        return { provider: provider.id, model: first.id }
+      }
+    }
+    return undefined
   }
 
   private isSessionLocked(agent: Agent): boolean {
@@ -275,6 +275,9 @@ export class ExternalAgentsService extends TypertRemoteService {
       const preset = this.presetSvc()?.presetForSession(live.session)
       const fromPreset = agentIdFromPreset(preset)
       if (fromPreset !== undefined) return fromPreset
+      const legacyProvider = live.model.current()?.provider
+      const fromModel = agentIdFromProvider(legacyProvider)
+      if (fromModel !== undefined) return fromModel
     }
     return 'native'
   }
@@ -283,10 +286,13 @@ export class ExternalAgentsService extends TypertRemoteService {
     const live = this.agentsSvc.get(brandString<SessionId>(sessionId))
     const binding = this.store.get(sessionId)
     const agentId = this.readSessionAgentId(sessionId)
-    const defaultPerm = agentId === 'native' ? undefined : this.catalog.getProbe(agentId).defaultPermissionMode
+    const probe = agentId === 'native' ? undefined : this.catalog.getProbe(agentId)
+    const settings = agentId === 'native' ? undefined : this.configStore.getAgentSettings(agentId)
+    const defaultPerm = probe?.defaultPermissionMode
     const effectivePerm = agentId === 'native'
       ? undefined
       : (binding?.agentId === agentId ? (binding.permissionMode ?? defaultPerm) : defaultPerm)
+
     const currentModel = live?.model.current()
     const selectedModel: SavedModelSelection | undefined = currentModel === undefined
       ? undefined
@@ -295,6 +301,28 @@ export class ExternalAgentsService extends TypertRemoteService {
           model: currentModel.model,
           ...(currentModel.reasoningEffort === undefined ? {} : { reasoningEffort: String(currentModel.reasoningEffort) }),
         }
+
+    let selectedExternalModel: ExternalModelSelection | undefined
+    if (agentId !== 'native') {
+      const legacyModel = currentModel !== undefined && currentModel.provider === providerIdForAgent(agentId)
+        ? currentModel
+        : undefined
+      const effModel = (binding?.agentId === agentId ? binding.model : undefined)
+        ?? legacyModel?.model
+        ?? settings?.defaultModel
+        ?? probe?.defaultModel
+        ?? 'default'
+      const effEffort = binding?.agentId === agentId && binding.reasoningEffort !== undefined
+        ? (binding.reasoningEffort === null ? undefined : binding.reasoningEffort)
+        : (legacyModel?.reasoningEffort !== undefined
+            ? String(legacyModel.reasoningEffort)
+            : (settings?.defaultReasoningEffort ?? probe?.reasoning?.defaultEffort))
+      selectedExternalModel = {
+        model: effModel,
+        ...(effEffort === undefined ? {} : { reasoningEffort: effEffort }),
+      }
+    }
+
     const activeTasks = this.store.getTasks(sessionId)
     return {
       sessionId,
@@ -303,9 +331,41 @@ export class ExternalAgentsService extends TypertRemoteService {
       running: this.store.isRunning(sessionId),
       ...(binding?.externalSessionId === undefined ? {} : { externalSessionId: binding.externalSessionId }),
       ...(selectedModel === undefined ? {} : { selectedModel }),
+      ...(selectedExternalModel === undefined ? {} : { selectedExternalModel }),
       ...(effectivePerm === undefined ? {} : { permissionMode: effectivePerm }),
       ...(activeTasks.length === 0 ? {} : { activeTasks }),
     }
+  }
+
+  @Remote('getCatalog')
+  async getCatalog(): Promise<{ readonly agents: readonly AgentDescriptor[] }> {
+    await this.catalog.refreshAll().catch(() => {})
+    return { agents: this.catalog.descriptors() }
+  }
+
+  @Remote('getConfig')
+  async getConfig(): Promise<ExternalAgentsConfigSnapshot> {
+    return this.configStore.getSnapshot()
+  }
+
+  @Remote('updateConfig')
+  async updateConfig(input: UpdateExternalAgentsConfigInput): Promise<ExternalAgentsConfigSnapshot> {
+    const next = this.configStore.update(input)
+    if (input.agentId !== undefined && input.settings?.customModels !== undefined) {
+      await this.catalog.refreshOne(input.agentId).catch(() => {})
+    }
+    return next
+  }
+
+  @Remote('refreshQuota')
+  async refreshQuota(input?: { readonly agentId?: ExternalAgentId }): Promise<{ readonly agents: readonly AgentDescriptor[] }> {
+    await this.catalog.refreshQuota(input?.agentId).catch(() => {})
+    return { agents: this.catalog.descriptors() }
+  }
+
+  @Remote('getSessionState')
+  async getSessionState(sessionId: string): Promise<SessionAgentState> {
+    return this.readState(sessionId)
   }
 
   private async resolveSessionCwd(sessionId: string): Promise<string | undefined> {
@@ -329,17 +389,6 @@ export class ExternalAgentsService extends TypertRemoteService {
       cwd = loaded?.header?.cwd
     }
     return cwd === undefined || cwd === '' ? undefined : cwd
-  }
-
-  @Remote('getCatalog')
-  async getCatalog(): Promise<{ readonly agents: readonly AgentDescriptor[] }> {
-    await this.catalog.refreshAll().catch(() => {})
-    return { agents: this.catalog.descriptors() }
-  }
-
-  @Remote('getSessionState')
-  async getSessionState(sessionId: string): Promise<SessionAgentState> {
-    return this.readState(sessionId)
   }
 
   @Remote('getSessionCommands')
@@ -418,12 +467,15 @@ export class ExternalAgentsService extends TypertRemoteService {
           await presets.select(live, targetPreset).catch(() => {})
         }
       }
-      if (rememberedNative !== undefined) {
-        live.model.select({
-          provider: rememberedNative.provider,
-          model: rememberedNative.model,
-          ...(rememberedNative.reasoningEffort === undefined ? {} : { reasoningEffort: rememberedNative.reasoningEffort as never }),
-        })
+      if (currentModel !== undefined && agentIdFromProvider(currentModel.provider) !== undefined) {
+        const fallback = rememberedNative ?? await this.resolveFallbackNativeModel()
+        if (fallback !== undefined) {
+          live.model.select({
+            provider: fallback.provider,
+            model: fallback.model,
+            ...(fallback.reasoningEffort === undefined ? {} : { reasoningEffort: fallback.reasoningEffort as never }),
+          })
+        }
       }
       return this.readState(input.sessionId)
     }
@@ -438,21 +490,45 @@ export class ExternalAgentsService extends TypertRemoteService {
       )
     }
 
+    const settings = this.configStore.getAgentSettings(input.agentId)
+    const initialModel = settings.defaultModel ?? probe.defaultModel
+    const initialEffort = settings.defaultReasoningEffort ?? probe.reasoning?.defaultEffort
+
     this.store.setAgent(input.sessionId, input.agentId, {
       ...(rememberedNative === undefined ? {} : { nativeFallbackModel: rememberedNative }),
+      model: initialModel,
+      ...(initialEffort === undefined ? {} : { reasoningEffort: initialEffort }),
       ...(probe.defaultPermissionMode === undefined ? {} : { permissionMode: probe.defaultPermissionMode }),
     })
 
-    const presets = this.presetSvc()
-    if (presets !== undefined) {
-      await presets.select(live, presetIdForAgent(input.agentId)).catch(() => {})
+    return this.readState(input.sessionId)
+  }
+
+  @Remote('selectSessionModel')
+  async selectSessionModel(input: SelectSessionModelInput): Promise<SessionAgentState> {
+    const agentId = this.readSessionAgentId(input.sessionId)
+    if (agentId === 'native') {
+      throw new RemoteError('agent-preset/invalid', 'Native DSH sessions use the native DSH model selector.', {
+        agentPreset: 'native',
+        reason: 'Native DSH sessions use the native DSH model selector.',
+      })
     }
-
-    live.model.select({
-      provider: providerIdForAgent(input.agentId),
-      model: probe.defaultModel,
+    const probe = this.catalog.getProbe(agentId)
+    if (input.reasoningEffort !== undefined && input.reasoningEffort !== null && input.reasoningEffort !== '') {
+      const efforts = probe.reasoning?.efforts ?? []
+      if (efforts.length > 0 && !efforts.some(item => item.id === input.reasoningEffort)) {
+        throw new RemoteError('agent-preset/invalid', `Invalid reasoning effort "${input.reasoningEffort}" for ${agentId}.`, {
+          agentPreset: presetIdForAgent(agentId),
+          reason: `Invalid reasoning effort "${input.reasoningEffort}"`,
+        })
+      }
+    }
+    const normalizedModel = input.model?.trim()
+    const normalizedEffort = input.reasoningEffort === '' ? null : input.reasoningEffort
+    this.store.setModelSelection(input.sessionId, agentId, {
+      ...(normalizedModel === undefined || normalizedModel === '' ? {} : { model: normalizedModel }),
+      ...(normalizedEffort === undefined ? {} : { reasoningEffort: normalizedEffort }),
     })
-
     return this.readState(input.sessionId)
   }
 
