@@ -16,7 +16,9 @@ import { bootTestProfile } from './boot-test-profile.ts'
 
 const migrateHome = await mkdtemp(join(tmpdir(), 'dsh-team-migrate-'))
 const watchHome = await mkdtemp(join(tmpdir(), 'dsh-team-watch-'))
-const dirsToClean = [migrateHome, watchHome]
+const seedHome = await mkdtemp(join(tmpdir(), 'dsh-team-seed-'))
+const seedWs = await mkdtemp(join(tmpdir(), 'dsh-team-ws-'))
+const dirsToClean = [migrateHome, watchHome, seedHome, seedWs]
 
 async function writeOverlay(home: string, port: number): Promise<string> {
   const overlayPath = join(home, 'team-config.patch.yml')
@@ -124,10 +126,11 @@ test('migrates legacy storage-domain records to team-config.yaml and writes back
     home: migrateHome,
   })
   try {
-    await waitUntilService(ctx, 'dshManagerRoute')
-    expect(ctx.dshManagerCrew.list().map(m => m.id)).toEqual(['crew-legacy-1'])
-    expect(ctx.dshManagerPipeline.list().map(p => p.id)).toEqual(['pipe-legacy-1'])
-    expect(ctx.dshManagerRoute.list().map(r => r.id)).toEqual(['route-legacy-1'])
+    await waitUntilService(ctx, 'dshManagerFlow')
+    const flows = ctx.dshManagerFlow.list()
+    expect(flows.map(f => f.id)).toEqual(['pipe-legacy-1'])
+    expect(flows[0]?.when).toContain('all MR tasks')
+    expect(flows[0]?.steps[0]?.name).toBe('Legacy Reviewer')
 
     const yamlPath = join(migrateHome, 'dsh-manager', 'team-config.yaml')
     const initialYaml = await readFile(yamlPath, 'utf8')
@@ -135,8 +138,13 @@ test('migrates legacy storage-domain records to team-config.yaml and writes back
     expect(initialYaml).toContain('Legacy Pipe')
     expect(initialYaml).toContain('all MR tasks')
 
-    // Mutate via service API and confirm YAML updates synchronously.
-    await ctx.dshManagerRoute.ruleAdd({ condition: 'hotfix tasks', pipelineId: 'pipe-legacy-1' })
+    // Mutate via service API and confirm v3 Flow IR YAML updates synchronously.
+    await ctx.dshManagerFlow.flowAdd({
+      name: 'Hotfix Flow',
+      when: 'hotfix tasks',
+      workspaceMode: 'worktree',
+      steps: [{ id: 'fix', name: 'Hotfix', skills: ['tdd'], goal: 'Fix hotfix' }],
+    })
     const updatedYaml = await readFile(yamlPath, 'utf8')
     expect(updatedYaml).toContain('hotfix tasks')
     expect(updatedYaml).toContain('Legacy Reviewer')
@@ -154,49 +162,47 @@ test('hot reloads external YAML edits, keeps last valid state on errors, and rec
     home: watchHome,
   })
   try {
-    await waitUntilService(ctx, 'dshManagerRoute')
+    await waitUntilService(ctx, 'dshManagerFlow')
     const yamlPath = ctx.dshManagerTeamConfig.status().filePath
 
-    // 1. Seed valid YAML from external file write and wait for fs.watch hot reload.
+    // 1. Seed valid Flow IR v3 YAML from external file write and wait for fs.watch hot reload.
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: arch',
-      '    name: Architect',
-      '    role: design deep modules',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: standard',
       '    name: Standard Line',
-      '    stages:',
-      '      - memberId: arch',
-      '        instruction: draft architecture',
-      'routes:',
-      '  - id: r-feat',
-      '    condition: feature work',
-      '    pipelineId: standard',
+      '    when: feature work',
+      '    workspaceMode: in-place',
+      '    enabled: true',
+      '    steps:',
+      '      - id: draft',
+      '        name: Architect',
+      '        skills:',
+      '          - how',
+      '        goal: draft architecture',
       '',
     ].join('\n'), 'utf8')
 
     await waitUntil(
-      () => ctx.dshManagerCrew.list().some(m => m.id === 'arch')
-        && ctx.dshManagerPipeline.list().some(p => p.id === 'standard')
-        && ctx.dshManagerRoute.list().some(r => r.id === 'r-feat'),
+      () => ctx.dshManagerFlow.list().some(f => f.id === 'standard' && f.steps[0]?.goal === 'draft architecture'),
       'initial external YAML hot reload',
     )
     expect(ctx.dshManagerTeamConfig.status().lastError).toBeUndefined()
     const validRevision = ctx.dshManagerTeamConfig.status().revision
 
-    // 2. Write broken reference (remove crew referenced by pipeline) -> keep previous valid state & surface error.
+    // 2. Write broken reference (`onFail` targeting missing step) -> keep previous valid state & surface error.
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew: []',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: standard',
-      '    name: Standard Line',
-      '    stages:',
-      '      - memberId: arch',
-      '        instruction: draft architecture',
-      'routes: []',
+      '    name: Broken Line',
+      '    when: feature work',
+      '    workspaceMode: in-place',
+      '    steps:',
+      '      - id: draft',
+      '        name: Architect',
+      '        skills: []',
+      '        onFail: arch',
       '',
     ].join('\n'), 'utf8')
 
@@ -205,44 +211,129 @@ test('hot reloads external YAML edits, keeps last valid state on errors, and rec
         && ctx.dshManagerTeamConfig.status().lastError !== undefined,
       'invalid YAML error capture',
     )
-    expect(ctx.dshManagerTeamConfig.status().lastError).toContain('unknown crew member "arch"')
-    expect(ctx.dshManagerCrew.list().map(m => m.id)).toEqual(['arch'])
-    expect(ctx.dshManagerPipeline.list().map(p => p.id)).toEqual(['standard'])
+    expect(ctx.dshManagerTeamConfig.status().lastError).toContain('arch')
+    expect(ctx.dshManagerFlow.list().map(f => f.id)).toEqual(['standard'])
+    expect(ctx.dshManagerFlow.require('standard').name).toBe('Standard Line')
 
-    // 3. Fix YAML with updated role & extra stage -> error clears and new state activates.
+    // 3. Fix YAML with valid v3 Flow IR & extra review step -> error clears and new state activates.
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: arch',
-      '    name: Architect v2',
-      '    role: design deep modules v2',
-      '  - id: qa',
-      '    name: QA',
-      '    role: verify edge cases',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: standard',
       '    name: Standard Line v2',
-      '    stages:',
-      '      - memberId: arch',
-      '        instruction: draft architecture',
-      '      - memberId: qa',
-      '        instruction: run full e2e',
-      'routes:',
-      '  - id: r-feat',
-      '    condition: feature work',
-      '    pipelineId: standard',
+      '    when: feature work',
+      '    workspaceMode: worktree',
+      '    enabled: true',
+      '    steps:',
+      '      - id: draft',
+      '        name: Architect v2',
+      '        skills:',
+      '          - how',
+      '        goal: draft architecture',
+      '      - id: qa',
+      '        name: QA',
+      '        skills:',
+      '          - verify',
+      '        readOnly: true',
+      '        onFail: draft',
+      '        goal: run full e2e',
       '',
     ].join('\n'), 'utf8')
 
     await waitUntil(
       () => ctx.dshManagerTeamConfig.status().lastError === undefined
-        && ctx.dshManagerCrew.list().some(m => m.id === 'qa')
-        && ctx.dshManagerPipeline.require('standard').stages.length === 2,
+        && ctx.dshManagerFlow.require('standard').steps.length === 2,
       'recovery hot reload after fixing YAML',
     )
-    expect(ctx.dshManagerCrew.require('arch').name).toBe('Architect v2')
-    expect(ctx.dshManagerPipeline.require('standard').name).toBe('Standard Line v2')
+    expect(ctx.dshManagerFlow.require('standard').name).toBe('Standard Line v2')
+    expect(ctx.dshManagerFlow.require('standard').steps[0]?.name).toBe('Architect v2')
+    expect(ctx.dshManagerFlow.require('standard').steps[1]?.onFail).toBe('draft')
   } finally {
     await ctx.fiber.dispose()
+  }
+}, 300_000)
+
+test('auto-seeds default Playbooks on fresh boot with workspace priority and never overwrites user clears', async () => {
+  await mkdir(join(seedWs, 'skills', 'playbooks'), { recursive: true })
+  await mkdir(join(seedWs, 'skills', 'writing'), { recursive: true })
+  await writeFile(join(seedWs, 'skills', 'writing', 'SKILL.md'), '---\nname: writing\ndescription: writing skill\n---\n', 'utf8')
+  await writeFile(join(seedWs, 'skills', 'playbooks', 'bug-fix.md'), [
+    '---',
+    'id: bug-fix',
+    'name: 工作区覆盖缺陷修复',
+    'when: workspace overridden bug fix criteria',
+    'workspaceMode: in-place',
+    '---',
+    '1. **复现确认** {#repro} (`bug-fix`, 只读): reproduce reliably.',
+    '2. **修复补测** {#fix} (`tdd`): fix cleanly.',
+    '3. **复验关闭** {#verify} (`verify`, 只读, 失败回退: fix): check green.',
+  ].join('\n'), 'utf8')
+
+  const overlayPath = join(seedHome, 'seed.patch.yml')
+  await writeFile(overlayPath, [
+    '- id: webserver',
+    '  config:',
+    '    host: 127.0.0.1',
+    '    port: 3112',
+    '    compression: gzip',
+    '    compressionLevel: 1',
+    '    compressionThresholdBytes: 1024',
+    '- insert:',
+    '    - id: dsh-manager',
+    '      name: "@charonx/dsh-manager"',
+    '      config:',
+    '        steward:',
+    '          tickMs: 3600000',
+    '        executor:',
+    '          tickMs: 3600000',
+    `          cwd: ${JSON.stringify(seedWs)}`,
+    '',
+  ].join('\n'), 'utf8')
+
+  // Boot 1: brand-new home auto-seeds 4 default Playbooks, preferring workspace bug-fix override.
+  const first = await bootTestProfile({
+    binName: 'dsh-manager-test',
+    profile: 'web',
+    overlayPaths: [overlayPath],
+    home: seedHome,
+  })
+  let yamlPath = ''
+  try {
+    await waitUntilService(first, 'dshManagerFlow')
+    yamlPath = first.dshManagerTeamConfig.status().filePath
+    const flows = first.dshManagerFlow.list()
+    expect(flows.map(f => f.id)).toEqual(['code-dev', 'bug-fix', 'knowledge-creation', 'refactoring'])
+
+    const wsBugFix = flows.find(f => f.id === 'bug-fix')!
+    expect(wsBugFix.name).toBe('工作区覆盖缺陷修复')
+    expect(wsBugFix.workspaceMode).toBe('in-place')
+    expect(wsBugFix.source?.ref).toBe('skills/playbooks/bug-fix.md')
+    expect(wsBugFix.steps.find(s => s.id === 'verify')?.onFail).toBe('fix')
+
+    const builtinKnowledge = flows.find(f => f.id === 'knowledge-creation')!
+    expect(builtinKnowledge.source?.ref).toBe('builtin:knowledge-creation.md')
+
+    // User removes all flows (opts into single-step generic execution).
+    for (const f of [...flows]) {
+      await first.dshManagerFlow.flowRemove({ flowId: f.id })
+    }
+    expect(first.dshManagerFlow.list()).toEqual([])
+  } finally {
+    await first.fiber.dispose()
+  }
+
+  // Boot 2: existing `team-config.yaml` with `flows: []` is respected and never re-seeded.
+  const second = await bootTestProfile({
+    binName: 'dsh-manager-test',
+    profile: 'web',
+    overlayPaths: [overlayPath],
+    home: seedHome,
+  })
+  try {
+    await waitUntilService(second, 'dshManagerFlow')
+    expect(second.dshManagerFlow.list()).toEqual([])
+    expect(await readFile(yamlPath, 'utf8')).toContain('flows: []')
+  } finally {
+    await second.fiber.dispose()
   }
 }, 300_000)

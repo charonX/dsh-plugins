@@ -23,33 +23,27 @@ async function mountSteward(stewardStatus: ReturnType<typeof vi.fn>): Promise<{ 
   const runtime = await SlotTestRuntime.create()
   const locale = new LocaleRuntime(runtime.ctx)
   runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
   runtime.ctx.slots.installLocale(locale)
   await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
   runtime.remote.provideNamespaces({
     dshManager: {
       stewardStatus,
-      // The team page reads the roster and pipelines alongside the status;
-      // keep both quiet.
-      crewList: vi.fn().mockResolvedValue({ ok: true, value: { members: [] } }),
-      crewAdd: vi.fn().mockResolvedValue({ ok: false }),
-      crewUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      crewRemove: vi.fn().mockResolvedValue({ ok: true }),
-      pipelineList: vi.fn().mockResolvedValue({ ok: true, value: { pipelines: [] } }),
-      pipelineAdd: vi.fn().mockResolvedValue({ ok: false }),
-      pipelineUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      pipelineRemove: vi.fn().mockResolvedValue({ ok: true }),
-      pipelineReferencesOf: vi.fn().mockResolvedValue({ ok: true, value: { references: [] } }),
-      ruleList: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
-      ruleAdd: vi.fn().mockResolvedValue({ ok: false }),
-      ruleUpdate: vi.fn().mockResolvedValue({ ok: false }),
-      ruleRemove: vi.fn().mockResolvedValue({ ok: true }),
-      ruleReferencesOfPipeline: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
+      // The team page reads flows and skills alongside the status; keep both quiet.
+      flowList: vi.fn().mockResolvedValue({ ok: true, value: { flows: [] } }),
+      flowAdd: vi.fn().mockResolvedValue({ ok: false }),
+      flowUpdate: vi.fn().mockResolvedValue({ ok: false }),
+      flowRemove: vi.fn().mockResolvedValue({ ok: true }),
+      flowPresetApply: vi.fn().mockResolvedValue({ ok: false }),
+      flowImportPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+      flowSyncPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+      skillCatalog: vi.fn().mockResolvedValue({ ok: true, value: { skills: [] } }),
       // The run records section on the team page stays quiet.
       evalList: vi.fn().mockResolvedValue({ ok: true, value: { evals: [] } }),
       connectionList: vi.fn().mockResolvedValue({ ok: true, value: { connections: [] } }),
     },
   })
-  await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+  await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
   const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
   // The single tabbed panel defaults to the board; open the Monitor tab and switch to Steward activity.
   fireEvent.click(view.view.getByRole('tab', { name: 'Monitor' }))
@@ -119,6 +113,7 @@ describe('steward status page', () => {
     const runtime = await SlotTestRuntime.create()
     const locale = new LocaleRuntime(runtime.ctx)
     runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
     runtime.ctx.slots.installLocale(locale)
     await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
     runtime.remote.provideNamespaces({
@@ -128,7 +123,7 @@ describe('steward status page', () => {
         connectionList: vi.fn().mockResolvedValue({ ok: true, value: { connections: [] } }),
       },
     })
-    await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+    await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
     const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
     fireEvent.click(view.view.getByRole('tab', { name: 'Monitor' }))
     await vi.waitFor(() => {

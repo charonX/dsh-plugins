@@ -14,7 +14,7 @@
 
 1. 通过 Playwright / 浏览器自动化工具打开 `http://127.0.0.1:3080/`。
 2. 监听页面 `console.error` 与 `pageerror`。
-3. 依次点击侧栏中的 `dsh-manager`（验证 `board`、`team`、`policy`、`briefings`、`settings` 标签页切换）及其他自建插件图标，并截图保存至证据目录。
+3. 依次点击侧栏中的 `dsh-manager`（验证 `board`、`team`、`policy`、`monitor`、`settings` 五个顶层标签页切换，及深浅色模式）及其他自建插件图标，并截图保存至证据目录。
 
 ## Gotchas
 

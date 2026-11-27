@@ -83,4 +83,43 @@ describe('external agent slash command source', () => {
     })
     expect(outcome).toEqual({ text: '/simplify ' })
   })
+
+  it('prefers session-scoped commands from workspace cwd over global catalog commands and warms them', async () => {
+    const cached: readonly AgentDescriptor[] = [
+      nativeDescriptor,
+      { ...claudeDescriptor, commands: [{ name: 'global-only', description: 'Global command' }] },
+    ]
+    const sessionCommands = new Map<string, readonly { name: string; description?: string }[]>()
+    const fetchSessionCommands = vi.fn(async (sid: string) => {
+      const cmds = [{ name: 'align', description: 'Workspace skill from cwd' }]
+      sessionCommands.set(`${sid}:claude-code`, cmds)
+      return cmds
+    })
+    const source = createExternalSlashSource({
+      getAgentId: () => 'claude-code',
+      fetchSessionAgentId: async () => 'claude-code',
+      getCachedCatalog: () => cached,
+      fetchCatalog: async () => cached,
+      getCachedSessionCommands: (sid, agentId) => sessionCommands.get(`${sid}:${agentId}`),
+      fetchSessionCommands,
+      sectionLabel: a => `${a.label} 指令`,
+    })
+
+    const session = { sessionId: brandString<SessionId>('s-cwd-1') }
+    source.warm?.(session)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const candidates = await source.candidates(session, {
+      query: 'ali',
+      position: 'leading',
+      drilled: false,
+      signal: new AbortController().signal,
+    })
+
+    expect(fetchSessionCommands).toHaveBeenCalledTimes(1)
+    expect(fetchSessionCommands).toHaveBeenCalledWith('s-cwd-1', 'claude-code')
+    expect(candidates.map(c => c.name)).toEqual(['align'])
+    expect(candidates[0]?.section).toBe('Claude Code 指令')
+  })
 })

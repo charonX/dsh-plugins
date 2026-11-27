@@ -137,7 +137,15 @@ NODE
 fi
 echo
 
-echo "-- 4. dsh web server probe (127.0.0.1:$PORT) --"
+echo "-- 4. repo hygiene & verify-doc consistency --"
+if node "$DSH_ROOT/scripts/check-repo-hygiene.mjs"; then
+  :
+else
+  fail=1
+fi
+echo
+
+echo "-- 5. dsh web server probe (127.0.0.1:$PORT) --"
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   root_code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/" || echo "000")
   echo "[INFO] listener active on 127.0.0.1:$PORT (root=$root_code)"

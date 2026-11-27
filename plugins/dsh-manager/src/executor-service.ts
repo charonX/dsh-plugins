@@ -9,22 +9,24 @@
  * references, never copied. The boot sweep marks interrupted runs so a crash
  * mid-dispatch never makes work silently disappear.
  */
+import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-tool-present/types'
 import type {} from '@deepseek-ai/dsh-workspace-changes/types'
 import z from '@deepseek-ai/schemastery'
-import type { TicketRecord } from './board-domain.ts'
+import type { TicketRecord, TicketWorktreePlan } from './board-domain.ts'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { answerAttention, askAttention, classifyConfirmationAnswer, isEscalationAttention, settleMatchingPendingAttentions, settlePendingEscalationAttentions, type AttentionAction, type AttentionRecord, type AttentionStorePort } from './attention/attention-core.ts'
@@ -33,27 +35,32 @@ import { categorizeTool, requiresApproval } from './approval/approval-policy.ts'
 import { resolveAgentModelOptions, type ModelOptionLayer } from './agent-model-options.ts'
 import { createDomainAttentionStore } from './attention/storage-store.ts'
 import { attentionAnswerInputSchema, attentionListInputSchema, type AttentionAnswerInput, type AttentionListInput, type AttentionView } from './attention/wire-types.ts'
-import { cancelDispatch, enqueueDispatch, latestExternalSession, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
+import { cancelDispatch, enqueueDispatch, latestExternalSession, recordDispatchPrompt, recordExternalSession, recordReport, startDispatch, touchDispatch, interruptDispatch, type DispatchPromptRecord, type DispatchRecord, type DispatchStorePort } from './dispatch/dispatch-core.ts'
 import { buildExternalCliPrompt, runCliBackend, type ExternalAgentKind } from './dispatch/cli-backend.ts'
-import type { AgentKind, CrewMember } from './crew/crew-core.ts'
-import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor } from './dispatch/worktree.ts'
+import type { AgentKind, FlowDef, FlowStepDef } from './flow/flow-ir.ts'
+import { probeProjectFacts, type ProjectFactsSnapshot } from './prompt/project-facts.ts'
+import { MAX_RENDERED_PROMPT_BYTES, buildExecutorTurnPrompt, truncateUtf8Bytes } from './prompt/prompt-builder.ts'
+import { ensureTicketWorktree, inspectTicketWorktree, removeTicketWorktree, worktreeBranchFor, worktreePathFor } from './dispatch/worktree.ts'
 import { resolveTaskScratchDir } from './dispatch/scratch-artifacts.ts'
-import { discoverWorkspaceSkills, formatSkillPromptLines } from './dispatch/workspace-skills.ts'
-import { discoverProjectLandingFacts, formatLandingDiscoveryPromptLines, type ProjectLandingFacts } from './dispatch/landing-discovery.ts'
+import { discoverWorkspaceSkills, type DiscoveredSkill, type HostSkillsPort } from './dispatch/workspace-skills.ts'
+import { discoverProjectLandingFacts, type ProjectLandingFacts } from './dispatch/landing-discovery.ts'
 import { checkBranchRebaseStatus, createMrOrPr, localMergeBranch, pushBranch } from './dispatch/landing-ops.ts'
 import { recordReview, type ReviewStorePort } from './review/review-core.ts'
 import {
+  continueTicketInputSchema,
   dispatchCancelInputSchema,
   dispatchListInputSchema,
   dispatchTicketInputSchema,
   ticketChangeDiffInputSchema,
   ticketDetailInputSchema,
-  type ChangesRef, type DeliverableRef, type DispatchCancelInput, type DispatchListInput, type DispatchMessageView,
+  type ChangesRef, type ContinueTicketInput, type ContinueTicketResult, type DeliverableRef, type DispatchCancelInput, type DispatchListInput, type DispatchMessageView,
   type DispatchTicketInput, type DispatchView, type FileDiffView, type ReportView,
   type TicketChangeDiffInput, type TicketDetailInput, type TicketDetailView, type TicketLinkView,
   type WorktreeInspectionView,
 } from './dispatch/wire-types.ts'
 import { flowChain, flowTimelineOf, type FlowTimelineView } from './flow/flow-core.ts'
+import { appendTimelineEvent, artifactsOf, type TimelineActivity } from './timeline/timeline-core.ts'
+import { backfillTimeline, type TimelineEvent } from './timeline/timeline-core.ts'
 import { unresolvedDependencies } from './board/dependency-core.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -75,6 +82,10 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'dshManager/dispatch-not-found': { readonly id: string }
     /** The addressed attention is missing or no longer pending. */
     'dshManager/attention-not-found': { readonly id: string }
+    /** The ticket still has a pending attention; answer it before continuing. */
+    'dshManager/attention-pending': { readonly id: string }
+    /** The continuation instruction was empty. */
+    'dshManager/empty-instruction': Record<string, never>
   }
 }
 
@@ -131,15 +142,21 @@ const DEFAULT_MAX_CONCURRENT = 3
 
 export class DshManagerExecutor extends TypertRemoteService {
   /** Host services the executor reads. */
-  static inject = ['agents', 'agentPresets', 'sessions', 'subprocess', 'workspaceRegistry', 'sandboxPolicy', 'workspaceChanges', 'dshManagerBoard', 'dshManagerMappings', 'dshManagerEffects', 'dshManagerNotifications', 'dshManagerChannel', 'dshManagerPolicy', 'dshManagerPipeline', 'dshManagerCrew']
+  static inject = ['agents', 'agentPresets', 'sessions', 'subprocess', 'workspaceRegistry', 'sandboxPolicy', 'workspaceChanges', 'dshManagerBoard', 'dshManagerMappings', 'dshManagerEffects', 'dshManagerNotifications', 'dshManagerChannel', 'dshManagerPolicy', 'dshManagerFlow']
 
   static Config: z<ExecutorConfig> = ExecutorConfig
 
   private config: ExecutorConfig
   private pumping = false
+  private disposed = false
+  private readonly activeRuns = new Set<Promise<void>>()
   private ticker?: ReturnType<typeof setInterval>
   /** The live executor agents by dispatch id; answer delivery follows up here. */
+  /** Last assistant sentence mirrored per dispatch; re-emissions of it are not new speech. */
+  private readonly lastAssistantBody = new Map<string, string>()
   private liveAgents = new Map<string, Agent>()
+  /** The owning handles by dispatch id; a resumed turn disposes its predecessor first. */
+  private liveHandles = new Map<string, AgentHandle>()
   /** Abort controllers for active dispatches (external CLIs and built-in turns). */
   private activeControllers = new Map<string, AbortController>()
   /** The parked approval decisions by attention id; the board's answer resolves them. */
@@ -186,7 +203,16 @@ export class DshManagerExecutor extends TypertRemoteService {
     })
     const tickMs = this.config.tickMs ?? DEFAULT_TICK_MS
     this.ticker = setInterval(() => { void this.pump() }, tickMs)
-    this.ctx.effect(() => () => { clearInterval(this.ticker) }, 'dsh-manager: stop executor tick')
+    this.ctx.effect(() => async () => {
+      this.disposed = true
+      clearInterval(this.ticker)
+      for (const controller of this.activeControllers.values()) {
+        controller.abort(new Error('dsh-manager: executor disposed'))
+      }
+      if (this.activeRuns.size > 0) {
+        await Promise.allSettled([...this.activeRuns])
+      }
+    }, 'dsh-manager: stop executor tick')
   }
 
   /** Queue one ticket's dispatch; the effects queue starts its Executor Session. */
@@ -222,6 +248,132 @@ export class DshManagerExecutor extends TypertRemoteService {
     await this.ctx.dshManagerEffects.enqueue(DISPATCH_EFFECT_KIND, { dispatchId: record.id })
     void this.pump()
     return this.viewOf(record)
+  }
+
+  /**
+   * Continue one ticket from the board: deliver the instruction into a running
+   * turn, queue it behind a busy turn, or reopen an ended ticket and resume its
+   * Executor Session. The ticket's timeline records the instruction either way.
+   */
+  @Remote
+  async continueTicket(rawInput: ContinueTicketInput): Promise<ContinueTicketResult> {
+    const input = continueTicketInputSchema.parse(rawInput)
+    const text = input.text.trim()
+    if (text === '') {
+      throw new RemoteError('dshManager/empty-instruction', 'the instruction is empty', {})
+    }
+    const board = this.ctx.dshManagerBoard
+    const ticket = board.ticketRecord(input.ticketId)
+    if (ticket === undefined) {
+      throw new RemoteError('dshManager/ticket-not-found', `ticket ${input.ticketId} does not exist`, { id: input.ticketId })
+    }
+    const pending = this.attentionStore().listAttentions()
+      .filter(record => record.ticketId === ticket.id && record.status === 'pending')
+    if (pending.length > 0) {
+      throw new RemoteError('dshManager/attention-pending', `ticket ${ticket.id} has a pending attention`, { id: ticket.id })
+    }
+    if (ticket.state === 'attention') {
+      throw new RemoteError('dshManager/attention-pending', `ticket ${ticket.id} is waiting for an answer`, { id: ticket.id })
+    }
+    const now = Date.now()
+    const store = board.dispatchStore()
+    const dispatches = store.listDispatches()
+      .filter(record => record.ticketId === ticket.id)
+      .sort((left, right) => right.createdAt - left.createdAt)
+    const running = dispatches.filter(record => record.state === 'running')
+    // A live built-in executor takes the instruction mid-turn; the harness
+    // queues it into the current loop when it cannot interrupt.
+    const live = running
+      .map(record => [record, this.liveAgents.get(record.id)] as const)
+      .find(([, agent]) => agent !== undefined)
+    if (live !== undefined) {
+      const [prior, agent] = live
+      if (agent !== undefined) {
+        await this.appendEvent(ticket.id, 'instruction', 'user', 'sent', text, now, prior.id)
+        agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+        return { ok: true, mode: 'delivered', dispatchId: prior.id }
+      }
+    }
+    // A running external CLI (or a built-in turn without a live agent) cannot
+    // take text now: queue one turn that resumes the same session when it ends.
+    if (running.length > 0) {
+      const prior = running[0]!
+      const queued = await enqueueDispatch(store, ticket.id, now, {
+        ...(prior.sessionId === undefined ? {} : { sessionId: prior.sessionId }),
+        resumeOf: prior.id,
+      })
+      await this.appendEvent(ticket.id, 'instruction', 'user', 'queued', text, now, queued.id)
+      void this.pump()
+      return { ok: true, mode: 'queued', dispatchId: queued.id }
+    }
+    if (ticket.state === 'todo') {
+      const waitingOn = unresolvedDependencies(board.ticketRecords(), ticket)
+      if (waitingOn.length > 0) {
+        throw new RemoteError(
+          'dshManager/ticket-blocked',
+          `ticket ${ticket.id} is waiting on unresolved dependencies (${waitingOn.map(dep => dep.id).join(', ')})`,
+          { id: ticket.id, waitingOn: waitingOn.map(dep => dep.id) },
+        )
+      }
+    }
+    const last = dispatches.find(record => record.sessionId !== undefined && record.sessionId !== '')
+    const resume = input.newSession !== true && last !== undefined
+    if (ticket.state === 'ended') {
+      await board.reopenStageTicket(ticket.id, { reason: text, author: 'user' })
+    }
+    const record = await enqueueDispatch(store, ticket.id, now, resume
+      ? { sessionId: last!.sessionId!, resumeOf: last!.id }
+      : {})
+    await this.appendEvent(ticket.id, 'instruction', 'user', resume ? 'resumed' : 'started', text, now, record.id)
+    await settleMatchingPendingAttentions(
+      this.attentionStore(),
+      att => isEscalationAttention(att) || (att.details?.startsWith('watchdog:stall:') ?? false),
+      're-dispatched',
+      now,
+      ticket.id,
+    )
+    await this.ctx.dshManagerEffects.enqueue(DISPATCH_EFFECT_KIND, { dispatchId: record.id })
+    void this.pump()
+    return { ok: true, mode: resume ? 'resumed' : 'started', dispatchId: record.id }
+  }
+
+  /** Append one ticket-ledger event, best effort so a ledger hiccup never blocks work. */
+  private async appendEvent(
+    ticketId: string,
+    kind: 'instruction' | 'system' | 'attention' | 'artifact',
+    author: 'user' | 'executor' | 'steward' | 'system',
+    code: string,
+    body: string,
+    at: number,
+    turnId?: string,
+    extra?: {
+      readonly id?: string
+      readonly sessionId?: string
+      readonly turn?: number
+      readonly sourceSeq?: number
+      readonly activity?: TimelineActivity
+      readonly backfilled?: boolean
+    },
+  ): Promise<void> {
+    try {
+      await appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+        ticketId,
+        kind,
+        author,
+        code,
+        body,
+        at,
+        ...(turnId === undefined ? {} : { turnId }),
+        ...(extra?.id === undefined ? {} : { id: extra.id }),
+        ...(extra?.sessionId === undefined ? {} : { sessionId: extra.sessionId }),
+        ...(extra?.turn === undefined ? {} : { turn: extra.turn }),
+        ...(extra?.sourceSeq === undefined ? {} : { sourceSeq: extra.sourceSeq }),
+        ...(extra?.activity === undefined ? {} : { activity: extra.activity }),
+        ...(extra?.backfilled === undefined ? {} : { backfilled: extra.backfilled }),
+      })
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline append failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /** The dispatch store the executor drives; the board owns the domain. */
@@ -279,7 +431,7 @@ export class DshManagerExecutor extends TypertRemoteService {
         const ticket = this.ctx.dshManagerBoard.ticketRecord(answered.ticketId)
         if (ticket?.flow !== undefined) {
           const liveCount = (() => {
-            try { return this.ctx.dshManagerPipeline.require(ticket.flow.pipelineId).stages.length } catch { return ticket.flow.stageCount }
+            try { return this.ctx.dshManagerFlow.require(ticket.flow.pipelineId).steps.length } catch { return ticket.flow.stageCount }
           })()
           if (ticket.flow.stageIndex < liveCount - 1) {
             await this.ctx.dshManagerEffects.enqueue('flow-advance', { ticketId: answered.ticketId })
@@ -301,7 +453,7 @@ export class DshManagerExecutor extends TypertRemoteService {
           feedback: opinion,
           origin: 'human',
         }, Date.now())
-        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId)
+        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId, { reason: opinion, author: 'user' })
         await this.dispatchIfIdleAndUnblocked(targetTicketId)
       }
       return this.attentionViewOf(answered)
@@ -406,7 +558,7 @@ export class DshManagerExecutor extends TypertRemoteService {
         const ticket = this.ctx.dshManagerBoard.ticketRecord(answered.ticketId)
         if (ticket?.flow !== undefined) {
           const liveCount = (() => {
-            try { return this.ctx.dshManagerPipeline.require(ticket.flow.pipelineId).stages.length } catch { return ticket.flow.stageCount }
+            try { return this.ctx.dshManagerFlow.require(ticket.flow.pipelineId).steps.length } catch { return ticket.flow.stageCount }
           })()
           if (ticket.flow.stageIndex < liveCount - 1) {
             await this.ctx.dshManagerEffects.enqueue('flow-advance', { ticketId: answered.ticketId })
@@ -427,7 +579,7 @@ export class DshManagerExecutor extends TypertRemoteService {
           feedback: opinion,
           origin: 'human',
         }, Date.now())
-        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId)
+        await this.ctx.dshManagerBoard.reopenStageTicket(targetTicketId, { reason: opinion, author: 'user' })
         await this.dispatchIfIdleAndUnblocked(targetTicketId)
       }
       return this.attentionViewOf(answered)
@@ -469,19 +621,18 @@ export class DshManagerExecutor extends TypertRemoteService {
       .sort((left, right) => right.createdAt - left.createdAt)[0]?.id
   }
 
-  /** When rejecting a read-only review stage, return to its preceding execution stage if any. */
+  /** When rejecting a step with `onFail`, return to its configured target step ticket if present. */
   private reworkTargetTicketIdOf(ticket: TicketRecord | undefined): string {
     if (ticket?.flow === undefined) return ticket?.id ?? ''
     try {
-      const pipeline = this.ctx.dshManagerPipeline.require(ticket.flow.pipelineId)
-      const stage = pipeline.stages[ticket.flow.stageIndex]
-      if (stage?.mode !== 'review') return ticket.id
+      const flow = this.ctx.dshManagerFlow.require(ticket.flow.pipelineId)
+      const step = flow.steps[ticket.flow.stageIndex]
+      if (step?.onFail === undefined || step.onFail === 'self') return ticket.id
+      const targetIndex = flow.steps.findIndex(entry => entry.id === step.onFail)
+      if (targetIndex === -1) return ticket.id
       const chain = flowChain(this.ctx.dshManagerBoard.ticketRecords(), ticket.id)
-      if (chain === undefined) return ticket.id
-      const pos = chain.stages.findIndex(entry => entry.id === ticket.id)
-      const before = pos === -1 ? chain.stages : chain.stages.slice(0, pos)
-      const prevExec = [...before].reverse().find(candidate => pipeline.stages[candidate.flow.stageIndex]?.mode !== 'review')
-      return prevExec?.id ?? ticket.id
+      const targetTicket = chain?.stages.find(entry => entry.flow.stageIndex === targetIndex)
+      return targetTicket?.id ?? ticket.id
     } catch {
       return ticket.id
     }
@@ -588,19 +739,101 @@ export class DshManagerExecutor extends TypertRemoteService {
     const rawDispatches = this.ctx.dshManagerBoard.dispatchStore().listDispatches()
       .filter(record => record.ticketId === input.ticketId)
       .sort((left, right) => right.createdAt - left.createdAt)
-    const deliverables: DeliverableRef[] = []
-    const changes: ChangesRef[] = []
+    let events = await this.eventsOfTicket(input.ticketId, rawDispatches)
+    if (rawDispatches.length > 0 && !events.some(event => event.code === 'artifacts-scanned')) {
+      await this.backfillArtifacts(input.ticketId, rawDispatches)
+      events = await this.eventsOfTicket(input.ticketId, rawDispatches)
+    }
+    const ledger = artifactsOf(events)
+    const deliverables: DeliverableRef[] = ledger.deliverables.map((artifact, index) => ({
+      sessionId: artifact.sessionId as SessionId,
+      turn: artifact.turn,
+      index,
+      path: artifact.path,
+      ...(artifact.description === undefined ? {} : { description: artifact.description }),
+    }))
+    const changes: ChangesRef[] = ledger.changes.map(artifact => ({
+      sessionId: artifact.sessionId as SessionId,
+      seq: artifact.seq,
+      turn: artifact.turn,
+      files: artifact.files,
+    }))
+    const seenDeliverables = new Set(deliverables.map(ref => `${String(ref.sessionId)}:${ref.path}`))
+    const seenChanges = new Set(changes.map(ref => `${String(ref.sessionId)}:${ref.seq}`))
     const dispatches: DispatchView[] = rawDispatches.map(record => {
       const session = record.sessionId !== undefined && (record.agentKind === undefined || record.agentKind === 'builtin')
         ? this.ctx.sessions.get(record.sessionId as SessionId)
         : undefined
       if (session !== undefined && record.sessionId !== undefined) {
-        deliverables.push(...this.presentedOf(record.sessionId, session))
-        changes.push(...this.changesOf(record.sessionId, session))
+        for (const ref of this.presentedOf(record.sessionId, session)) {
+          const key = `${record.sessionId}:${ref.path}`
+          if (seenDeliverables.has(key)) continue
+          seenDeliverables.add(key)
+          deliverables.push(ref)
+        }
+        for (const ref of this.changesOf(record.sessionId, session)) {
+          const key = `${record.sessionId}:${ref.seq}`
+          if (seenChanges.has(key)) continue
+          seenChanges.add(key)
+          changes.push(ref)
+        }
       }
       return this.viewOf(record, session)
     })
-    return { ticket, dispatches, deliverables, changes, ...this.followUpLinks(input.ticketId) }
+    return { ticket, dispatches, deliverables, changes, events, ...this.followUpLinks(input.ticketId) }
+  }
+
+  /**
+   * The ticket's ledger in chronological order. A ticket created before the
+   * ledger existed has its history folded in from dispatches and attentions on
+   * first read — deterministic ids keep the fold idempotent, and later appends
+   * continue the same sequence.
+   */
+  private async eventsOfTicket(ticketId: string, dispatches: readonly DispatchRecord[]): Promise<readonly TimelineEvent[]> {
+    const store = this.ctx.dshManagerBoard.timelineStore()
+    const existing = store.getTimeline(ticketId)
+    if (existing !== undefined) return existing.events
+    const attentions = this.ctx.dshManagerBoard.attentionStore().listAttentions().filter(record => record.ticketId === ticketId)
+    if (dispatches.length === 0 && attentions.length === 0) return []
+    const folded = backfillTimeline(ticketId, dispatches, attentions, Date.now())
+    await store.putTimeline(folded)
+    return folded.events
+  }
+
+  /**
+   * Fold deliverables from persisted Session logs into the ledger once, so a
+   * drawer opened after a restart still lists them. A terminal marker keeps a
+   * ticket with no deliverables from rescanning on every open; diffs are not
+   * recovered because the host computes them from live workspace state.
+   */
+  private async backfillArtifacts(ticketId: string, dispatches: readonly DispatchRecord[]): Promise<void> {
+    const query = this.ctx.get('sessionQuery') as {
+      inspectSession<T>(sessionId: SessionId, read: (session: Session) => T, signal?: AbortSignal): Promise<T>
+    } | undefined
+    let scanned = 0
+    for (const record of dispatches.slice(0, 10)) {
+      if (record.sessionId === undefined) continue
+      if (record.agentKind !== undefined && record.agentKind !== 'builtin') continue
+      const sessionId = record.sessionId as SessionId
+      if (query !== undefined) {
+        try {
+          const refs = await query.inspectSession(sessionId, session => this.presentedOf(sessionId, session), AbortSignal.timeout(5_000))
+          for (const ref of refs) {
+            await this.appendEvent(ticketId, 'artifact', 'executor', 'deliverable', ref.description ?? '', Date.now(), record.id, {
+              id: `deliverable:${sessionId}:${ref.turn}:${ref.index}`,
+              sessionId,
+              turn: ref.turn,
+              activity: { category: 'file', target: ref.path },
+              backfilled: true,
+            })
+          }
+        } catch (error) {
+          this.ctx.logger?.warn('dsh-manager: deliverable backfill failed: %s', error instanceof Error ? error.message : String(error))
+        }
+      }
+      scanned += 1
+    }
+    await this.appendEvent(ticketId, 'system', 'system', 'artifacts-scanned', String(scanned), Date.now(), undefined, { backfilled: true })
   }
 
   /** The follow-up chain of one ticket, for the detail view. */
@@ -641,17 +874,11 @@ export class DshManagerExecutor extends TypertRemoteService {
         ...(deliverables.length === 0 ? {} : { deliverables }),
       }
     }
-    return flowTimelineOf(chain, decorate, (pipelineId) => {
+    return flowTimelineOf(chain, decorate, (flowId) => {
       try {
-        const pipeline = this.ctx.dshManagerPipeline.require(pipelineId)
-        const stageMemberNames = pipeline.stages.map(stage => {
-          try {
-            return this.ctx.dshManagerCrew.require(stage.memberId).name
-          } catch {
-            return undefined
-          }
-        })
-        return { name: pipeline.name, stageCount: pipeline.stages.length, stageMemberNames }
+        const flow = this.ctx.dshManagerFlow.require(flowId)
+        const stageMemberNames = flow.steps.map(step => step.name)
+        return { name: flow.name, stageCount: flow.steps.length, stageMemberNames }
       } catch {
         return undefined
       }
@@ -679,10 +906,13 @@ export class DshManagerExecutor extends TypertRemoteService {
       throw new RemoteError('dshManager/ticket-not-found', `ticket ${input.ticketId} does not exist`, { id: input.ticketId })
     }
     const projectId = this.projectOfTicket(ticket)
-    if (projectId === undefined) return {}
-    const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
-    if (workspace === undefined) return {}
-    const worktree = await inspectTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
+    const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
+    const spec = this.resolveWorktreeSpec(ticket, workspace?.path)
+    if (spec.repoRoot === undefined) return {}
+    const worktree = await inspectTicketWorktree(this.ctx.subprocess, spec.repoRoot, spec.rootTicketId, {
+      branch: spec.branch,
+      ...(spec.path === undefined ? {} : { path: spec.path }),
+    })
     return { worktree }
   }
 
@@ -700,10 +930,13 @@ export class DshManagerExecutor extends TypertRemoteService {
       throw new RemoteError('dshManager/dispatch-active', `ticket ${ticket.id} still has active dispatch ${active.id}`, { id: active.id })
     }
     const projectId = this.projectOfTicket(ticket)
-    if (projectId === undefined) return { removed: false }
-    const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
-    if (workspace === undefined) return { removed: false }
-    return await removeTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
+    const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
+    const spec = this.resolveWorktreeSpec(ticket, workspace?.path)
+    if (spec.repoRoot === undefined) return { removed: false }
+    return await removeTicketWorktree(this.ctx.subprocess, spec.repoRoot, spec.rootTicketId, {
+      branch: spec.branch,
+      ...(spec.path === undefined ? {} : { path: spec.path }),
+    })
   }
 
   /**
@@ -712,7 +945,7 @@ export class DshManagerExecutor extends TypertRemoteService {
    * started executor runs detached, so the pump never blocks on a turn.
    */
   async pump(): Promise<void> {
-    if (this.pumping) return
+    if (this.pumping || this.disposed) return
     this.pumping = true
     try {
       const store = this.ctx.dshManagerBoard.dispatchStore()
@@ -735,16 +968,26 @@ export class DshManagerExecutor extends TypertRemoteService {
       const queued = records.filter(record => record.state === 'queued')
         .sort((left, right) => left.createdAt - right.createdAt)
       for (const next of queued) {
-        if (slots <= 0) break
+        if (slots <= 0 || this.disposed) break
         const targetTicket = byTicket.get(next.ticketId)
         if (targetTicket !== undefined && unresolvedDependencies(tickets, targetTicket).length > 0) continue
-        const sessionId = `dsh-manager-exec-${next.id}` as SessionId
+        // A resumed turn reuses the predecessor's session; never start it while
+        // that session still has a running dispatch (one live agent per session).
+        if (next.resumeOf !== undefined) {
+          const prior = records.find(record => record.id === next.resumeOf)
+          if (prior !== undefined && prior.state !== 'ended') continue
+        }
+        const sessionId = (next.sessionId ?? `dsh-manager-exec-${next.id}`) as SessionId
+        if (records.some(record => record.id !== next.id && record.state === 'running' && record.sessionId === sessionId)) continue
         const started = await startDispatch(store, next.id, sessionId, Date.now())
-        if (started === undefined) continue
+        if (started === undefined || this.disposed) continue
         slots--
-        void this.runExecutor(started).catch(error => {
-          this.ctx.logger?.error(error)
+        const runPromise = this.runExecutor(started).catch(error => {
+          if (!this.disposed) this.ctx.logger?.error(error)
+        }).finally(() => {
+          this.activeRuns.delete(runPromise)
         })
+        this.activeRuns.add(runPromise)
       }
     } finally {
       this.pumping = false
@@ -759,50 +1002,78 @@ export class DshManagerExecutor extends TypertRemoteService {
       await recordReport(store, record.id, 'failed', 'the ticket no longer exists', Date.now())
       return
     }
-    // A mapped ticket works inside its own (or shared flow-root) git worktree;
-    // an unmapped one stays in the configured cwd, read-only.
+    // A mapped ticket works inside its planned (or fallback) git worktree;
+    // Steward can also designate `mode: 'none'` for read-only work or point
+    // `repoRoot` to a nested sub-repo inside an aggregate workspace.
     const projectId = this.projectOfTicket(ticket)
     let cwd = this.config.cwd ?? process.cwd()
     let scratchBase = cwd
+    let workspacePath: string | undefined
     if (projectId !== undefined) {
       const workspace = this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
       if (workspace === undefined) {
         await recordReport(store, record.id, 'failed', `the mapped project ${projectId} has no workspace`, Date.now())
         return
       }
+      workspacePath = workspace.path
       scratchBase = workspace.path
-      try {
-        cwd = await ensureTicketWorktree(this.ctx.subprocess, workspace.path, this.worktreeTicketIdOf(ticket))
-      } catch (error) {
-        await recordReport(store, record.id, 'failed', `the worktree failed to prepare: ${String(error)}`, Date.now())
-        return
+    }
+    const worktreeSpec = this.resolveWorktreeSpec(ticket, workspacePath)
+    if (projectId !== undefined) {
+      if (worktreeSpec.mode === 'worktree' && worktreeSpec.repoRoot !== undefined) {
+        try {
+          cwd = await ensureTicketWorktree(this.ctx.subprocess, worktreeSpec.repoRoot, worktreeSpec.rootTicketId, {
+            branch: worktreeSpec.branch,
+            baseBranch: worktreeSpec.baseBranch,
+            ...(worktreeSpec.path === undefined ? {} : { path: worktreeSpec.path }),
+          })
+          if (ticket.worktree?.path !== cwd) {
+            await this.ctx.dshManagerBoard.updateWorktreePlan(worktreeSpec.rootTicketId, {
+              mode: 'worktree',
+              repoRoot: worktreeSpec.repoRoot,
+              baseBranch: worktreeSpec.baseBranch,
+              branch: worktreeSpec.branch,
+              ...(worktreeSpec.mergeTarget === undefined ? {} : { mergeTarget: worktreeSpec.mergeTarget }),
+              path: cwd,
+            })
+          }
+        } catch (error) {
+          await recordReport(store, record.id, 'failed', `the worktree failed to prepare: ${String(error)}`, Date.now())
+          return
+        }
+      } else {
+        cwd = worktreeSpec.repoRoot ?? workspacePath ?? cwd
       }
     }
     const taskScratchDir = projectId === undefined ? undefined : this.taskScratchDirOf(ticket, scratchBase)
     if (taskScratchDir !== undefined) {
       await mkdir(taskScratchDir, { recursive: true }).catch(() => {})
     }
-    const stageMeta = this.stageAndMemberOf(ticket)
-    const member = stageMeta.member
-    const stageMode = stageMeta.stageMode
-    const repoRoot = projectId === undefined ? cwd : scratchBase
-    const landingFacts = projectId !== undefined && this.isLandingStage(ticket, member?.name, stageMode)
+    const stepMeta = this.stepMetaOf(ticket)
+    const step = stepMeta.step
+    const readOnly = step?.readOnly === true
+    const repoRoot = worktreeSpec.repoRoot ?? (projectId === undefined ? cwd : scratchBase)
+    const isGitRepo = existsSync(join(cwd, '.git')) || (worktreeSpec.repoRoot !== undefined && existsSync(join(worktreeSpec.repoRoot, '.git')))
+    const landingFacts = projectId !== undefined && isGitRepo && worktreeSpec.mode !== 'none' && this.isLandingStep(ticket, step)
       ? await discoverProjectLandingFacts(this.ctx.subprocess, cwd).catch(() => undefined)
       : undefined
-    const agentKind: AgentKind = member?.agentKind ?? 'builtin'
+    const projectFacts = projectId === undefined
+      ? undefined
+      : await probeProjectFacts(cwd, landingFacts).catch(() => undefined)
+    const agentKind: AgentKind = step?.agent?.kind ?? 'builtin'
     const lastRework = [...this.reviewStore().listReviews()]
       .filter(review => review.ticketId === ticket.id && review.verdict === 'rework')
       .sort((left, right) => right.decidedAt - left.decidedAt)[0]
 
     if (agentKind !== 'builtin') {
-      await this.runExternalCliExecutor(store, record, ticket, agentKind, member, projectId, cwd, lastRework, taskScratchDir, stageMode, landingFacts)
+      await this.runExternalCliExecutor(store, record, ticket, agentKind, step, projectId, workspacePath, cwd, lastRework, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec)
       return
     }
 
     const executorSessionId = (record.sessionId ?? `dsh-manager-exec-${record.id}`) as SessionId
     let agent: Agent
     try {
-      agent = await this.createExecutorAgent(record, ticket, executorSessionId, cwd, repoRoot, projectId, taskScratchDir)
+      agent = await this.createExecutorAgent(record, ticket, executorSessionId, cwd, repoRoot, projectId, taskScratchDir, readOnly, step)
     } catch (error) {
       await recordReport(store, record.id, 'failed', `the executor session failed to start: ${String(error)}`, Date.now())
       return
@@ -817,23 +1088,20 @@ export class DshManagerExecutor extends TypertRemoteService {
           agent.cancel({ kind: 'hook', reason: 'dsh-manager: executor turn timed out' })
         }, this.config.turnTimeoutMs)
     let lastHeartbeatAt = Date.now()
-    const offSessionEvent = this.ctx.on('session/event', (session) => {
+    const offSessionEvent = this.ctx.on('session/event', (session, event) => {
       if (session.id !== executorSessionId) return
+      this.captureSessionEvent(record, event)
       const now = Date.now()
       if (now - lastHeartbeatAt < 15_000) return
       lastHeartbeatAt = now
       void touchDispatch(store, record.id, now).catch(() => undefined)
     })
     try {
-      const skills = await discoverWorkspaceSkills(cwd)
-      const base = this.executorPrompt(ticket, projectId, cwd, skills, taskScratchDir, stageMode, landingFacts)
-      const prompt = lastRework === undefined ? base : [
-        base,
-        lastRework.origin === 'human'
-          ? `The user returned this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`
-          : `The Steward reworked this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`,
-      ].join('\n')
-      agent.followup(createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'user' } }))
+      const skills = await discoverWorkspaceSkills(cwd, this.hostSkills())
+      const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
+      const rendered = this.renderExecutorPrompt(ticket, projectId, projectName, cwd, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec, lastRework)
+      await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: rendered.text }], source: { kind: 'user' } }))
       await agent.whenIdle()
     } catch (error) {
       // A crashed turn leaves the dispatch running with its history; the
@@ -841,9 +1109,111 @@ export class DshManagerExecutor extends TypertRemoteService {
       this.ctx.logger?.error(error)
     } finally {
       offSessionEvent()
+      this.lastAssistantBody.delete(record.id)
       if (timer !== undefined) clearTimeout(timer)
       controller.signal.removeEventListener('abort', onCancel)
       this.activeControllers.delete(record.id)
+    }
+  }
+
+  /**
+   * Mirror one builtin Session event into the ticket ledger. Ids derive from
+   * `(session, seq)`, so a cold resume that replays nothing and a live turn
+   * that emits once both land one row per event.
+   */
+  private captureSessionEvent(record: DispatchRecord, event: SessionEvent): void {
+    try {
+      const at = event.time
+      const id = `session:${record.sessionId ?? record.id}:${event.seq}`
+      if (event.type === 'assistant/message') {
+        const text = event.data.message.content
+          .flatMap(part => (part.type === 'text' ? [part.text] : []))
+          .join('\n')
+          .trim()
+        if (text === '') return
+        if (this.lastAssistantBody.get(record.id) === text) return
+        this.lastAssistantBody.set(record.id, text)
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id,
+          kind: 'assistant',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          body: text,
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: assistant timeline mirror failed: %s', String(error))
+        })
+        return
+      }
+      if (event.type === 'tool/call') {
+        const args = event.data.arguments
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id,
+          kind: 'tool',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          code: 'tool-call',
+          activity: {
+            category: 'tool',
+            toolName: event.data.name,
+            ...(args === '' ? {} : { target: args.length > 80 ? `${args.slice(0, 80)}…` : args }),
+          },
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: tool timeline mirror failed: %s', String(error))
+        })
+        return
+      }
+      if (event.type === 'deliverables/presented') {
+        const sessionId = record.sessionId
+        if (sessionId === undefined) return
+        const store = this.ctx.dshManagerBoard.timelineStore()
+        const data = event.data
+        data.files.forEach((file, index) => {
+          void appendTimelineEvent(store, {
+            ticketId: record.ticketId,
+            id: `deliverable:${sessionId}:${data.turn}:${index}`,
+            kind: 'artifact',
+            author: 'executor',
+            at,
+            turnId: record.id,
+            code: 'deliverable',
+            body: file.description ?? '',
+            sessionId,
+            turn: data.turn,
+            activity: { category: 'file', target: file.path },
+          }).catch((error: unknown) => {
+            this.ctx.logger?.warn('dsh-manager: deliverable timeline mirror failed: %s', String(error))
+          })
+        })
+        return
+      }
+      if (event.type === 'workspace/changes') {
+        const sessionId = record.sessionId
+        if (sessionId === undefined) return
+        const summary = this.ctx.workspaceChanges.summary(sessionId as SessionId, event.seq)
+        if (summary === undefined || summary.total === 0) return
+        void appendTimelineEvent(this.ctx.dshManagerBoard.timelineStore(), {
+          ticketId: record.ticketId,
+          id: `change:${sessionId}:${event.seq}`,
+          kind: 'artifact',
+          author: 'executor',
+          at,
+          turnId: record.id,
+          code: 'change',
+          body: String(summary.total),
+          sessionId,
+          turn: typeof event.data.turn === 'number' ? event.data.turn : 0,
+          sourceSeq: event.seq,
+          activity: { category: 'file' },
+        }).catch((error: unknown) => {
+          this.ctx.logger?.warn('dsh-manager: change timeline mirror failed: %s', String(error))
+        })
+      }
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: timeline capture failed: %s', String(error))
     }
   }
 
@@ -857,18 +1227,24 @@ export class DshManagerExecutor extends TypertRemoteService {
     record: DispatchRecord,
     ticket: TicketRecord,
     agentKind: ExternalAgentKind,
-    member: CrewMember | undefined,
+    step: FlowStepDef | undefined,
     projectId: string | undefined,
+    _workspacePath: string | undefined,
     cwd: string,
     lastRework: { readonly origin: 'steward' | 'human'; readonly feedback: string } | undefined,
     taskScratchDir?: string,
-    stageMode?: 'execute' | 'review',
+    readOnly = false,
     landingFacts?: ProjectLandingFacts,
+    projectFacts?: ProjectFactsSnapshot,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
   ): Promise<void> {
     const resumeSessionId = latestExternalSession(store, ticket.id, agentKind)
     await recordExternalSession(store, record.id, agentKind, resumeSessionId, Date.now())
-    const skills = resumeSessionId !== undefined && lastRework !== undefined ? [] : await discoverWorkspaceSkills(cwd)
-    const prompt = this.externalCliPrompt(ticket, projectId, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, stageMode, landingFacts)
+    const skills = resumeSessionId !== undefined && lastRework !== undefined ? [] : await discoverWorkspaceSkills(cwd, this.hostSkills())
+    const projectName = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)?.title
+    const rendered = this.renderExternalCliPrompt(ticket, projectId, projectName, cwd, lastRework, resumeSessionId !== undefined, skills, taskScratchDir, readOnly, landingFacts, projectFacts, worktreeSpec)
+    await recordDispatchPrompt(store, record.id, rendered.record, Date.now())
+    const prompt = rendered.text
     const idleTimeoutMs = this.config.turnTimeoutMs
     const controller = new AbortController()
     this.activeControllers.set(record.id, controller)
@@ -901,8 +1277,8 @@ export class DshManagerExecutor extends TypertRemoteService {
         kind: agentKind,
         cwd,
         prompt,
-        mapped: projectId !== undefined,
-        ...(member?.model === undefined ? {} : { model: member.model }),
+        mapped: projectId !== undefined && !readOnly,
+        ...(step?.agent?.model === undefined ? {} : { model: step.agent.model }),
         ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
         signal: controller.signal,
         onActivity: () => noteActivity(),
@@ -991,17 +1367,17 @@ export class DshManagerExecutor extends TypertRemoteService {
     }
   }
 
-  /** Resolve the crew member and stage mode behind the ticket's current pipeline stage, if any. */
-  private stageAndMemberOf(ticket: TicketRecord): { readonly member?: CrewMember; readonly stageMode?: 'execute' | 'review' } {
+  private hostSkills(): HostSkillsPort | undefined {
+    return (this.ctx as unknown as { get?: (key: string) => unknown }).get?.('skills') as HostSkillsPort | undefined
+  }
+
+  /** Resolve the Flow IR definition and current step behind the ticket's flow walk, if any. */
+  private stepMetaOf(ticket: TicketRecord): { readonly flow?: FlowDef; readonly step?: FlowStepDef } {
     if (ticket.flow === undefined) return {}
     try {
-      const pipeline = this.ctx.dshManagerPipeline.require(ticket.flow.pipelineId)
-      const stage = pipeline.stages[ticket.flow.stageIndex]
-      if (stage === undefined) return {}
-      return {
-        member: this.ctx.dshManagerCrew.require(stage.memberId),
-        ...(stage.mode === undefined ? {} : { stageMode: stage.mode }),
-      }
+      const flow = this.ctx.dshManagerFlow.require(ticket.flow.pipelineId)
+      const step = flow.steps[ticket.flow.stageIndex]
+      return { flow, ...(step === undefined ? {} : { step }) }
     } catch {
       return {}
     }
@@ -1014,6 +1390,78 @@ export class DshManagerExecutor extends TypertRemoteService {
   private worktreeTicketIdOf(ticket: TicketRecord): string {
     if (ticket.flow === undefined) return ticket.id
     return flowChain(this.ctx.dshManagerBoard.ticketRecords(), ticket.id)?.root.id ?? ticket.id
+  }
+
+  /**
+   * Resolve effective git repository root, base branch, feature branch, and
+   * merge target from Steward's ticket plan (falling back cleanly to legacy
+   * workspace/ticket defaults).
+   */
+  private resolveWorktreeSpec(ticket: TicketRecord, fallbackRepoRoot?: string): {
+    readonly rootTicketId: string
+    readonly mode: 'worktree' | 'in-place' | 'none'
+    readonly repoRoot?: string
+    readonly baseBranch: string
+    readonly branch: string
+    readonly path?: string
+    readonly mergeTarget?: string
+  } {
+    const root = ticket.flow === undefined
+      ? undefined
+      : flowChain(this.ctx.dshManagerBoard.ticketRecords(), ticket.id)?.root
+    const rootTicketId = root?.id ?? ticket.id
+    const plan = ticket.worktree ?? root?.worktree
+    const mappedRoot = fallbackRepoRoot ?? (() => {
+      const pid = this.projectOfTicket(ticket)
+      return pid === undefined ? undefined : this.ctx.workspaceRegistry.get(pid as WorkspaceId)?.path
+    })()
+    const { flow } = this.stepMetaOf(ticket)
+    const repoRoot = plan?.repoRoot !== undefined && existsSync(plan.repoRoot) ? plan.repoRoot : mappedRoot
+    const hasGitRepo = repoRoot !== undefined && existsSync(join(repoRoot, '.git'))
+    let mode: 'worktree' | 'in-place' | 'none'
+    if (flow?.workspaceMode === 'in-place') {
+      mode = 'in-place'
+    } else if (plan?.mode !== undefined) {
+      mode = plan.mode
+    } else if (flow?.workspaceMode === 'worktree') {
+      mode = hasGitRepo ? 'worktree' : 'in-place'
+    } else {
+      mode = hasGitRepo ? 'worktree' : (repoRoot !== undefined ? 'in-place' : 'none')
+    }
+    if (mode === 'worktree' && !hasGitRepo) {
+      mode = repoRoot !== undefined ? 'in-place' : 'none'
+    }
+    const branch = worktreeBranchFor(rootTicketId, plan?.branch)
+    const baseBranch = plan?.baseBranch?.trim() || 'main'
+    const path = plan?.path !== undefined && plan.path.trim() !== ''
+      ? plan.path.trim()
+      : (repoRoot === undefined ? undefined : worktreePathFor(repoRoot, rootTicketId, { branch: plan?.branch }))
+    const mergeTarget = plan?.mergeTarget?.trim() || undefined
+    return {
+      rootTicketId,
+      mode,
+      ...(repoRoot === undefined ? {} : { repoRoot }),
+      baseBranch,
+      branch,
+      ...(path === undefined ? {} : { path }),
+      ...(mergeTarget === undefined ? {} : { mergeTarget }),
+    }
+  }
+
+  /** Format worktree plan lines so Executor and Delivery stages stay aligned. */
+  private worktreePlanPromptLines(spec: ReturnType<DshManagerExecutor['resolveWorktreeSpec']> | undefined): readonly string[] {
+    if (spec === undefined) return []
+    if (spec.mode === 'none') {
+      return ['Worktree plan: mode=none (read-only analysis; do not create a git worktree).']
+    }
+    const parts = [
+      `mode=${spec.mode}`,
+      spec.repoRoot === undefined ? undefined : `repoRoot=${spec.repoRoot}`,
+      `baseBranch=${spec.baseBranch}`,
+      `branch=${spec.branch}`,
+      spec.mergeTarget === undefined ? undefined : `mergeTarget=${spec.mergeTarget}`,
+    ].filter((part): part is string => part !== undefined)
+    return [`Worktree plan: ${parts.join(', ')}.`]
   }
 
   /** Resolve the shared scratch task directory for a ticket or flow walk. */
@@ -1115,23 +1563,133 @@ export class DshManagerExecutor extends TypertRemoteService {
     return lines
   }
 
-  /** Prompt passed to a headless external CLI (no DSH-internal tool references). */
-  private externalCliPrompt(
+  private teamConfigRevision(): number {
+    const svc = (this.ctx as unknown as {
+      get?: (key: string) => { status?: () => { readonly revision: number } } | undefined
+    }).get?.('dshManagerTeamConfig')
+    return svc?.status?.().revision ?? 1
+  }
+
+  /** Build prompt context from Flow step + Skills + locked contracts for executor/external-cli dispatches. */
+  private renderDispatchTurnPrompt(
+    turnId: 'executor' | 'external-cli',
     ticket: TicketRecord,
     projectId: string | undefined,
+    projectName: string | undefined,
+    cwd: string,
+    skills: readonly DiscoveredSkill[],
+    taskScratchDir: string | undefined,
+    readOnly: boolean,
+    landingFacts: ProjectLandingFacts | undefined,
+    projectFacts: ProjectFactsSnapshot | undefined,
+    worktreeSpec: ReturnType<DshManagerExecutor['resolveWorktreeSpec']> | undefined,
+    reworkLines: readonly string[],
+  ): {
+    readonly text: string
+    readonly record: DispatchPromptRecord
+    readonly stepGoal?: string
+  } {
+    const { flow, step } = this.stepMetaOf(ticket)
+    const handoffLines = this.handoffContextLines(ticket)
+    const upstreamLines = this.upstreamStageLines(ticket).slice(1)
+    const answeredLines = this.answeredAttentionLines(ticket.id).slice(1)
+    const worktreePlan: TicketWorktreePlan | undefined = worktreeSpec === undefined
+      ? undefined
+      : {
+          mode: worktreeSpec.mode,
+          ...(worktreeSpec.repoRoot === undefined ? {} : { repoRoot: worktreeSpec.repoRoot }),
+          baseBranch: worktreeSpec.baseBranch,
+          branch: worktreeSpec.branch,
+          ...(worktreeSpec.mergeTarget === undefined ? {} : { mergeTarget: worktreeSpec.mergeTarget }),
+          ...(worktreeSpec.path === undefined ? {} : { path: worktreeSpec.path }),
+        }
+    const rendered = buildExecutorTurnPrompt({
+      turnId,
+      ticket,
+      ...(flow === undefined ? {} : { flow }),
+      ...(step === undefined ? {} : { step }),
+      ...(ticket.flow === undefined ? {} : {
+        stepIndex: ticket.flow.stageIndex,
+        stepCount: Math.max(flow?.steps.length ?? ticket.flow.stageCount, ticket.flow.stageIndex + 1),
+      }),
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(projectName === undefined ? {} : { projectName }),
+      cwd,
+      skills,
+      ...(taskScratchDir === undefined ? {} : { scratchDir: taskScratchDir }),
+      readOnly,
+      ...(worktreePlan === undefined ? {} : { worktree: worktreePlan }),
+      ...(landingFacts === undefined ? {} : { landingFacts }),
+      ...(projectFacts === undefined ? {} : { projectFacts }),
+      handoffLines,
+      upstreamLines,
+      answeredLines,
+      reworkLines,
+      templateRevision: this.teamConfigRevision(),
+    })
+    return {
+      ...rendered,
+      ...(step?.goal !== undefined && step.goal !== '' ? { stepGoal: step.goal } : {}),
+    }
+  }
+
+  /** Render the built-in executor prompt and capture its persisted prompt snapshot. */
+  private renderExecutorPrompt(
+    ticket: TicketRecord,
+    projectId: string | undefined,
+    projectName: string | undefined,
+    cwd: string,
+    skills: readonly DiscoveredSkill[],
+    taskScratchDir?: string,
+    readOnly = false,
+    landingFacts?: ProjectLandingFacts,
+    projectFacts?: ProjectFactsSnapshot,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
+    lastRework?: { readonly origin: 'steward' | 'human'; readonly feedback: string },
+  ): { readonly text: string; readonly record: DispatchPromptRecord } {
+    const reworkLines = lastRework === undefined
+      ? []
+      : [
+          lastRework.origin === 'human'
+            ? `The user returned this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`
+            : `The Steward reworked this work with this opinion: "${lastRework.feedback}". Address it before reporting ready.`,
+        ]
+    const rendered = this.renderDispatchTurnPrompt(
+      'executor',
+      ticket,
+      projectId,
+      projectName,
+      cwd,
+      skills,
+      taskScratchDir,
+      readOnly,
+      landingFacts,
+      projectFacts,
+      worktreeSpec,
+      reworkLines,
+    )
+    return { text: rendered.text, record: rendered.record }
+  }
+
+  /** Render the external CLI prompt (including leading `/command` extraction) and its snapshot. */
+  private renderExternalCliPrompt(
+    ticket: TicketRecord,
+    projectId: string | undefined,
+    projectName: string | undefined,
     cwd: string,
     lastRework: { readonly origin: 'steward' | 'human'; readonly feedback: string } | undefined,
     resumed: boolean,
-    skills: readonly { readonly name: string; readonly description: string; readonly path: string }[] = [],
+    skills: readonly DiscoveredSkill[] = [],
     taskScratchDir?: string,
-    stageMode?: 'execute' | 'review',
+    readOnly = false,
     landingFacts?: ProjectLandingFacts,
-  ): string {
-    const mandate = ticket.mandate
-    const flow = ticket.flow
+    projectFacts?: ProjectFactsSnapshot,
+    worktreeSpec?: ReturnType<DshManagerExecutor['resolveWorktreeSpec']>,
+  ): { readonly text: string; readonly record: DispatchPromptRecord } {
+    const revision = this.teamConfigRevision()
     if (resumed && (lastRework !== undefined || this.answeredAttentionLines(ticket.id).length > 0)) {
       const answeredLines = this.answeredAttentionLines(ticket.id)
-      return buildExternalCliPrompt({
+      const text = buildExternalCliPrompt({
         candidates: [lastRework?.feedback, ...answeredLines],
         bodyLines: [
           lastRework === undefined
@@ -1142,42 +1700,63 @@ export class DshManagerExecutor extends TypertRemoteService {
           ...answeredLines,
           projectId === undefined
             ? 'Analyze read-only and respond with the updated findings.'
-            : (stageMode === 'review'
-              ? `Re-run the incremental review in ${cwd}, verify open findings in ${taskScratchDir ?? cwd}/review-report.md, run all required tests/gates and save output to ${taskScratchDir ?? cwd}/test-report.log, and output a concise review summary stating whether all checks passed and any remaining blockers.`
-              : `Apply the requested changes in the worktree at ${cwd}, run relevant tests/checks, save passing verification output to ${taskScratchDir ?? cwd}/test-report.log, and summarize what changed and what passed.`),
+            : (readOnly
+              ? `Re-run the incremental read-only check in ${cwd}, verify open findings in ${taskScratchDir ?? cwd}/review-report.md, save verification output to ${taskScratchDir ?? cwd}/test-report.log, and output a concise summary.`
+              : `Apply the requested changes in ${cwd}, run relevant checks, save verification output to ${taskScratchDir ?? cwd}/test-report.log, and summarize what changed and what passed.`),
         ],
       })
+      const capped = truncateUtf8Bytes(text, MAX_RENDERED_PROMPT_BYTES)
+      return {
+        text: capped.text,
+        record: {
+          turnId: 'external-cli',
+          text: capped.text,
+          truncated: capped.truncated,
+          sections: [],
+          templateRevision: revision,
+          renderedAt: Date.now(),
+        },
+      }
     }
-    const stageInfo = flow === undefined ? undefined : this.stagePromptInfo(ticket, flow)
-    return buildExternalCliPrompt({
+
+    const reworkLines = lastRework === undefined
+      ? []
+      : [
+          lastRework.origin === 'human'
+            ? `Rework feedback from user: "${lastRework.feedback}".`
+            : `Rework feedback from Steward: "${lastRework.feedback}".`,
+        ]
+    const rendered = this.renderDispatchTurnPrompt(
+      'external-cli',
+      ticket,
+      projectId,
+      projectName,
+      cwd,
+      skills,
+      taskScratchDir,
+      readOnly,
+      landingFacts,
+      projectFacts,
+      worktreeSpec,
+      reworkLines,
+    )
+    const combinedText = buildExternalCliPrompt({
       candidates: [
-        stageInfo?.stageInstruction,
-        mandate?.scope,
+        rendered.stepGoal,
+        ticket.mandate?.scope,
         ticket.title,
       ],
-      bodyLines: [
-        `Ticket ${ticket.id}: ${ticket.title}.`,
-        mandate === undefined ? undefined : `Mandate scope: ${mandate.scope} (strength ${mandate.strength}).`,
-        ...this.handoffContextLines(ticket),
-        ...(stageInfo?.lines ?? []),
-        ...this.upstreamStageLines(ticket),
-        ...this.answeredAttentionLines(ticket.id),
-        ...formatSkillPromptLines(skills),
-        ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
-        ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
-        projectId === undefined
-          ? 'This ticket has no mapped project: analyze read-only; do not modify any files.'
-          : (stageMode === 'review'
-            ? `Inspect the shared git worktree at ${cwd} (read-only against source/test files), run full tests/verification gates, and finish with a concise review summary covering test results, blocking findings (if any), and review-report.md / test-report.log paths.`
-            : `Work directly in the git worktree at ${cwd}. Edit files, run tests/typecheck as needed, and finish with a concise summary of changes and verification results.`),
-        'You are running in non-interactive headless CLI mode: do NOT call interactive ask_question or ask_user tools. If any open decisions remain, include them concisely with your recommended defaults in your final Markdown output.',
-        lastRework === undefined
-          ? undefined
-          : (lastRework.origin === 'human'
-            ? `Rework feedback from user: "${lastRework.feedback}".`
-            : `Rework feedback from Steward: "${lastRework.feedback}".`),
-      ],
+      bodyLines: [rendered.text],
     })
+    const capped = truncateUtf8Bytes(combinedText, MAX_RENDERED_PROMPT_BYTES)
+    return {
+      text: capped.text,
+      record: {
+        ...rendered.record,
+        text: capped.text,
+        truncated: rendered.record.truncated || capped.truncated,
+      },
+    }
   }
 
   /** The project one ticket is mapped to, through its record or its external mapping. */
@@ -1188,15 +1767,15 @@ export class DshManagerExecutor extends TypertRemoteService {
   }
 
   /** Whether the current dispatch should receive dynamic repository landing discovery context. */
-  private isLandingStage(
+  private isLandingStep(
     ticket: TicketRecord,
-    memberName: string | undefined,
-    stageMode: 'execute' | 'review' | undefined,
+    step: FlowStepDef | undefined,
   ): boolean {
     if (ticket.flow === undefined) return true
-    if (stageMode === 'review') return true
+    if (step?.readOnly === true) return true
     if (ticket.flow.stageIndex >= Math.max(0, ticket.flow.stageCount - 1)) return true
-    return memberName !== undefined && /(?:pr|mr|ship|land|release|交付|合并|发布)/i.test(memberName)
+    const stepText = `${step?.name ?? ''} ${(step?.skills ?? []).join(' ')}`
+    return /(?:pr|mr|ship|land|release|ship-pr|交付|合并|发布)/i.test(stepText)
   }
 
   /** Create one fresh Executor Session under the dedicated preset. */
@@ -1208,24 +1787,13 @@ export class DshManagerExecutor extends TypertRemoteService {
     repoRoot: string,
     projectId: string | undefined,
     taskScratchDir?: string,
+    readOnly = false,
+    step?: FlowStepDef,
   ): Promise<Agent> {
     const mapped = projectId !== undefined
-    // A routed ticket's member may override the executor's provider/model.
-    let memberOverrides: ModelOptionLayer = {}
-    if (ticket.flow !== undefined) {
-      try {
-        const pipeline = this.ctx.dshManagerPipeline.require(ticket.flow.pipelineId)
-        const stage = pipeline.stages[ticket.flow.stageIndex]
-        if (stage !== undefined) {
-          const member = this.ctx.dshManagerCrew.require(stage.memberId)
-          memberOverrides = {
-            ...(member.provider === undefined ? {} : { provider: member.provider }),
-            ...(member.model === undefined ? {} : { model: member.model }),
-          }
-        }
-      } catch {
-        // A deleted member keeps the bundle defaults.
-      }
+    const stepOverrides: ModelOptionLayer = {
+      ...(step?.agent?.provider === undefined ? {} : { provider: step.agent.provider }),
+      ...(step?.agent?.model === undefined ? {} : { model: step.agent.model }),
     }
     const agentOptions = resolveAgentModelOptions(
       this.ctx,
@@ -1233,7 +1801,7 @@ export class DshManagerExecutor extends TypertRemoteService {
         ...(this.config.provider === undefined ? {} : { provider: this.config.provider }),
         ...(this.config.model === undefined ? {} : { model: this.config.model }),
       },
-      memberOverrides,
+      stepOverrides,
     )
     const setup = async (agentCtx: Context): Promise<void> => {
       await this.ctx.agentPresets.mount(agentCtx, EXECUTOR_PRESET_ID)
@@ -1245,6 +1813,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       agentCtx.tools.register(this.localMergeBranchTool(ticket, cwd, repoRoot, projectId))
       agentCtx.tools.register(this.pushBranchTool(cwd, projectId))
       agentCtx.tools.register(this.createMrOrPrTool(cwd))
+      agentCtx.tools.register(this.registerWorktreeTool(sessionId, ticket))
       this.installApprovalGate(agentCtx, record)
     }
     const workspace = projectId === undefined ? undefined : this.ctx.workspaceRegistry.get(projectId as WorkspaceId)
@@ -1264,13 +1833,26 @@ export class DshManagerExecutor extends TypertRemoteService {
     const sessionMetaCwd = workspace !== undefined && (cwd === workspace.path || workingDirectory?.set !== undefined)
       ? workspace.path
       : cwd
-    const handle = await this.ctx.agents.create({
-      sessionId,
-      agentOptions,
-      meta: { cwd: sessionMetaCwd },
-      setup,
-    })
+    // A continuation turn keeps the same session: dispose the predecessor's
+    // live handle (if any), then reload the persisted session under a fresh
+    // scoped world whose tools bind to THIS dispatch.
+    const priorDispatchId = record.resumeOf
+    const priorHandle = priorDispatchId === undefined ? undefined : this.liveHandles.get(priorDispatchId)
+    if (priorHandle !== undefined) {
+      this.liveHandles.delete(priorDispatchId!)
+      this.liveAgents.delete(priorDispatchId!)
+      await priorHandle.dispose()
+    }
+    const handle = priorDispatchId !== undefined
+      ? await this.ctx.agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+      : await this.ctx.agents.create({
+        sessionId,
+        agentOptions,
+        meta: { cwd: sessionMetaCwd },
+        setup,
+      })
     this.liveAgents.set(record.id, handle.agent)
+    this.liveHandles.set(record.id, handle)
     this.ctx.effect(() => async () => { await handle.dispose() }, `dsh-manager: dispose executor session ${sessionId}`)
     // Sandbox mode and approval policy are durable session state: headless
     // background executors never block on native `ctx.approval` prompts
@@ -1278,7 +1860,7 @@ export class DshManagerExecutor extends TypertRemoteService {
     const session = this.ctx.sessions.get(sessionId)
     if (session !== undefined) {
       setApprovalPolicy(session, 'never')
-      if (!mapped) {
+      if (!mapped || readOnly) {
         setSandboxMode(session, 'read-only')
       } else {
         setSandboxMode(session, 'workspace-write')
@@ -1287,6 +1869,10 @@ export class DshManagerExecutor extends TypertRemoteService {
         if (taskScratchDir !== undefined) {
           const disposeScratch = this.ctx.sandboxPolicy.registerWritableRoot(session, taskScratchDir)
           this.ctx.effect(() => disposeScratch, `dsh-manager: release executor scratch grant ${sessionId}`)
+        }
+        if (repoRoot !== cwd) {
+          const disposeRepoRoot = this.ctx.sandboxPolicy.registerWritableRoot(session, repoRoot)
+          this.ctx.effect(() => disposeRepoRoot, `dsh-manager: release executor repo root grant ${sessionId}`)
         }
       }
       const title = formatExecutorSessionTitle(ticket)
@@ -1314,104 +1900,6 @@ export class DshManagerExecutor extends TypertRemoteService {
       })
     }
     return handle.agent
-  }
-
-  /** Artifact directory and review-fact-file rules shared by built-in and external CLI prompts. */
-  private stageArtifactPromptLines(
-    cwd: string,
-    mapped: boolean,
-    taskScratchDir: string | undefined,
-    stageMode: 'execute' | 'review' | undefined,
-  ): readonly string[] {
-    if (!mapped || taskScratchDir === undefined) return []
-    const lines: string[] = [
-      `Task scratch directory (store ALL intermediate process artifacts here — e.g. design.md, repro-red.log, test-report.log, review-report.md, verify/ — NEVER write temporary process docs into ${cwd}): ${taskScratchDir}`,
-    ]
-    if (stageMode === 'review') {
-      lines.push(
-        `Strictly READ-ONLY Review stage: do NOT edit or commit business source files or test files in ${cwd}.`,
-        `Cumulative Review Fact File: ${taskScratchDir}/review-report.md. On Round 1 (file absent), record baseSha (current git HEAD), Spec & Standards findings numbered F-01, F-02, ... with exact file:line, and Proven Failures. On Round 2+ (file present), run an INCREMENTAL review: verify previously open findings against git diff <prevSha>..HEAD and ${taskScratchDir}/test-report.log, and inspect ONLY the incremental diff for new regressions (do NOT re-open already-cleared code or invent new stylistic nitpicks outside the incremental diff).`,
-        `Run all required checks and tests, write raw output tail to ${taskScratchDir}/test-report.log, update ${taskScratchDir}/review-report.md, and submit a concise review report summarizing: overall conclusion (passed or needs fixes), actual tests/gates run and their results, any open blocking issues (F-xx with file:line), and paths to review-report.md and test-report.log.`,
-      )
-    } else {
-      lines.push(
-        `If ${taskScratchDir}/review-report.md or ${taskScratchDir}/test-report.log exists from an earlier review/failure, read them first and resolve every open finding before reporting ready.`,
-        `Save your final test/gate verification output to ${taskScratchDir}/test-report.log (and any design/repro logs to ${taskScratchDir}/).`,
-      )
-    }
-    return lines
-  }
-
-  /** The prompt one executor turn opens with. */
-  private executorPrompt(
-    ticket: TicketRecord,
-    projectId: string | undefined,
-    cwd: string,
-    skills: readonly { readonly name: string; readonly description: string; readonly path: string }[] = [],
-    taskScratchDir?: string,
-    stageMode?: 'execute' | 'review',
-    landingFacts?: ProjectLandingFacts,
-  ): string {
-    const mandate = ticket.mandate
-    const flow = ticket.flow
-    return [
-      `You are the executor dispatched for ticket ${ticket.id}: ${ticket.title}.`,
-      mandate === undefined ? undefined : `Your mandate covers ${mandate.scope} (strength ${mandate.strength}).`,
-      ...this.handoffContextLines(ticket),
-      // A routed ticket dispatches as one pipeline stage: the crew member's
-      // duty prompt and the stage instruction open the work.
-      ...(flow === undefined ? [] : this.stagePromptLines(ticket, flow)),
-      ...this.upstreamStageLines(ticket),
-      ...this.answeredAttentionLines(ticket.id),
-      ...formatSkillPromptLines(skills),
-      ...(landingFacts === undefined ? [] : formatLandingDiscoveryPromptLines(landingFacts)),
-      ...this.stageArtifactPromptLines(cwd, projectId !== undefined, taskScratchDir, stageMode),
-      projectId === undefined
-        ? 'This ticket has no mapped project: analyze read-only; do not write or change any files.'
-        : (stageMode === 'review'
-          ? `This ticket is mapped to project ${projectId}. Review the shared worktree at ${cwd} read-only against source/test files, run verification commands, and write review artifacts only into ${taskScratchDir ?? cwd}.`
-          : `This ticket is mapped to project ${projectId}. Work in the worktree at ${cwd}: edit files and run tests there; local edits and test runs are pre-approved, external actions are not.`),
-      'Report through the submit_report tool: progress while working, waiting when input is pending, blocked when stuck, failed when the work cannot be done, not-needed when nothing is required, ready when the work is complete.',
-      'When the work needs the user\'s input, ask through the ask_user tool with a concrete question and end your turn; the answer arrives as your next message.',
-      'External writes & repository landing actions (post_mr_comment, set_jira_status, local_merge_branch, push_branch, create_mr_or_pr) wait for the user\'s approval before executing — use check_branch_rebase first for non-destructive baseline checks, and follow repository AGENTS.md + project-local skills (fallback: keep verified changes ready on branch and ask human if ambiguous).',
-      'Declare final deliverable files with the present tool before reporting ready.',
-    ].filter(line => line !== undefined).join('\n')
-  }
-
-  /** The duty/instruction lines a routed ticket's stage contributes to the prompt. */
-  private stagePromptLines(ticket: TicketRecord, flow: NonNullable<TicketRecord['flow']>): readonly string[] {
-    return this.stagePromptInfo(ticket, flow).lines
-  }
-
-  /** The duty/instruction lines plus raw instruction text for a routed stage. */
-  private stagePromptInfo(ticket: TicketRecord, flow: NonNullable<TicketRecord['flow']>): {
-    readonly stageInstruction?: string
-    readonly lines: readonly string[]
-  } {
-    let pipeline
-    let stage
-    let member
-    try {
-      pipeline = this.ctx.dshManagerPipeline.require(flow.pipelineId)
-      stage = pipeline.stages[flow.stageIndex]
-      member = stage === undefined ? undefined : this.ctx.dshManagerCrew.require(stage.memberId)
-    } catch {
-      // A pipeline or member deleted mid-flight degrades to the plain prompt;
-      // the ticket still executes its mandate.
-      return { lines: [`This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`] }
-    }
-    if (stage === undefined || member === undefined) {
-      return { lines: [`This ticket walks pipeline stage ${flow.stageIndex + 1}/${flow.stageCount} of "${flow.pipelineName}", whose configuration changed; execute the mandate as given.`] }
-    }
-    const liveStageCount = Math.max(pipeline.stages.length, flow.stageIndex + 1)
-    return {
-      ...(stage.instruction === '' ? {} : { stageInstruction: stage.instruction }),
-      lines: [
-        `You are "${member.name}", one stage of the "${pipeline.name}" pipeline (stage ${flow.stageIndex + 1} of ${liveStageCount}).`,
-        `Your duty: ${member.role}`,
-        stage.instruction === '' ? undefined : `This stage's instruction: ${stage.instruction}`,
-      ].filter(line => line !== undefined),
-    }
   }
 
   /**
@@ -1568,13 +2056,16 @@ export class DshManagerExecutor extends TypertRemoteService {
     projectId: string | undefined,
   ) {
     const self = this
-    const rootTicketId = this.worktreeTicketIdOf(ticket)
-    const sourceBranch = worktreeBranchFor(rootTicketId)
+    const spec = this.resolveWorktreeSpec(ticket, repoRoot)
+    const rootTicketId = spec.rootTicketId
+    const effectiveRepoRoot = spec.repoRoot ?? repoRoot
+    const sourceBranch = spec.branch
+    const worktreePath = spec.path
     return defineTool({
       name: 'local_merge_branch',
       description: 'Rebase the ticket branch onto targetBranch (if configured) and merge locally under a per-project lock; requires Approval.',
       parameters: {
-        targetBranch: { type: 'string', required: true, description: 'Target local branch to merge into, e.g. main or develop.' },
+        targetBranch: { type: 'string', required: true, description: 'Target local branch to merge into (e.g. test or the branch specified in repo git-flow).' },
         strategy: { type: 'string', enum: ['rebase-then-ff', 'ff-only', 'merge-commit'], description: 'Merge strategy (default: rebase-then-ff).' },
         removeWorktreeOnSuccess: { type: 'boolean', description: 'Remove the ticket worktree cleanly after a successful merge.' },
       },
@@ -1601,16 +2092,19 @@ export class DshManagerExecutor extends TypertRemoteService {
         }],
       },
       async execute(args, _exec) {
+        const requestedTarget = typeof args.targetBranch === 'string' && args.targetBranch.trim() !== ''
+          ? args.targetBranch.trim()
+          : spec.mergeTarget ?? 'main'
         const res = await localMergeBranch(self.ctx.subprocess, {
-          repoRoot,
+          repoRoot: effectiveRepoRoot,
           sourceBranch,
-          targetBranch: String(args.targetBranch).trim(),
-          worktreeCwd: cwd,
+          targetBranch: requestedTarget,
+          worktreeCwd: worktreePath ?? cwd,
           ...(args.strategy === 'rebase-then-ff' || args.strategy === 'ff-only' || args.strategy === 'merge-commit'
             ? { strategy: args.strategy }
             : {}),
-          ...(args.removeWorktreeOnSuccess === true ? { removeWorktreeOnSuccess: true, ticketId: rootTicketId } : {}),
-          lockKey: projectId ?? repoRoot,
+          ...(args.removeWorktreeOnSuccess === true ? { removeWorktreeOnSuccess: true, ticketId: rootTicketId, worktreeBranch: sourceBranch, ...(worktreePath === undefined ? {} : { worktreePath }) } : {}),
+          lockKey: projectId ?? effectiveRepoRoot,
         })
         return { ...res, conflictFiles: [...res.conflictFiles] }
       },
@@ -1699,6 +2193,53 @@ export class DshManagerExecutor extends TypertRemoteService {
           ...(args.forge === 'github' || args.forge === 'gitlab' ? { forge: args.forge } : {}),
           ...(args.draft === true ? { draft: true } : {}),
         })
+      },
+    })
+  }
+
+  /** Register or update an executor-created worktree path/branch on the root ticket and grant sandbox write access. */
+  private registerWorktreeTool(sessionId: SessionId, ticket: TicketRecord) {
+    const self = this
+    const rootTicketId = this.worktreeTicketIdOf(ticket)
+    return defineTool({
+      name: 'register_worktree',
+      description: 'Register the active git worktree (repoRoot, path, branch, baseBranch, mergeTarget) on this ticket so downstream stages and board UI track it.',
+      parameters: {
+        mode: { type: 'string', enum: ['worktree', 'in-place', 'none'], description: 'Worktree mode (default worktree).' },
+        repoRoot: { type: 'string', description: 'Exact git repository root path.' },
+        path: { type: 'string', description: 'Filesystem path of the active worktree directory.' },
+        branch: { type: 'string', description: 'Feature branch name (e.g. feat-... ).' },
+        baseBranch: { type: 'string', description: 'Base branch name (default main).' },
+        mergeTarget: { type: 'string', description: 'Integration target branch (e.g. test).' },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: false, properties: { registered: { type: 'boolean' } } },
+        render: (_args, value) => [{ type: 'text', text: `registered: ${String(value.registered)}` }],
+      },
+      async execute(args, _exec) {
+        const mode = args.mode === 'none' || args.mode === 'in-place' ? args.mode : 'worktree'
+        const clean = (v: unknown): string | undefined => typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined
+        const plan: TicketWorktreePlan = {
+          mode,
+          ...(clean(args.repoRoot) === undefined ? {} : { repoRoot: clean(args.repoRoot) }),
+          ...(clean(args.baseBranch) === undefined ? {} : { baseBranch: clean(args.baseBranch) }),
+          ...(clean(args.branch) === undefined ? {} : { branch: clean(args.branch) }),
+          ...(clean(args.mergeTarget) === undefined ? {} : { mergeTarget: clean(args.mergeTarget) }),
+          ...(clean(args.path) === undefined ? {} : { path: clean(args.path) }),
+        }
+        const updated = await self.ctx.dshManagerBoard.updateWorktreePlan(rootTicketId, plan)
+        const session = self.ctx.sessions.get(sessionId)
+        if (session !== undefined && mode !== 'none') {
+          if (plan.path !== undefined) {
+            const disposePath = self.ctx.sandboxPolicy.registerWritableRoot(session, plan.path)
+            self.ctx.effect(() => disposePath, `dsh-manager: release registered worktree grant ${sessionId}`)
+          }
+          if (plan.repoRoot !== undefined) {
+            const disposeRoot = self.ctx.sandboxPolicy.registerWritableRoot(session, plan.repoRoot)
+            self.ctx.effect(() => disposeRoot, `dsh-manager: release registered repo grant ${sessionId}`)
+          }
+        }
+        return { registered: updated !== undefined }
       },
     })
   }
@@ -1901,8 +2442,8 @@ export class DshManagerExecutor extends TypertRemoteService {
     }
     const ticket = this.ctx.dshManagerBoard.ticketRecord(record.ticketId)
     if (ticket?.flow !== undefined) {
-      const member = this.stageAndMemberOf(ticket).member
-      if (member !== undefined) return member.name
+      const step = this.stepMetaOf(ticket).step
+      if (step !== undefined) return step.name
     }
     return ticket?.title
   }
@@ -1926,6 +2467,7 @@ export class DshManagerExecutor extends TypertRemoteService {
       ...(sessionTitle === undefined ? {} : { sessionTitle }),
       ...(record.agentKind === undefined ? {} : { agentKind: record.agentKind }),
       ...(record.externalSessionId === undefined ? {} : { externalSessionId: record.externalSessionId }),
+      ...(record.prompt === undefined ? {} : { prompt: record.prompt }),
       reports,
       ...(messages.length === 0 ? {} : { messages }),
       createdAt: record.createdAt,

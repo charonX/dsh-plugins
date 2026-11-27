@@ -162,17 +162,13 @@ test('covers manual closeTicket, flow stage todo cleanup, and post-confirmation 
     ctx.llm.registerAdapter(['mock'], adapter)
 
     const now = Date.now()
-    const crew = await ctx.dshManagerCrew.crewAdd({
-      name: 'Implementer', role: 'Implement', provider: 'mock', model: 'executor-test',
-    })
-    const reviewer = await ctx.dshManagerCrew.crewAdd({
-      name: 'Reviewer', role: 'Review read-only', provider: 'mock', model: 'executor-test',
-    })
-    const pipeline = await ctx.dshManagerPipeline.pipelineAdd({
+    const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Two Stage Flow',
-      stages: [
-        { memberId: crew.member.id, instruction: 'Build it', mode: 'execute' },
-        { memberId: reviewer.member.id, instruction: 'Review it', mode: 'review' },
+      when: 'Build and review features',
+      workspaceMode: 'in-place',
+      steps: [
+        { id: 'build', name: 'Build it', skills: [], goal: 'Implement the change' },
+        { id: 'review', name: 'Review it', skills: [], goal: 'Review read-only', readOnly: true, onFail: 'build' },
       ],
     })
 
@@ -187,8 +183,8 @@ test('covers manual closeTicket, flow stage todo cleanup, and post-confirmation 
       dependsOn: [victim.id],
     }, now + 1)
     await ctx.dshManagerBoard.annotateFlow(afterVictim.id, {
-      pipelineId: pipeline.pipeline.id,
-      pipelineName: pipeline.pipeline.name,
+      pipelineId: flow.id,
+      pipelineName: flow.name,
       stageIndex: 1,
       stageCount: 2,
     })
@@ -214,8 +210,8 @@ test('covers manual closeTicket, flow stage todo cleanup, and post-confirmation 
       scope: 'Build then review',
     }, now + 2)
     await ctx.dshManagerBoard.annotateFlow(flowRoot.id, {
-      pipelineId: pipeline.pipeline.id,
-      pipelineName: pipeline.pipeline.name,
+      pipelineId: flow.id,
+      pipelineName: flow.name,
       stageIndex: 0,
       stageCount: 2,
     })
@@ -225,8 +221,8 @@ test('covers manual closeTicket, flow stage todo cleanup, and post-confirmation 
       dependsOn: [flowRoot.id],
     }, now + 3)
     await ctx.dshManagerBoard.annotateFlow(flowDependent.id, {
-      pipelineId: pipeline.pipeline.id,
-      pipelineName: pipeline.pipeline.name,
+      pipelineId: flow.id,
+      pipelineName: flow.name,
       stageIndex: 1,
       stageCount: 2,
     })

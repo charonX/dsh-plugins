@@ -16,7 +16,8 @@ import {
   type ToolCallContent,
 } from '@agentclientprotocol/sdk'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentCommandOption, AgentModelOption, AgentReasoning } from '../types.ts'
+import type { AgentCommandOption, AgentModelOption, AgentQuotaSnapshot, AgentReasoning } from '../types.ts'
+import { parseAgyUsageOutput } from '../quota-store.ts'
 import {
   nonNegativeInt,
   normalizeCommandList,
@@ -376,10 +377,13 @@ export class AgyAdapter implements ExternalAgentAdapter {
   private readonly pool = new Map<string, PooledAgySession>()
   private readonly asyncListeners = new Map<string, Set<(event: ExternalAsyncEvent) => void>>()
 
+  private readonly readConfiguredModels: () => readonly AgentModelOption[]
+
   constructor(
-    private readonly configuredModels: readonly AgentModelOption[] = [],
+    configuredModels: readonly AgentModelOption[] | (() => readonly AgentModelOption[]) = [],
     options: AgyAdapterOptions = {},
   ) {
+    this.readConfiguredModels = typeof configuredModels === 'function' ? configuredModels : () => configuredModels
     this.idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS
     this.postBgIdleTtlMs = options.postBgIdleTtlMs ?? DEFAULT_POST_BG_IDLE_TTL_MS
     this.wakeupGraceMs = options.wakeupGraceMs ?? DEFAULT_WAKEUP_GRACE_MS
@@ -510,6 +514,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
   }
 
   async probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult> {
+    const configured = this.readConfiguredModels()
     let executablePath: string
     try {
       executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
@@ -518,7 +523,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
         available: false,
         command: this.command,
         reason: error instanceof Error ? error.message : String(error),
-        models: normalizeModelList(this.configuredModels.length > 0 ? this.configuredModels : DEFAULT_AGY_MODELS),
+        models: normalizeModelList(configured.length > 0 ? configured : DEFAULT_AGY_MODELS),
         defaultModel: 'default',
         reasoning: AGY_REASONING,
         defaultPermissionMode: this.defaultPermissionMode,
@@ -537,12 +542,12 @@ export class AgyAdapter implements ExternalAgentAdapter {
       commands: [],
     }
     try {
-      discovered = await this.probeAcpCatalog(subprocess, executablePath, signal)
+      discovered = await this.probeAcpCatalog(subprocess, executablePath, homedir(), signal)
     } catch {
       // Fall back cleanly to defaults if ACP catalog query cannot connect offline.
     }
     const merged = normalizeModelList([
-      ...this.configuredModels,
+      ...configured,
       ...(discovered.models.length > 0 ? discovered.models : DEFAULT_AGY_MODELS),
     ])
     return {
@@ -559,9 +564,73 @@ export class AgyAdapter implements ExternalAgentAdapter {
     }
   }
 
+  async probeCommands(
+    subprocess: SubprocessRuntime,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch {
+      return []
+    }
+    const targetCwd = cwd.trim() === '' ? homedir() : cwd
+    const discovered = await this.probeAcpCatalog(subprocess, executablePath, targetCwd, signal).catch(() => ({
+      models: [],
+      commands: [],
+    }))
+    return discovered.commands
+  }
+
+  async probeQuota(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<AgentQuotaSnapshot> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        source: 'active_cli',
+        note: error instanceof Error ? error.message : String(error),
+      }
+    }
+    const timeoutSignal = AbortSignal.timeout(8_000)
+    const combinedSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+    try {
+      const handle = subprocess.spawn({
+        argv: [executablePath, '-p', '/usage', '--output-format', 'json'],
+        cwd: homedir(),
+        stdio: { stdin: 'ignore', stdout: { maxBytes: 128_000 }, stderr: { maxBytes: 16_384 } },
+        graceMs: 1_500,
+        signal: combinedSignal,
+      })
+      const outcome = await handle.done
+      const stdout = handle.collected.stdout?.readFrom(0).text ?? ''
+      const parsed = parseAgyUsageOutput(stdout)
+      if (parsed !== undefined) {
+        return parsed
+      }
+      const stderr = handle.collected.stderr?.readFrom(0).text.trim() ?? ''
+      return {
+        status: 'error',
+        source: 'active_cli',
+        observedAt: new Date().toISOString(),
+        note: stderr !== '' ? stderr.slice(0, 200) : `agy /usage exited with code ${String(outcome.exitCode)}`,
+      }
+    } catch (error) {
+      return {
+        status: 'error',
+        source: 'active_cli',
+        observedAt: new Date().toISOString(),
+        note: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
   private async probeAcpCatalog(
     subprocess: SubprocessRuntime,
     executablePath: string,
+    cwd: string = homedir(),
     signal?: AbortSignal,
   ): Promise<{
     readonly models: readonly AgentModelOption[]
@@ -570,7 +639,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
   }> {
     const child = subprocess.spawn({
       argv: [executablePath, 'acp', '--stdio'],
-      cwd: homedir(),
+      cwd,
       stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: 16_384 } },
       graceMs: 1_500,
       ...(signal === undefined ? {} : { signal }),
@@ -606,7 +675,7 @@ export class AgyAdapter implements ExternalAgentAdapter {
             clientCapabilities: {},
           })
           return await conn.agent.request(methods.agent.session.new, {
-            cwd: homedir(),
+            cwd,
             mcpServers: [],
           })
         })(),

@@ -5,7 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentCommandOption, AgentModelOption, AgentReasoning } from '../types.ts'
+import type { AgentAuthStatus, AgentCommandOption, AgentModelOption, AgentReasoning } from '../types.ts'
+import { parseClaudeAuthStatus, parseClaudeRateLimitInfo } from '../quota-store.ts'
 import {
   nonNegativeInt,
   normalizeCommandList,
@@ -299,6 +300,14 @@ export function parseClaudeLine(rawLine: string, state: ClaudeParseState): reado
     return events
   }
 
+  if (record.type === 'rate_limit_event') {
+    const snapshot = parseClaudeRateLimitInfo(record.rate_limit_info)
+    if (snapshot !== undefined) {
+      events.push({ type: 'rate_limit', snapshot })
+    }
+    return events
+  }
+
   if (record.type === 'result') {
     if (typeof record.session_id === 'string' && record.session_id !== '') {
       state.externalSessionId = record.session_id
@@ -472,9 +481,14 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
   readonly reasoning = CLAUDE_REASONING
   readonly defaultPermissionMode = 'acceptEdits'
 
-  constructor(private readonly configuredModels: readonly AgentModelOption[] = []) {}
+  private readonly readConfiguredModels: () => readonly AgentModelOption[]
+
+  constructor(configuredModels: readonly AgentModelOption[] | (() => readonly AgentModelOption[]) = []) {
+    this.readConfiguredModels = typeof configuredModels === 'function' ? configuredModels : () => configuredModels
+  }
 
   async probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult> {
+    const configured = this.readConfiguredModels()
     let executablePath: string
     try {
       executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
@@ -483,7 +497,7 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
         available: false,
         command: this.command,
         reason: error instanceof Error ? error.message : String(error),
-        models: normalizeModelList(this.configuredModels.length > 0 ? this.configuredModels : DEFAULT_CLAUDE_MODELS),
+        models: normalizeModelList(configured.length > 0 ? configured : DEFAULT_CLAUDE_MODELS),
         defaultModel: 'default',
         reasoning: CLAUDE_REASONING,
         defaultPermissionMode: this.defaultPermissionMode,
@@ -491,12 +505,13 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
         commands: [],
       }
     }
-    const [version, initCatalog] = await Promise.all([
+    const [version, initCatalog, authStatus] = await Promise.all([
       probeAgentVersion(subprocess, executablePath),
-      this.probeClaudeCatalog(subprocess, executablePath, signal),
+      this.probeClaudeCatalog(subprocess, executablePath, homedir(), signal),
+      this.probeClaudeAuth(subprocess, executablePath, signal),
     ])
     const models = normalizeModelList([
-      ...this.configuredModels,
+      ...configured,
       ...(initCatalog.models.length > 0 ? initCatalog.models : DEFAULT_CLAUDE_MODELS),
     ])
     return {
@@ -510,12 +525,56 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
       defaultPermissionMode: this.defaultPermissionMode,
       permissionModes: this.permissionModes,
       commands: initCatalog.commands,
+      ...(authStatus === undefined ? {} : { authStatus }),
     }
+  }
+
+  private async probeClaudeAuth(
+    subprocess: SubprocessRuntime,
+    executablePath: string,
+    signal?: AbortSignal,
+  ): Promise<AgentAuthStatus | undefined> {
+    const timeout = AbortSignal.timeout(3_000)
+    const combinedSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    try {
+      const handle = subprocess.spawn({
+        argv: [executablePath, 'auth', 'status', '--json'],
+        cwd: homedir(),
+        stdio: { stdin: 'ignore', stdout: { maxBytes: 16_384 }, stderr: { maxBytes: 4_096 } },
+        graceMs: 1_000,
+        signal: combinedSignal,
+      })
+      const outcome = await handle.done
+      if (outcome.exitCode !== 0) return undefined
+      return parseClaudeAuthStatus(handle.collected.stdout?.readFrom(0).text ?? '')
+    } catch {
+      return undefined
+    }
+  }
+
+  async probeCommands(
+    subprocess: SubprocessRuntime,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    let executablePath: string
+    try {
+      executablePath = await resolveAgentExecutable(subprocess, this.command, signal)
+    } catch {
+      return []
+    }
+    const targetCwd = cwd.trim() === '' ? homedir() : cwd
+    const initCatalog = await this.probeClaudeCatalog(subprocess, executablePath, targetCwd, signal).catch(() => ({
+      commands: [],
+      models: [],
+    }))
+    return initCatalog.commands
   }
 
   private async probeClaudeCatalog(
     subprocess: SubprocessRuntime,
     executablePath: string,
+    cwd: string = homedir(),
     signal?: AbortSignal,
   ): Promise<{ readonly commands: readonly AgentCommandOption[]; readonly models: readonly AgentModelOption[] }> {
     const controller = new AbortController()
@@ -531,7 +590,7 @@ export class ClaudeCodeAdapter implements ExternalAgentAdapter {
           '--output-format', 'stream-json',
           '--input-format', 'stream-json',
         ],
-        cwd: homedir(),
+        cwd,
         stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: 16_384 } },
         graceMs: 1_000,
         signal: controller.signal,

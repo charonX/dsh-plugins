@@ -83,6 +83,7 @@ async function mountBoard(extras: {
   const runtime = await SlotTestRuntime.create()
   const locale = new LocaleRuntime(runtime.ctx)
   runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
   runtime.ctx.slots.installLocale(locale)
   await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
   runtime.remote.provideNamespaces({
@@ -104,7 +105,7 @@ async function mountBoard(extras: {
       notificationList: vi.fn().mockResolvedValue({ ok: true, value: { notifications: [] } }),
     },
   })
-  await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+  await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
   const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
   return { runtime, view }
 }
@@ -153,10 +154,8 @@ describe('flow views', () => {
       .find(section => section.textContent?.includes('Properties'))
     expect(propsSection?.textContent).toContain('home-repos')
     expect(propsSection?.textContent).toContain('Company GitLab')
-    expect(propsSection?.textContent).toContain('Designer')
     expect(propsSection?.textContent).not.toContain('proj-uuid-1234')
     expect(propsSection?.textContent).not.toContain('conn-uuid-9999')
-    expect(propsSection?.textContent).not.toContain('ext-uuid-2222')
     fireEvent.click(dialog.querySelector('button[aria-label="Close"]')!)
     await runtime.dispose()
   })
@@ -170,7 +169,7 @@ describe('flow views', () => {
     })
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
-      expect(dialogEl().textContent).toContain('Dispatches')
+      expect(dialogEl().textContent).toContain('Dispatch history')
     })
     expect(dialogEl().textContent).not.toContain('Pipeline: Test line')
     await runtime.dispose()

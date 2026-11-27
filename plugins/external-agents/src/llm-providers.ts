@@ -1,95 +1,54 @@
 /**
- * Registers one LlmAdapter route (`ext-<agentId>`) per external agent so its
- * available models appear cleanly in DSH's model catalog, composer ModelSelect,
- * and IM `/model` selection while sessions remain locked to their chosen agent.
+ * External agent CLI probe catalog and quota cache.
+ *
+ * External agents no longer register fake `ext-*` LLM providers in `ctx.llm`;
+ * this catalog serves `ExternalAgentsService` (for composer switcher, custom
+ * single-popover model/effort picker, settings page, and `dsh-manager` flow
+ * slash-command enrichment).
  */
-import type { Context } from '@deepseek-ai/cordis'
-import { brandString } from '@deepseek-ai/dsh-brand'
-import {
-  LlmAdapter,
-  LlmError,
-  type GenerateOptions,
-  type LlmModelInfo,
-  type LlmProviderInfo,
-  type LlmResolvedModelInfo,
-  type ReasoningEffortId,
-  type StreamChunk,
-} from '@deepseek-ai/dsh-llm'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import {
   EXTERNAL_AGENT_IDS,
-  providerIdForAgent,
+  type AgentCommandOption,
   type AgentDescriptor,
+  type AgentQuotaSnapshot,
   type ExternalAgentId,
 } from './types.ts'
-import { resolveFallbackContextWindow } from './context-windows.ts'
 import type { ExternalAgentAdapter, ExternalProbeResult } from './adapters/index.ts'
+import type { ExternalQuotaStore } from './quota-store.ts'
 
-class ExternalCatalogAdapter extends LlmAdapter {
-  constructor(
-    private readonly adapter: ExternalAgentAdapter,
-    private readonly readProbe: () => ExternalProbeResult,
-  ) {
-    super()
-  }
-
-  override providerInfo(provider: string): LlmProviderInfo {
-    const probe = this.readProbe()
+function fallbackQuotaFor(id: ExternalAgentId, probe: ExternalProbeResult): AgentQuotaSnapshot {
+  if (id === 'pi') {
     return {
-      id: provider,
-      name: probe.available ? this.adapter.label : `${this.adapter.label} (Unavailable)`,
+      status: 'unsupported',
+      source: 'unsupported',
+      note: 'Pi Agent CLI does not expose subscription quota.',
     }
   }
-
-  override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    const probe = this.readProbe()
-    return probe.models.map(item => ({
-      provider,
-      id: item.id,
-      name: item.name,
-      inputModalities: ['text', 'image'] as const,
-    }))
-  }
-
-  override async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
-    const probe = this.readProbe()
-    const match = probe.models.find(item => item.id === model)
-    const reasoning = probe.reasoning
-    const contextWindow = resolveFallbackContextWindow(this.adapter.id, model, probe.modelContextWindows)
+  if (!probe.available) {
     return {
-      provider,
-      id: model,
-      name: match?.name ?? model,
-      inputModalities: ['text', 'image'] as const,
-      context: { contextWindow },
-      ...(reasoning === undefined
-        ? {}
-        : {
-          reasoning: {
-            efforts: reasoning.efforts.map(effort => ({
-              id: brandString<ReasoningEffortId>(effort.id),
-              name: effort.name,
-              ...(effort.description === undefined ? {} : { description: effort.description }),
-            })),
-            ...(reasoning.defaultEffort === undefined
-              ? {}
-              : { defaultEffort: brandString<ReasoningEffortId>(reasoning.defaultEffort) }),
-          },
-        }),
+      status: 'unavailable',
+      source: id === 'agy' ? 'active_cli' : 'passive_stream',
     }
   }
-
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    throw new LlmError(
-      `External agent route "${options.provider}" must run inside a session bound to ${this.adapter.label}`,
-      'UNKNOWN',
-    )
-    yield* []
+  if (id === 'agy') {
+    return {
+      status: 'unavailable',
+      source: 'active_cli',
+    }
+  }
+  return {
+    status: 'unavailable',
+    source: 'passive_stream',
   }
 }
 
 export class ExternalAgentCatalog {
+  private static readonly COMMAND_CACHE_TTL_MS = 15_000
+
   private readonly probes = new Map<ExternalAgentId, ExternalProbeResult>()
+  private readonly cwdCommands = new Map<string, { readonly commands: readonly AgentCommandOption[]; readonly fetchedAt: number }>()
+  private readonly inFlightCwdCommands = new Map<string, Promise<readonly AgentCommandOption[]>>()
   private readonly listeners = new Set<(id?: ExternalAgentId) => void>()
   private inFlightRefresh: Promise<void> | undefined
   private lastRefreshedAt = 0
@@ -97,9 +56,9 @@ export class ExternalAgentCatalog {
   constructor(
     private readonly adapters: ReadonlyMap<ExternalAgentId, ExternalAgentAdapter>,
     private readonly readSubprocess: () => SubprocessRuntime | undefined,
+    private readonly quotaStore?: ExternalQuotaStore,
   ) {}
 
-  /** Subscribe to probe updates so registered LLM providers refresh cached metadata. */
   onChange(listener: (id?: ExternalAgentId) => void): () => void {
     this.listeners.add(listener)
     return () => {
@@ -142,6 +101,12 @@ export class ExternalAgentCatalog {
       if (adapter === undefined) return
       const result = await adapter.probe(subprocess, signal)
       this.probes.set(id, result)
+      if (id === 'agy' && result.available && adapter.probeQuota !== undefined && this.quotaStore?.get('agy') === undefined) {
+        const quota = await adapter.probeQuota(subprocess, signal).catch(() => undefined)
+        if (quota !== undefined && quota.status === 'ok') {
+          this.quotaStore?.set('agy', quota)
+        }
+      }
       this.notify(id)
     })).then(() => {
       this.lastRefreshedAt = Date.now()
@@ -163,6 +128,92 @@ export class ExternalAgentCatalog {
     return result
   }
 
+  /**
+   * Probe and cache slash commands for `(id, cwd)` so workspace-local skills
+   * (e.g. `.claude/skills`, `.agents/skills`) are discovered in the session's
+   * actual directory instead of `homedir()`.
+   */
+  async getCommandsForCwd(
+    id: ExternalAgentId,
+    cwd: string,
+    signal?: AbortSignal,
+  ): Promise<readonly AgentCommandOption[]> {
+    const targetCwd = cwd.trim()
+    if (targetCwd === '') return this.getProbe(id).commands ?? []
+    const adapter = this.adapters.get(id)
+    if (adapter?.probeCommands === undefined) {
+      return this.getProbe(id).commands ?? []
+    }
+    const cacheKey = `${id}\0${targetCwd}`
+    const cached = this.cwdCommands.get(cacheKey)
+    if (cached !== undefined && Date.now() - cached.fetchedAt < ExternalAgentCatalog.COMMAND_CACHE_TTL_MS) {
+      return cached.commands
+    }
+    const existing = this.inFlightCwdCommands.get(cacheKey)
+    if (existing !== undefined) return existing
+    const subprocess = this.readSubprocess()
+    if (subprocess === undefined) {
+      return this.getProbe(id).commands ?? []
+    }
+    const probeCommands = adapter.probeCommands.bind(adapter)
+    const run = probeCommands(subprocess, targetCwd, signal)
+      .then((commands) => {
+        const globalCommands = this.getProbe(id).commands ?? []
+        if (commands.length === 0 && globalCommands.length > 0) {
+          return globalCommands
+        }
+        this.cwdCommands.set(cacheKey, { commands, fetchedAt: Date.now() })
+        return commands
+      })
+      .catch(() => this.getProbe(id).commands ?? [])
+      .finally(() => {
+        if (this.inFlightCwdCommands.get(cacheKey) === run) {
+          this.inFlightCwdCommands.delete(cacheKey)
+        }
+      })
+    this.inFlightCwdCommands.set(cacheKey, run)
+    return run
+  }
+
+  async refreshQuota(id?: ExternalAgentId, signal?: AbortSignal): Promise<void> {
+    const subprocess = this.readSubprocess()
+    if (subprocess === undefined) return
+    const targets = id === undefined ? EXTERNAL_AGENT_IDS : [id]
+    await Promise.all(targets.map(async (agentId) => {
+      const adapter = this.adapters.get(agentId)
+      if (adapter === undefined) return
+      const probe = await this.refreshOne(agentId, signal)
+      if (agentId === 'pi') {
+        this.quotaStore?.set(agentId, fallbackQuotaFor(agentId, probe))
+        this.notify(agentId)
+        return
+      }
+      if (!probe.available) {
+        // Keep previously observed passive quota on transient unavailable? No, report unavailable only if none cached.
+        if (this.quotaStore?.get(agentId) === undefined) {
+          this.quotaStore?.set(agentId, fallbackQuotaFor(agentId, probe))
+        }
+        this.notify(agentId)
+        return
+      }
+      if (adapter.probeQuota !== undefined) {
+        const quota = await adapter.probeQuota(subprocess, signal).catch((): AgentQuotaSnapshot => ({
+          status: 'error',
+          source: agentId === 'agy' ? 'active_cli' : 'passive_stream',
+          observedAt: new Date().toISOString(),
+          note: 'Quota probe failed',
+        }))
+        // For passive CLIs, do not overwrite a previously captured `ok` snapshot with `unavailable`.
+        if (quota.source === 'passive_stream' && quota.status !== 'ok' && this.quotaStore?.get(agentId)?.status === 'ok') {
+          this.notify(agentId)
+          return
+        }
+        this.quotaStore?.set(agentId, quota)
+      }
+      this.notify(agentId)
+    }))
+  }
+
   descriptors(): readonly AgentDescriptor[] {
     const native: AgentDescriptor = {
       id: 'native',
@@ -176,57 +227,28 @@ export class ExternalAgentCatalog {
     const externals = EXTERNAL_AGENT_IDS.map((id): AgentDescriptor => {
       const adapter = this.adapters.get(id)!
       const probe = this.getProbe(id)
+      const storedQuota = this.quotaStore?.get(id)
+      const effectiveQuota = id === 'pi'
+        ? fallbackQuotaFor(id, probe)
+        : (storedQuota ?? fallbackQuotaFor(id, probe))
       return {
         id,
         label: adapter.label,
         command: adapter.command,
         available: probe.available,
+        ...(probe.executablePath === undefined ? {} : { executablePath: probe.executablePath }),
         ...(probe.version === undefined ? {} : { version: probe.version }),
         ...(probe.reason === undefined ? {} : { reason: probe.reason }),
-        provider: providerIdForAgent(id),
-        presetId: `ext-${id}`,
         defaultModel: probe.defaultModel,
         models: probe.models,
+        ...(probe.reasoning === undefined ? {} : { reasoning: probe.reasoning }),
         ...(probe.defaultPermissionMode === undefined ? {} : { defaultPermissionMode: probe.defaultPermissionMode }),
         permissionModes: probe.permissionModes,
         commands: probe.commands ?? [],
+        ...(probe.authStatus === undefined ? {} : { authStatus: probe.authStatus }),
+        quota: effectiveQuota,
       }
     })
     return [native, ...externals]
-  }
-}
-
-export function registerExternalLlmProviders(
-  ctx: Context,
-  adapters: ReadonlyMap<ExternalAgentId, ExternalAgentAdapter>,
-  catalog: ExternalAgentCatalog,
-): () => void {
-  const registrations = new Map<
-    ExternalAgentId,
-    (() => void) & { replace?: (providers: string[]) => void }
-  >()
-  for (const id of EXTERNAL_AGENT_IDS) {
-    const adapter = adapters.get(id)
-    if (adapter === undefined) continue
-    const provider = providerIdForAgent(id)
-    const llmAdapter = new ExternalCatalogAdapter(adapter, () => catalog.getProbe(id))
-    const registration = ctx.llm.registerAdapter([provider], llmAdapter)
-    registrations.set(id, registration)
-  }
-  const unsubscribe = catalog.onChange((changedId) => {
-    const ids = changedId === undefined ? EXTERNAL_AGENT_IDS : [changedId]
-    for (const id of ids) {
-      const registration = registrations.get(id)
-      if (typeof registration?.replace !== 'function') continue
-      try {
-        registration.replace([providerIdForAgent(id)])
-      } catch {
-        // Ignore ALREADY_DISPOSED races while tearing down the plugin fiber.
-      }
-    }
-  })
-  return () => {
-    unsubscribe()
-    for (const dispose of registrations.values()) dispose()
   }
 }

@@ -1,7 +1,7 @@
 /** The steward status feed: the polled busy/backlog/mode snapshot and the activity ring. */
 
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
-import type { StewardStatusView } from '../evals/wire-types.ts'
+import type { StewardPromptView, StewardStatusView } from '../evals/wire-types.ts'
 
 /** The steward status snapshot the source publishes; a failed read keeps the error state. */
 export interface StewardSnapshot {
@@ -12,6 +12,7 @@ export interface StewardSnapshot {
 /** Remote face the source reads; the client entry injects the mounted namespace. */
 export interface StewardDependencies {
   readonly status: () => Promise<{ ok: boolean; value?: StewardStatusView; error?: unknown }>
+  readonly readPrompt?: (promptId: string) => Promise<{ ok: boolean; value?: { readonly prompt?: StewardPromptView } | undefined }>
   /** Poll cadence in millis; 0 disables. */
   readonly pollMs?: number
 }
@@ -21,6 +22,8 @@ export interface StewardInjected {
   readonly hooks: { readonly steward: HostObservable<StewardSnapshot> }
   /** Re-read the status after a failure. */
   readonly onStewardRetry: () => void
+  /** Load the rendered turn prompt for a recent activity entry. */
+  readonly onStewardPrompt?: (promptId: string) => Promise<StewardPromptView | undefined>
 }
 
 /**
@@ -77,5 +80,11 @@ export function createStewardSource(deps: StewardDependencies): StewardInjected 
       },
     },
     onStewardRetry: () => { void read() },
+    ...(deps.readPrompt === undefined ? {} : {
+      onStewardPrompt: async (promptId: string): Promise<StewardPromptView | undefined> => {
+        const result = await deps.readPrompt!(promptId)
+        return result.ok ? result.value?.prompt : undefined
+      },
+    }),
   }
 }

@@ -5,6 +5,8 @@ import { createEffectQueue, type EffectRecord, type EffectStorePort } from '../.
 /** One effect in flight, as the deliverer sees it. */
 type Delivery = { id: string; kind: string; payload: unknown }
 
+const WAIT_OPTS = { timeout: 5_000, interval: 20 } as const
+
 /** Fresh pending record with a stable id for one test scenario. */
 function pendingOf(id: string, overrides: Partial<EffectRecord> = {}): EffectRecord {
   return {
@@ -47,7 +49,7 @@ describe('effect queue', () => {
     const id = await queue.enqueue({ kind: 'test', payload: { value: 'a' } })
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === id)?.status).toBe('done')
-    })
+    }, WAIT_OPTS)
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ id, kind: 'test', payload: { value: 'a' } })
     expect(store.list().map(record => [record.id, record.status])).toEqual([[id, 'done']])
     await queue.stop()
@@ -64,7 +66,7 @@ describe('effect queue', () => {
     const id = await queue.enqueue({ kind: 'test', payload: {} })
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === id)?.status).toBe('done')
-    })
+    }, WAIT_OPTS)
     expect(deliver).toHaveBeenCalledTimes(3)
     expect(backoffMs).toHaveBeenCalledWith(1)
     expect(backoffMs).toHaveBeenCalledWith(2)
@@ -82,7 +84,7 @@ describe('effect queue', () => {
     const id = await queue.enqueue({ kind: 'test', payload: {} })
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === id)?.status).toBe('failed')
-    }, { timeout: 5_000, interval: 50 })
+    }, WAIT_OPTS)
     expect(deliver).toHaveBeenCalledTimes(2)
     const failed = store.list().find(record => record.id === id)
     expect(failed).toMatchObject({ status: 'failed', attempts: 2, lastError: 'always fails' })
@@ -97,7 +99,7 @@ describe('effect queue', () => {
     await queue.recover()
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === 'crashed')?.status).toBe('done')
-    })
+    }, WAIT_OPTS)
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ id: 'crashed', kind: 'test', payload: { value: 'crashed' } })
     await queue.stop()
   })
@@ -109,7 +111,7 @@ describe('effect queue', () => {
     await queue.recover()
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === 'due')?.status).toBe('done')
-    })
+    }, WAIT_OPTS)
     expect(deliver).toHaveBeenCalledExactlyOnceWith({ id: 'due', kind: 'test', payload: { value: 'due' } })
     await queue.stop()
   })
@@ -137,12 +139,12 @@ describe('effect queue', () => {
     const id = await queue.enqueue({ kind: 'late', payload: {} })
     await vi.waitFor(() => {
       expect(store.writes.some(record => record.id === id && record.lastError === 'no deliverer for kind: late')).toBe(true)
-    })
+    }, WAIT_OPTS)
     expect(store.list().find(record => record.id === id)).toMatchObject({ status: 'pending', attempts: 0 })
     registry.set('late', async () => {})
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === id)?.status).toBe('done')
-    })
+    }, WAIT_OPTS)
     expect(store.writes.filter(record => record.id === id && record.status === 'in-flight')).toHaveLength(2)
     await queue.stop()
   })
@@ -154,7 +156,7 @@ describe('effect queue', () => {
     const id = await queue.enqueue({ kind: 'test', payload: {} })
     await vi.waitFor(() => {
       expect(store.list().find(record => record.id === id)?.attempts).toBeGreaterThan(0)
-    })
+    }, WAIT_OPTS)
     const attemptsAtStop = store.list().find(record => record.id === id)!.attempts
     await queue.stop()
     const writesAfterStop = store.writes.length

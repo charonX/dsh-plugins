@@ -4,6 +4,7 @@ import type { Branded } from '@deepseek-ai/dsh-brand'
 import { attentionRecord, type AttentionRecord } from './attention/attention-core.ts'
 import { dispatchRecord, type DispatchRecord } from './dispatch/dispatch-core.ts'
 import { reviewRecord, type ReviewRecord } from './review/review-core.ts'
+import { ticketTimelineRecord, type TicketTimelineRecord } from './timeline/timeline-core.ts'
 
 /** Stable ticket identity. */
 export type TicketId = Branded<'TicketId'>
@@ -57,6 +58,22 @@ export const ticketFlow = z.object({
 
 export type TicketFlow = z.infer<typeof ticketFlow>
 
+/** Worktree execution mode decided for a ticket (by Steward or executor). */
+export const WORKTREE_MODES = ['worktree', 'in-place', 'none'] as const
+export type WorktreeMode = (typeof WORKTREE_MODES)[number]
+
+/** Structured worktree & repository-target plan stored on a ticket. */
+export const ticketWorktreePlan = z.object({
+  mode: z.enum(WORKTREE_MODES).default('worktree'),
+  repoRoot: z.string().optional(),
+  baseBranch: z.string().optional(),
+  branch: z.string().optional(),
+  mergeTarget: z.string().optional(),
+  path: z.string().optional(),
+})
+
+export type TicketWorktreePlan = z.infer<typeof ticketWorktreePlan>
+
 /** One ticket on the board; the record shape grows with later tickets. */
 export const ticketRecord = z.object({
   /** Stable ticket id. */
@@ -73,6 +90,8 @@ export const ticketRecord = z.object({
   mandate: mandateRecord.optional(),
   /** The flow annotation when the Steward routed this ticket onto a pipeline. */
   flow: ticketFlow.optional(),
+  /** Worktree & target repository plan analyzed by Steward or updated by Executor. */
+  worktree: ticketWorktreePlan.optional(),
   /** The connection the originating external object lives under. */
   sourceConnectionId: z.string().optional(),
   /** The ticket this one follows up, when the Steward minted it as the next step. */
@@ -130,17 +149,23 @@ export type EvalRecord = z.infer<typeof evalRecord>
  * Durable board state. Ticket records carry lifecycle state; board columns
  * are never stored — every column derives from ticket state. Evals record
  * the batching and decisions that produced tickets; dispatches record the
- * Executor Sessions working tickets.
+ * Executor Sessions working tickets; timelines record the business history
+ * of a ticket independently of any Session.
+ *
+ * Version 2 adds the `timelines` table. Version 1 records keep their schemas
+ * unchanged, so the older format stays readable and is admitted explicitly.
  */
 export const boardDomain = defineDomain({
   name: 'dsh_manager_board',
-  version: 1,
+  version: 2,
+  compatibleVersions: [1],
   tables: {
     tickets: domainTable<TicketId, TicketRecord>(ticketRecord),
     evals: domainTable<EvalId, EvalRecord>(evalRecord),
     dispatches: domainTable<Branded<'DispatchId'>, DispatchRecord>(dispatchRecord),
     attentions: domainTable<Branded<'AttentionId'>, AttentionRecord>(attentionRecord),
     reviews: domainTable<Branded<'ReviewId'>, ReviewRecord>(reviewRecord),
+    timelines: domainTable<TicketId, TicketTimelineRecord>(ticketTimelineRecord),
   },
 })
 
@@ -184,6 +209,8 @@ export interface TicketView {
   readonly mandate?: { readonly strength: 'explicit' | 'inferred'; readonly scope: string; readonly policyVersion: string }
   /** The flow annotation when the ticket walks a pipeline stage. */
   readonly flow?: TicketFlow
+  /** Worktree & target repository plan attached to this ticket. */
+  readonly worktree?: TicketWorktreePlan
   /** Shared scratch directory for intermediate process artifacts. */
   readonly scratchDir?: string
   /** Prerequisite ticket IDs configured on this ticket. */
@@ -200,6 +227,13 @@ export interface TicketView {
     readonly occurredAt?: number
     readonly collectedAt: number
   }[]
+  /** The most recent meaningful timeline event, for the board card summary. */
+  readonly lastActivity?: {
+    readonly at: number
+    readonly kind: 'instruction' | 'assistant' | 'tool' | 'report' | 'attention' | 'artifact' | 'system'
+    readonly author: 'user' | 'executor' | 'steward' | 'system'
+    readonly text?: string
+  }
   readonly createdAt: number
   readonly updatedAt: number
 }

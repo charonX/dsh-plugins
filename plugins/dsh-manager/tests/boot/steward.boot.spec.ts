@@ -96,6 +96,7 @@ function stewardTurn(action: 'accept' | 'ignore' = 'accept'): ScriptEntry {
     if (last === undefined) return textResponse('done')
     const serialized = JSON.stringify(last)
     if (serialized.includes('Generate the session title')) return textResponse('Steward thread')
+    if (JSON.stringify(options.messages.slice(-2)).includes('executor dispatched')) return textResponse('done')
     if (last.role === 'user') return decisionResponse(options, action)
     return textResponse('done')
   }
@@ -176,7 +177,7 @@ async function bootSteward(
 test(
   'the Steward mints one ticket per pending thread and never mints it twice',
   async () => {
-    let { ctx, adapter } = await bootSteward(Array.from({ length: 6 }, () => stewardTurn()))
+    let { ctx, adapter } = await bootSteward(Array.from({ length: 16 }, () => stewardTurn()))
     const createdOptions: Parameters<typeof ctx.agents.create>[0][] = []
     const originalCreate = ctx.agents.create.bind(ctx.agents)
     ctx.agents.create = async options => {
@@ -200,19 +201,21 @@ test(
     // one-off session title probe may add a request.
     expect(adapter.requests.length).toBeGreaterThanOrEqual(4)
 
-    // Every accepted eval minted a todo ticket carrying its mandate.
+    // Every accepted eval minted an active ticket (todo or auto-dispatched single-step running) carrying its mandate.
     const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
     expect(tickets).toHaveLength(2)
     for (const ticket of tickets) {
-      expect(ticket.state).toBe('todo')
+      expect(['todo', 'running']).toContain(ticket.state)
       expect(ticket.mandate).toMatchObject({ strength: 'explicit', scope: 'the triggered change', policyVersion: '1' })
       expect(ticket.title).toBe('Accepted work')
       expect(ticket.threadId).not.toBe('')
     }
 
-    // The board's columns count both accepted tickets.
+    // The board's columns count both accepted tickets and leave inbox empty.
     const columns = (await ctx.dshManagerBoard.summary()).columns
-    expect(columns.find(column => column.id === 'todo')?.count).toBe(2)
+    const activeCount = (columns.find(column => column.id === 'todo')?.count ?? 0)
+      + (columns.find(column => column.id === 'running')?.count ?? 0)
+    expect(activeCount).toBe(2)
     expect(columns.find(column => column.id === 'inbox')?.count).toBe(0)
 
     // Every decision is on the audit trail with its thread identity.
@@ -417,10 +420,10 @@ test(
         singleEvalPrompts.push(tail)
         return decisionResponse(options, 'accept')
       }
-      if (tail.includes('Route the accepted ticket')) {
+      if (tail.includes('Route ticket ')) {
         routePrompts.push(tail)
         const callId = ToolCallId('call-route')
-        const argumentsJson = JSON.stringify({ ruleId, rationale: 'single-item route' })
+        const argumentsJson = JSON.stringify({ flowId: ruleId, rationale: 'single-item route' })
         return [
           { type: 'block-start', index: 0, blockType: 'tool-call' },
           { type: 'tool-call-delta', index: 0, id: callId, name: 'record_route', argumentsDelta: argumentsJson },
@@ -433,13 +436,13 @@ test(
     }
 
     const { ctx } = await bootSteward(Array.from({ length: 24 }, () => triageEntry), { home: batchHome })
-    const { member } = await ctx.dshManagerCrew.crewAdd({ name: 'Worker', role: 'do work' })
-    const { pipeline } = await ctx.dshManagerPipeline.pipelineAdd({
+    const { flow } = await ctx.dshManagerFlow.flowAdd({
       name: 'Fast Track',
-      stages: [{ memberId: member.id, instruction: 'run task' }],
+      when: 'all tasks',
+      workspaceMode: 'in-place',
+      steps: [{ id: 'run', name: 'Worker', skills: [], goal: 'run task' }],
     })
-    const { rule } = await ctx.dshManagerRoute.ruleAdd({ condition: 'all tasks', pipelineId: pipeline.id })
-    ruleId = rule.id
+    ruleId = flow.id
 
     await ctx.dshManagerSettings.uiSettingsUpdate({ evalBatchSize: 2 })
     expect((await ctx.dshManagerSettings.uiSettings()).settings.evalBatchSize).toBe(2)
@@ -458,7 +461,7 @@ test(
     const tickets = (await ctx.dshManagerBoard.ticketList()).tickets
     expect(tickets).toHaveLength(3)
     for (const ticket of tickets) {
-      expect(ticket.flow?.pipelineId).toBe(pipeline.id)
+      expect(ticket.flow?.pipelineId).toBe(flow.id)
     }
     await ctx.fiber.dispose()
   },

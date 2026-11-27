@@ -13,6 +13,7 @@
 #   ./check-plugins-against-harness.sh                # 校验全部顶层 dsh-* 插件
 #   ./check-plugins-against-harness.sh dsh-manager    # 只校验指定仓库
 #   ./check-plugins-against-harness.sh --skip-build   # 不自动重建 harness
+#   ./check-plugins-against-harness.sh --skip-hygiene # 跳过静态仓库卫生检查
 #   ./check-plugins-against-harness.sh --keep         # 保留临时工作目录便于排查
 #
 # 退出码：0 全部通过；1 有仓库失败或前置条件不满足。
@@ -22,12 +23,14 @@ set -uo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 harness="$root/deepseek-harness"
 skip_build=0
+skip_hygiene=0
 keep=0
 plugins=()
 
 for arg in "$@"; do
   case "$arg" in
     --skip-build) skip_build=1 ;;
+    --skip-hygiene) skip_hygiene=1 ;;
     --keep) keep=1 ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) plugins+=("$arg") ;;
@@ -72,6 +75,13 @@ if [ ${#stale[@]} -gt 0 ]; then
   fi
   echo "rebuilding harness..."
   ( cd "$harness" && pnpm run build ) || { echo "harness build failed" >&2; exit 1; }
+fi
+
+if [ "$skip_hygiene" -eq 0 ] && [ -f "$root/scripts/check-repo-hygiene.mjs" ]; then
+  if ! node "$root/scripts/check-repo-hygiene.mjs"; then
+    echo "re-run with --skip-hygiene only when intentionally bypassing hygiene checks" >&2
+    exit 1
+  fi
 fi
 
 # ---- @deepseek-ai/* 包名 -> checkout 目录 ------------------------------------
@@ -169,7 +179,7 @@ EOF
       return 0
     fi
     status+=("$label:FAIL")
-    tail -25 "$log"
+    tail -60 "$log"
     return 1
   }
 

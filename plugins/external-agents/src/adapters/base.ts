@@ -6,7 +6,15 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { AgentCommandOption, AgentModelOption, AgentPermissionOption, AgentReasoning, ExternalAgentId } from '../types.ts'
+import type {
+  AgentAuthStatus,
+  AgentCommandOption,
+  AgentModelOption,
+  AgentPermissionOption,
+  AgentQuotaSnapshot,
+  AgentReasoning,
+  ExternalAgentId,
+} from '../types.ts'
 
 export type ExternalPermissionPolicy = 'allow' | 'reject'
 
@@ -47,6 +55,7 @@ export type ExternalTurnEvent =
   | { readonly type: 'tool_progress'; readonly callId: string; readonly title?: string; readonly summary?: string }
   | { readonly type: 'tool_result'; readonly callId: string; readonly content: string; readonly isError: boolean }
   | ({ readonly type: 'usage' } & ExternalUsageReport)
+  | { readonly type: 'rate_limit'; readonly snapshot: AgentQuotaSnapshot }
   | {
     readonly type: 'task_started'
     readonly taskId: string
@@ -132,6 +141,7 @@ export interface ExternalProbeResult {
   readonly defaultPermissionMode?: string
   readonly permissionModes: readonly AgentPermissionOption[]
   readonly commands?: readonly AgentCommandOption[]
+  readonly authStatus?: AgentAuthStatus
 }
 
 export interface ExternalAgentAdapter {
@@ -143,6 +153,8 @@ export interface ExternalAgentAdapter {
   readonly reasoning?: AgentReasoning
   readonly defaultPermissionMode?: string
   probe(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<ExternalProbeResult>
+  probeCommands?(subprocess: SubprocessRuntime, cwd: string, signal?: AbortSignal): Promise<readonly AgentCommandOption[]>
+  probeQuota?(subprocess: SubprocessRuntime, signal?: AbortSignal): Promise<AgentQuotaSnapshot>
   runTurn(subprocess: SubprocessRuntime, request: ExternalTurnRequest): Promise<ExternalTurnOutcome>
   subscribeBackground?(dshSessionId: string, listener: (event: ExternalAsyncEvent) => void): () => void
   consumeBufferedAsyncEvents?(dshSessionId: string): readonly ExternalTurnEvent[]

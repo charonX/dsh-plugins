@@ -14,12 +14,10 @@ import { ManagerPage } from './ManagerPage.tsx'
 import { BoardNavIcon } from './NavIcon.tsx'
 import { createBoardSource } from './board-source.ts'
 import { createConnectionsSource } from './connections-source.ts'
-import { createCrewSource } from './crew-source.ts'
 import { createEvalsSource } from './evals-source.ts'
+import { createFlowSource } from './flow-source.ts'
 import { createMappingsSource } from './mappings-source.ts'
-import { createPipelineSource } from './pipeline-source.ts'
 import { createPolicySource } from './policy-source.ts'
-import { createRouteSource } from './route-source.ts'
 import { createTeamConfigSource } from './team-config-source.ts'
 import { createNotificationsSource } from './notifications-source.ts'
 import { createStewardSource } from './steward-source.ts'
@@ -124,6 +122,25 @@ export function registerUi(ctx: ClientContext): void {
       const result = await dsh.dispatchTicket({ ticketId })
       return result.ok
     },
+    continueTicket: async input => {
+      if (typeof dsh.continueTicket !== 'function') return undefined
+      const result = await dsh.continueTicket(input)
+      return result.ok ? result.value : undefined
+    },
+    openSession: (sessionId: string) => {
+      try {
+        const target = (ctx as unknown as { uiWorkspace?: { openSession?: (id: string) => void } }).uiWorkspace
+        if (target === undefined || typeof target.openSession !== 'function') {
+          console.warn('dsh-manager: uiWorkspace.openSession is unavailable; cannot reveal the executor session')
+          return false
+        }
+        target.openSession(sessionId)
+        return true
+      } catch (error) {
+        console.warn('dsh-manager: opening the executor session failed:', error)
+        return false
+      }
+    },
     cancelDispatch: async dispatchId => {
       if (typeof dsh.dispatchCancel !== 'function') return false
       const result = await dsh.dispatchCancel({ dispatchId })
@@ -200,6 +217,9 @@ export function registerUi(ctx: ClientContext): void {
     status: async () => (typeof dsh.stewardStatus === 'function'
       ? await dsh.stewardStatus()
       : { ok: false }),
+    readPrompt: async promptId => (typeof dsh.stewardPrompt === 'function'
+      ? await dsh.stewardPrompt({ promptId })
+      : { ok: false }),
     // The status rides a faster cadence than the feeds: the busy dot is the
     // steward's live "working or resting" signal.
     pollMs: 3000,
@@ -214,31 +234,38 @@ export function registerUi(ctx: ClientContext): void {
     save: async input => (typeof dsh.imSettingsUpdate === 'function' ? await dsh.imSettingsUpdate(input) : { ok: false }),
     testSend: async input => (typeof dsh.imTestSend === 'function' ? await dsh.imTestSend(input) : { ok: false }),
   })
-  const crewSource = createCrewSource({
-    list: async () => await dsh.crewList(),
-    modelOptions: async () => await dsh.modelOptions(),
-    agentKindOptions: async input => (typeof dsh.agentKindOptions === 'function'
-      ? await dsh.agentKindOptions(input)
-      : { ok: false }),
-    add: async input => await dsh.crewAdd(input),
-    update: async input => await dsh.crewUpdate(input),
-    remove: async memberId => await dsh.crewRemove({ memberId }),
-    subscribeReset: listener => ctx.on('connection/reset', listener),
-  })
-  const pipelineSource = createPipelineSource({
-    list: async () => await dsh.pipelineList(),
-    add: async input => await dsh.pipelineAdd(input),
-    update: async input => await dsh.pipelineUpdate(input),
-    remove: async pipelineId => await dsh.pipelineRemove({ pipelineId }),
-    referencesOf: async memberId => await dsh.pipelineReferencesOf({ memberId }),
-    subscribeReset: listener => ctx.on('connection/reset', listener),
-  })
-  const routeSource = createRouteSource({
-    list: async () => await dsh.ruleList(),
-    add: async input => await dsh.ruleAdd(input),
-    update: async input => await dsh.ruleUpdate(input),
-    remove: async ruleId => await dsh.ruleRemove({ ruleId }),
-    referencesOfPipeline: async pipelineId => await dsh.ruleReferencesOfPipeline({ pipelineId }),
+  const flowSource = createFlowSource({
+    list: async () => await dsh.flowList(),
+    add: async input => await dsh.flowAdd(input),
+    update: async input => await dsh.flowUpdate(input),
+    remove: async input => await dsh.flowRemove(input),
+    ...(typeof dsh.flowPresetApply === 'function'
+      ? { applyPreset: async input => await dsh.flowPresetApply(input) }
+      : {}),
+    ...(typeof dsh.flowImportPlaybook === 'function'
+      ? { importPlaybook: async input => await dsh.flowImportPlaybook(input) }
+      : {}),
+    ...(typeof dsh.flowSyncPlaybook === 'function'
+      ? { syncPlaybook: async input => await dsh.flowSyncPlaybook(input) }
+      : {}),
+    ...(typeof dsh.skillCatalog === 'function'
+      ? { skillCatalog: async () => await dsh.skillCatalog({}) }
+      : {}),
+    ...(typeof dsh.playbookCatalog === 'function'
+      ? { playbookCatalog: async () => await dsh.playbookCatalog({}) }
+      : {}),
+    ...(typeof dsh.agentKindOptions === 'function'
+      ? { agentKindOptions: async input => await dsh.agentKindOptions(input ?? {}) }
+      : {}),
+    ...(typeof dsh.modelOptions === 'function'
+      ? { modelOptions: async () => await dsh.modelOptions() }
+      : {}),
+    ...(typeof dsh.teamConfigExportYaml === 'function'
+      ? { exportYaml: async () => await dsh.teamConfigExportYaml() }
+      : {}),
+    ...(typeof dsh.teamConfigImportYaml === 'function'
+      ? { importYaml: async input => await dsh.teamConfigImportYaml(input) }
+      : {}),
     subscribeReset: listener => ctx.on('connection/reset', listener),
   })
   const teamConfigSource = createTeamConfigSource({
@@ -250,9 +277,7 @@ export function registerUi(ctx: ClientContext): void {
       : {}),
     subscribeReset: listener => ctx.on('connection/reset', listener),
     onInvalidate: () => {
-      crewSource.invalidate()
-      pipelineSource.invalidate()
-      routeSource.invalidate()
+      flowSource.invalidate()
     },
     pollMs: 2000,
   })
@@ -277,9 +302,7 @@ export function registerUi(ctx: ClientContext): void {
       ...stewardSource,
       ...uiSettingsSource,
       ...imSettingsSource,
-      ...crewSource,
-      ...pipelineSource,
-      ...routeSource,
+      ...flowSource,
       ...teamConfigSource,
       ...policySource,
       // The sources each carry a `hooks` seat; the merge keeps all of them.
@@ -293,9 +316,7 @@ export function registerUi(ctx: ClientContext): void {
         ...stewardSource.hooks,
         ...uiSettingsSource.hooks,
         ...imSettingsSource.hooks,
-        ...crewSource.hooks,
-        ...pipelineSource.hooks,
-        ...routeSource.hooks,
+        ...flowSource.hooks,
         ...teamConfigSource.hooks,
         ...policySource.hooks,
       },

@@ -162,8 +162,10 @@ test(
     expect(tickets).toHaveLength(1)
     const ticketId = tickets[0]!.id
 
-    // Dispatch: the scripted executor asks on its first turn.
-    await ctx.dshManagerExecutor.dispatchTicket({ ticketId })
+    // Dispatch: the scripted executor asks on its first turn (auto-dispatched or explicit).
+    if ((await ctx.dshManagerExecutor.dispatchList({ ticketId })).dispatches.length === 0) {
+      await ctx.dshManagerExecutor.dispatchTicket({ ticketId })
+    }
     let attention: { id: string; status: string; question: string; answer?: string | undefined } | undefined
     await vi.waitFor(async () => {
       const views = (await ctx.dshManagerExecutor.attentionList({})).attentions
@@ -186,10 +188,12 @@ test(
     const summary = await ctx.dshManagerBoard.summary()
     expect(summary.columns.find(column => column.id === 'attention')?.count).toBe(1)
 
-    // The GUI feed holds the notification with the question as its copy.
-    const feed = (await ctx.dshManagerNotifications.notificationList()).notifications
-    expect(feed.some(notification => notification.kind === 'attention' && notification.attentionId === attention!.id
-      && notification.ticketId === ticketId && notification.title === 'Which database should this target?')).toBe(true)
+    // The GUI feed holds the notification with the question as its copy (notify runs after store persistence).
+    await vi.waitFor(async () => {
+      const feed = (await ctx.dshManagerNotifications.notificationList()).notifications
+      expect(feed.some(notification => notification.kind === 'attention' && notification.attentionId === attention!.id
+        && notification.ticketId === ticketId && notification.title === 'Which database should this target?')).toBe(true)
+    }, { timeout: 5_000, interval: 50 })
 
     // The user answers on the board; the delivery reaches the session.
     const answered = await ctx.dshManagerExecutor.answerAttention({ attentionId: attention!.id, answer: 'Use Postgres' })

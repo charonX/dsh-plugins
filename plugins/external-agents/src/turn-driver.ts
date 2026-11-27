@@ -18,18 +18,22 @@ import {
   type AssistantStreamRecord,
   type ContentBlock,
   type LlmAttemptId,
+  type MessageId,
   type StreamChunk,
   type TokenUsage,
   type ToolCallId,
 } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm/types'
-import type { SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
+import { TOOL_NOT_STARTED, type SessionSeq, type UserMessage } from '@deepseek-ai/dsh-session'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { estimateTokensFromText, resolveFallbackContextWindow } from './context-windows.ts'
+import type {
+  AgentQuotaSnapshot,
+  ExternalAgentId,
+} from './types.ts'
 import {
   agentIdFromPreset,
   agentIdFromProvider,
-  type ExternalAgentId,
 } from './types.ts'
 import type {
   ExternalAgentAdapter,
@@ -363,8 +367,11 @@ export interface TurnDriverDeps {
   readonly getSubprocess: () => SubprocessRuntime | undefined
   readonly getPermissionPolicy: () => ExternalPermissionPolicy
   readonly resolvePresetForSession: (agent: Agent) => string | null
+  readonly getDefaultModel?: (agentId: ExternalAgentId) => string | undefined
+  readonly getDefaultReasoningEffort?: (agentId: ExternalAgentId) => string | undefined
   readonly getModelContextWindow?: (agentId: ExternalAgentId, model: string) => number | undefined
   readonly resolveMcpServers?: (dshSessionId: string) => Promise<readonly ExternalMcpServerConfig[]>
+  readonly onQuotaUpdate?: (agentId: ExternalAgentId, snapshot: AgentQuotaSnapshot) => void
 }
 
 /**
@@ -578,7 +585,17 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
     const releaseLock = deps.store.acquireRun(agent.id, priorBinding?.externalSessionId)
     const counters = getCounter(agent)
     const providerLabel = `ext-${externalAgentId}`
-    const effectiveModel = modelAgent === externalAgentId ? modelSelection.model : 'default'
+    const boundModel = priorBinding?.agentId === externalAgentId ? priorBinding.model : undefined
+    const boundEffort = priorBinding?.agentId === externalAgentId ? priorBinding.reasoningEffort : undefined
+    const effectiveModel = boundModel
+      ?? (modelAgent === externalAgentId ? modelSelection.model : undefined)
+      ?? deps.getDefaultModel?.(externalAgentId)
+      ?? 'default'
+    const effectiveReasoningEffort = boundEffort !== undefined
+      ? (boundEffort === null ? undefined : boundEffort)
+      : (modelAgent === externalAgentId && modelSelection.reasoningEffort !== undefined
+          ? String(modelSelection.reasoningEffort)
+          : deps.getDefaultReasoningEffort?.(externalAgentId))
     const cwd = agent.session.header.cwd ?? process.cwd()
 
     let step = 1
@@ -586,7 +603,8 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
     let attempt = new LiveExternalAttempt(deps.ctx, agent, turn, step, counters)
     let stepHasTools = false
     const pendingToolCalls = new Map<string, BackgroundToolMeta>()
-    const toolStepByCallId = new Map<string, number>()
+    const startedToolIds = new Set<string>()
+    const stepAdvertisedIds = new Set<string>()
     const syntheticTaskCalls = new Map<string, string>()
     let fallbackText = ''
     let streamedNarrativeText = ''
@@ -659,10 +677,153 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
       step = nextStep
       stepOpen = true
       stepHasTools = false
+      stepAdvertisedIds.clear()
       attempt = new LiveExternalAttempt(deps.ctx, agent, turn, step, counters)
     }
 
+    const advertiseToolCall = (
+      callId: ToolCallId,
+      name: string,
+      argumentsJson: string,
+      pendingMeta: BackgroundToolMeta,
+    ): boolean => {
+      if (stepAdvertisedIds.has(callId) || pendingToolCalls.has(callId)) return false
+      const toolBlock: ContentBlock = {
+        type: 'tool-call',
+        id: callId,
+        name,
+        arguments: argumentsJson,
+      }
+      if (!stepHasTools) {
+        stepHasTools = true
+        attempt.finishAndAppendMessage(providerLabel, effectiveModel, [toolBlock], false)
+      } else {
+        // Advertise parallel/additional tool calls in the same step so V4 `assistant/message`
+        // lifecycle tracking always sees every `tool/call` before it starts.
+        const extraAttempt = new LiveExternalAttempt(deps.ctx, agent, turn, step, counters)
+        extraAttempt.finishAndAppendMessage(providerLabel, effectiveModel, [toolBlock], false)
+      }
+      stepAdvertisedIds.add(callId)
+      pendingToolCalls.set(callId, pendingMeta)
+      agent.session.append('tool/call', {
+        turn,
+        step,
+        callId,
+        name,
+        arguments: argumentsJson,
+      })
+      startedToolIds.add(callId)
+      return true
+    }
+
+    const flushPendingToolsBeforeStepClose = (
+      mode: 'background' | 'interrupted' | 'error',
+      persistentPendingSet?: ReadonlySet<string>,
+    ): void => {
+      for (const [rawId, meta] of [...pendingToolCalls]) {
+        // Delete immediately so a partial failure cannot re-flush an already settled item in `catch`.
+        pendingToolCalls.delete(rawId)
+        const wasStarted = startedToolIds.delete(rawId)
+        const brandedCallId = brandString<ToolCallId>(rawId)
+        if (!wasStarted) {
+          try {
+            agent.session.append('tool/result', {
+              turn,
+              step,
+              message: {
+                ...createToolResultMessage({
+                  callId: brandedCallId,
+                  content: [{ type: 'text', text: 'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.' }],
+                  isError: true,
+                }),
+                id: brandString<MessageId>(`interrupted-tool-result-${rawId}-0`),
+              },
+              error: { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
+            }, { surfaceOp: 'append' })
+          } catch {
+            // Best-effort cleanup.
+          }
+          continue
+        }
+        if (mode === 'background') {
+          const trackAsBackground = persistentPendingSet === undefined || persistentPendingSet.has(rawId)
+          if (trackAsBackground) {
+            coord.backgroundMeta.set(rawId, meta)
+            upsertBackgroundTaskFromMeta(meta)
+          }
+          agent.session.append('tool/result', {
+            turn,
+            step,
+            message: createToolResultMessage({
+              callId: brandedCallId,
+              content: [{
+                type: 'text',
+                text: trackAsBackground
+                  ? 'Running in background (output will follow when completed).'
+                  : 'Completed without explicit tool output.',
+              }],
+              isError: false,
+            }),
+          }, { surfaceOp: 'append' })
+        } else {
+          try {
+            agent.session.append('tool/result', {
+              turn,
+              step,
+              message: createToolResultMessage({
+                callId: brandedCallId,
+                content: [],
+                isError: true,
+              }),
+              error: {
+                name: mode === 'interrupted' ? 'Interrupted' : 'ExternalAgentError',
+                code: mode === 'interrupted' ? 'interrupted' : 'EXTERNAL_AGENT_ERROR',
+              },
+            }, { surfaceOp: 'append' })
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+      }
+    }
+
+    const emitBackgroundResultCard = (
+      bgMeta: BackgroundToolMeta,
+      content: string,
+      isError: boolean,
+      errorName: 'ExternalToolError' | 'ExternalTaskError',
+      errorCode: 'EXTERNAL_TOOL_ERROR' | 'EXTERNAL_TASK_ERROR',
+    ): void => {
+      ensureStepForToolStart()
+      const resultCallId = brandString<ToolCallId>(`${bgMeta.callId}:bg-result`)
+      const resultName = bgMeta.title ?? bgMeta.name
+      const advertised = advertiseToolCall(resultCallId, resultName, bgMeta.arguments, {
+        callId: resultCallId,
+        name: resultName,
+        arguments: bgMeta.arguments,
+        startedAt: bgMeta.startedAt,
+      })
+      if (!advertised) return
+      agent.session.append('tool/result', {
+        turn,
+        step,
+        message: createToolResultMessage({
+          callId: resultCallId,
+          content: content === '' ? [] : [{ type: 'text', text: content }],
+          isError,
+        }),
+        ...(isError ? { error: { name: errorName, code: errorCode, reason: content.slice(0, 200) } } : {}),
+      }, { surfaceOp: 'append' })
+      pendingToolCalls.delete(resultCallId)
+      startedToolIds.delete(resultCallId)
+    }
+
     const advanceToNextStep = (): void => {
+      // Close any unresolved tool calls in the current step before emitting `step/end`
+      // so the persisted V4 log never leaves open tool lifecycles across step boundaries.
+      if (pendingToolCalls.size > 0) {
+        flushPendingToolsBeforeStepClose('background')
+      }
       agent.session.append('step/end', { turn, step })
       stepOpen = false
       openStep(step + 1)
@@ -671,11 +832,12 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
     }
 
     const ensureOpenNarrativeAttempt = (): void => {
-      if (pendingToolCalls.size > 0) {
-        promoteOpenToolsToTasks()
-      }
       if (attempt.isEnded()) {
         advanceToNextStep()
+        return
+      }
+      if (pendingToolCalls.size > 0) {
+        promoteOpenToolsToTasks()
       }
     }
 
@@ -688,6 +850,10 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
     const handleTurnEvent = async (event: ExternalTurnEvent): Promise<void> => {
       if (event.type === 'session') {
         deps.store.recordExternalSessionId(agent.id, externalAgentId, event.externalSessionId)
+        return
+      }
+      if (event.type === 'rate_limit') {
+        deps.onQuotaUpdate?.(externalAgentId, event.snapshot)
         return
       }
       if (event.type === 'usage') {
@@ -727,37 +893,24 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
         if (event.toolUseId === undefined || !pendingToolCalls.has(event.toolUseId)) {
           ensureStepForToolStart()
           const syntheticId = `ext-task-${event.taskId}`
-          syntheticTaskCalls.set(event.taskId, syntheticId)
+          if (syntheticTaskCalls.has(event.taskId) || pendingToolCalls.has(syntheticId) || stepAdvertisedIds.has(syntheticId)) {
+            return
+          }
           const brandedCallId = brandString<ToolCallId>(syntheticId)
           const argsJson = JSON.stringify({
             description: event.description,
             ...(event.subagentType === undefined ? {} : { subagent_type: event.subagentType }),
           })
-          pendingToolCalls.set(syntheticId, {
+          const meta: BackgroundToolMeta = {
             callId: syntheticId,
             name: 'subagent',
             toolName: 'subagent',
             arguments: argsJson,
             startedAt: now,
-          })
-          toolStepByCallId.set(syntheticId, step)
-          if (!stepHasTools) {
-            stepHasTools = true
-            const toolBlock: ContentBlock = {
-              type: 'tool-call',
-              id: brandedCallId,
-              name: 'subagent',
-              arguments: argsJson,
-            }
-            attempt.finishAndAppendMessage(providerLabel, effectiveModel, [toolBlock], false)
           }
-          agent.session.append('tool/call', {
-            turn,
-            step,
-            callId: brandedCallId,
-            name: 'subagent',
-            arguments: argsJson,
-          })
+          if (advertiseToolCall(brandedCallId, 'subagent', argsJson, meta)) {
+            syntheticTaskCalls.set(event.taskId, syntheticId)
+          }
         }
         return
       }
@@ -779,25 +932,28 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
           ...(event.toolUses === undefined ? {} : { toolUses: event.toolUses }),
         })
-        const syntheticId = syntheticTaskCalls.get(event.taskId)
-        if (syntheticId !== undefined) {
-          syntheticTaskCalls.delete(event.taskId)
-          if (pendingToolCalls.delete(syntheticId)) {
-            const callStep = toolStepByCallId.get(syntheticId) ?? step
-            toolStepByCallId.delete(syntheticId)
-            const brandedCallId = brandString<ToolCallId>(syntheticId)
-            const isError = event.status === 'failed'
-            agent.session.append('tool/result', {
-              turn,
-              step: callStep,
-              message: createToolResultMessage({
-                callId: brandedCallId,
-                content: event.summary ? [{ type: 'text', text: event.summary }] : [],
-                isError,
-              }),
-              ...(isError ? { error: { name: 'ExternalTaskError', code: 'EXTERNAL_TASK_ERROR', reason: (event.summary ?? 'Task failed').slice(0, 200) } } : {}),
-            }, { surfaceOp: 'append' })
-          }
+        const syntheticId = syntheticTaskCalls.get(event.taskId) ?? `ext-task-${event.taskId}`
+        syntheticTaskCalls.delete(event.taskId)
+        const isError = event.status === 'failed'
+        if (pendingToolCalls.delete(syntheticId)) {
+          startedToolIds.delete(syntheticId)
+          const brandedCallId = brandString<ToolCallId>(syntheticId)
+          agent.session.append('tool/result', {
+            turn,
+            step,
+            message: createToolResultMessage({
+              callId: brandedCallId,
+              content: event.summary ? [{ type: 'text', text: event.summary }] : [],
+              isError,
+            }),
+            ...(isError ? { error: { name: 'ExternalTaskError', code: 'EXTERNAL_TASK_ERROR', reason: (event.summary ?? 'Task failed').slice(0, 200) } } : {}),
+          }, { surfaceOp: 'append' })
+          return
+        }
+        const bgMeta = coord.backgroundMeta.get(syntheticId)
+        if (bgMeta !== undefined) {
+          coord.backgroundMeta.delete(syntheticId)
+          emitBackgroundResultCard(bgMeta, event.summary ?? '', isError, 'ExternalTaskError', 'EXTERNAL_TASK_ERROR')
         }
         return
       }
@@ -827,6 +983,9 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
       }
       if (event.type === 'tool_start') {
         ensureStepForToolStart()
+        if (pendingToolCalls.has(event.callId) || stepAdvertisedIds.has(event.callId)) {
+          return
+        }
         promoteOpenToolsToTasks(event.callId)
         const now = Date.now()
         const meta: BackgroundToolMeta = {
@@ -838,35 +997,9 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           startedAt: now,
         }
         const brandedCallId = brandString<ToolCallId>(event.callId)
-        pendingToolCalls.set(event.callId, meta)
-        toolStepByCallId.set(event.callId, step)
+        advertiseToolCall(brandedCallId, event.name, event.arguments, meta)
         if (IMMEDIATE_TASK_TOOL_RE.test(event.toolName ?? event.name)) {
           upsertBackgroundTaskFromMeta(meta)
-        }
-        if (!stepHasTools) {
-          stepHasTools = true
-          const toolBlock: ContentBlock = {
-            type: 'tool-call',
-            id: brandedCallId,
-            name: event.name,
-            arguments: event.arguments,
-          }
-          attempt.finishAndAppendMessage(providerLabel, effectiveModel, [toolBlock], false)
-          agent.session.append('tool/call', {
-            turn,
-            step,
-            callId: brandedCallId,
-            name: event.name,
-            arguments: event.arguments,
-          })
-        } else {
-          agent.session.append('tool/call', {
-            turn,
-            step,
-            callId: brandedCallId,
-            name: event.name,
-            arguments: event.arguments,
-          })
         }
         return
       }
@@ -881,12 +1014,11 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
         })
 
         if (pendingToolCalls.delete(event.callId)) {
-          const callStep = toolStepByCallId.get(event.callId) ?? step
-          toolStepByCallId.delete(event.callId)
+          startedToolIds.delete(event.callId)
           const brandedCallId = brandString<ToolCallId>(event.callId)
           agent.session.append('tool/result', {
             turn,
-            step: callStep,
+            step,
             message: createToolResultMessage({
               callId: brandedCallId,
               content: event.content === '' ? [] : [{ type: 'text', text: event.content }],
@@ -897,38 +1029,9 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           return
         }
 
-        // Background task completed in a subsequent turn: emit a paired completion tool card in the active turn.
+        // Background task completed in a subsequent step or turn: emit a paired completion tool card in the active step.
         if (bgMeta !== undefined) {
-          ensureStepForToolStart()
-          const resultCallId = brandString<ToolCallId>(`${event.callId}:bg-result`)
-          const resultName = bgMeta.title ?? bgMeta.name
-          if (!stepHasTools) {
-            stepHasTools = true
-            const toolBlock: ContentBlock = {
-              type: 'tool-call',
-              id: resultCallId,
-              name: resultName,
-              arguments: bgMeta.arguments,
-            }
-            attempt.finishAndAppendMessage(providerLabel, effectiveModel, [toolBlock], false)
-          }
-          agent.session.append('tool/call', {
-            turn,
-            step,
-            callId: resultCallId,
-            name: resultName,
-            arguments: bgMeta.arguments,
-          })
-          agent.session.append('tool/result', {
-            turn,
-            step,
-            message: createToolResultMessage({
-              callId: resultCallId,
-              content: event.content === '' ? [] : [{ type: 'text', text: event.content }],
-              isError: event.isError,
-            }),
-            ...(event.isError ? { error: { name: 'ExternalToolError', code: 'EXTERNAL_TOOL_ERROR', reason: event.content.slice(0, 200) } } : {}),
-          }, { surfaceOp: 'append' })
+          emitBackgroundResultCard(bgMeta, event.content, event.isError, 'ExternalToolError', 'EXTERNAL_TOOL_ERROR')
         }
       }
     }
@@ -961,7 +1064,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
           cwd,
           dshSessionId: agent.id,
           model: effectiveModel,
-          ...(modelSelection.reasoningEffort === undefined ? {} : { reasoningEffort: modelSelection.reasoningEffort }),
+          ...(effectiveReasoningEffort === undefined ? {} : { reasoningEffort: effectiveReasoningEffort }),
           ...(priorBinding?.externalSessionId === undefined ? {} : { externalSessionId: priorBinding.externalSessionId }),
           ...(effectivePermissionMode === undefined ? {} : { permissionMode: effectivePermissionMode }),
           permissionPolicy: deps.getPermissionPolicy(),
@@ -977,31 +1080,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
       }
 
       const persistentPendingSet = new Set(outcome.pendingToolCallIds ?? [])
-      for (const [rawId, meta] of pendingToolCalls) {
-        const brandedCallId = brandString<ToolCallId>(rawId)
-        const callStep = toolStepByCallId.get(rawId) ?? step
-        toolStepByCallId.delete(rawId)
-        const isBackgrounded = persistentPendingSet.has(rawId)
-        if (isBackgrounded) {
-          coord.backgroundMeta.set(rawId, meta)
-          upsertBackgroundTaskFromMeta(meta)
-        }
-        agent.session.append('tool/result', {
-          turn,
-          step: callStep,
-          message: createToolResultMessage({
-            callId: brandedCallId,
-            content: [{
-              type: 'text',
-              text: isBackgrounded
-                ? 'Running in background (output will follow when completed).'
-                : 'Completed without explicit tool output.',
-            }],
-            isError: false,
-          }),
-        }, { surfaceOp: 'append' })
-      }
-      pendingToolCalls.clear()
+      flushPendingToolsBeforeStepClose('background', persistentPendingSet)
       deps.store.setBackgroundActive(agent.id, persistentPendingSet.size > 0)
 
       const finalUsage = buildFinalUsage()
@@ -1043,29 +1122,7 @@ export function installExternalTurnDriver(deps: TurnDriverDeps): () => void {
         deps.store.clearBackgroundState(agent.id)
         void adapter.closeSession?.(agent.id).catch(() => {})
       }
-      for (const [rawId] of pendingToolCalls) {
-        const brandedCallId = brandString<ToolCallId>(rawId)
-        const callStep = toolStepByCallId.get(rawId) ?? step
-        toolStepByCallId.delete(rawId)
-        try {
-          agent.session.append('tool/result', {
-            turn,
-            step: callStep,
-            message: createToolResultMessage({
-              callId: brandedCallId,
-              content: [],
-              isError: true,
-            }),
-            error: {
-              name: signal.aborted ? 'Interrupted' : 'ExternalAgentError',
-              code: signal.aborted ? 'interrupted' : 'EXTERNAL_AGENT_ERROR',
-            },
-          }, { surfaceOp: 'append' })
-        } catch {
-          // Best-effort cleanup.
-        }
-      }
-      pendingToolCalls.clear()
+      flushPendingToolsBeforeStepClose(signal.aborted ? 'interrupted' : 'error')
 
       if (stepOpen && !stepHasTools && attempt.hasAnyOutput()) {
         try {

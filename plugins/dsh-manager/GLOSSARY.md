@@ -94,6 +94,14 @@ _Avoid_: 关注、Watch
 派工向工单汇报的状态：进展、等待、就绪、受阻、失败、无需处理。
 _Avoid_: 回执
 
+**Turn（轮次）**:
+一次派工在工单时间线上的分段；一轮可以有多条指令、回复与工具活动。工单结束后继续，会接着同一执行会话开启新的轮次。
+_Avoid_: 会话、Run
+
+**Timeline（时间线）**:
+一张工单的业务事件账本，按发生顺序记录人的指令、执行器回复与工具活动、报告、待人工决定、产出与系统结论（如复核打回、结束）。由插件域持久化，不依附任何 Session，会话丢失或被冷恢复后仍然完整。
+_Avoid_: 对话、聊天记录、Session 日志
+
 **Attention（待人工决定）**:
 工单上一个等待人回答的事项，分为提问、Approval 与验收三种。
 _Avoid_: 通知、提醒
@@ -124,26 +132,26 @@ _Avoid_: Worker、子代理
 定时检查派工是否卡住或连续失败、Connection 是否失效的角色，发现异常时生成 Attention。
 _Avoid_: 监控、健康检查
 
-## 团队
+## 团队与 Flow IR
 
-**队员（Crew Member）**:
-一张角色卡：名字、职责提示词、模型与工具约束。流水线环节引用它；派工时它的职责提示词随任务附带。执行体（Agent Kind）记录队员由谁执行：默认内置执行器；Claude Code、Codex 等外部 agent 接入后按执行体派工，模型与提供方沿用外部 agent 自己的配置。
-_Avoid_: 子代理、Sub-agent、Agent 配置
+**Flow（流程 / Flow IR）**:
+`team-config.yaml` v3 中的唯一编排原语（`FlowDef`）：包含自然语言触发条件（`when`）、工作目录模式（`workspaceMode`: `in-place` | `worktree` | `auto`）、可选 Playbook 缓存来源（`source`）与有序步骤链表（`steps[]`）。取代原 `CrewMember`、`Pipeline`、`RouteRule` 与三级 `PromptStudio` 覆盖。
+_Avoid_: 四件套配置、流水线+路由规则分离模型
 
-**流水线（Pipeline）**:
-一条有序的环节序列；工单按它逐环节派工。可被多条路由规则复用。
-_Avoid_: 工作流、Workflow、流程模板
+**Step（步骤）**:
+Flow 中的单个节点（`FlowStepDef`）：指定挂载技能（`skills[]`）、可选一句话补充目标（`goal`）、只读边界（`readOnly`）、失败打回目标（`onFail`）、可选人工确认门禁（`humanConfirm`）及可选执行体覆盖（`agent`）。不声明 `onFail` 的步骤完成后由 Steward 确定性推进，不消耗门禁评审轮次。
+_Avoid_: 重角色卡绑定、skippable 预检环节
 
-**环节（Stage）**:
-流水线的一个节点：引用一个队员并附加本环节指令，标注是否可跳过及跳过逻辑。一个环节执行为一张工单。
-_Avoid_: 步骤、Step、任务
+**Playbook Cache（Playbook 一次编译与 Hash 缓存）**:
+通过 `playbook-compiler` 将 `SKILL.md` 或 Markdown Playbook 一次性抽取为结构化 Flow IR 并记录 `source.hash`（SHA-256）；只要源文件哈希未变，永久直接复用缓存结果，不再重复解析或消耗模型调用。
+_Avoid_: 每次派工临时重读重解析 Playbook
 
-**路由规则（Route Rule）**:
-分配规则：一段自然语言的条件描述，命中时把工单交给对应的流水线。未命中任何规则时交给人工判断，并建议补充流程。
-_Avoid_: 分支、条件规则、默认流程
+**单步通用执行（Single-Step Fallback）**:
+当尚未启用任何 Flow 或 Steward 路由返回 `none: true` 时，直接按默认执行器配合工作区可用技能清单执行当前工单，不弹出阻塞性的「请补充路由规则」Attention。
+_Avoid_: 路由未命中即挂起阻断
 
 **流程记录（Flow Run）**:
-一条流程的执行进度：同一流程的环节票按序推进，进度就是链条上各票的状态，不设独立的流程存储。
+一条 Flow 的执行进度：同一 Flow 的步骤工单按序推进，进度就是链条上各工单的状态，不设独立的流程运行期状态机存储。
 _Avoid_: 进度条、执行日志、状态机、快照
 
 ## 并行调度与自适应落地
@@ -159,3 +167,29 @@ _Avoid_: 自动关停别人分支、静默丢弃无记录
 **自适应落地（Adaptive Landing）**:
 交付环节不依赖静态 `projects:` 配置文件，而是按目标仓库实时发现 `AGENTS.md` / `CLAUDE.md`、项目局部 PR/发布 Skill 与远端/分支事实决定落地动作（`check_branch_rebase`、`local_merge_branch`、`push_branch`、`create_mr_or_pr`），高风险写操作继续经由 `Approval` 审批，并受同项目串行锁保护；规则缺失或存在歧义时默认安全停留在已验证的当前分支等待人工指示。
 _Avoid_: 静态项目配置表、自动强推 main、跳过冲突恢复
+
+## 提示词拼装与项目事实
+
+**Prompt Builder（极简提示词拼装器）**:
+`src/prompt/prompt-builder.ts`：负责组装执行器与管家轮次提示词，将当前步骤挂载的 `SKILL.md` 方法论与可用技能清单置前，并保留系统确定性的只读契约段（`scope`、`report`、`ask`、`approval`、`deliver`）。不再提供三级可视化段落覆盖。
+_Avoid_: Prompt Studio 三级模板引擎
+
+**契约段（Locked Section）**:
+承载系统确定性边界与工具调用契约的只读段落（`scope`、`report`、`ask`、`approval`、`deliver`），在派工历史中保留可审计结构并不可被用户配置改写。
+_Avoid_: 可配置提示词块
+
+**项目事实（Project Facts）**:
+派工时直接从目标项目目录与 `workspaceRegistry` 动态读取的 `AGENTS.md` / `CLAUDE.md`、`docs/git-flow.md`、`docs/verify/README.md`、可用技能列表与落地模式，保证 Flow 配置零仓库硬编码。
+_Avoid_: 静态项目片段文件
+
+**续做（Continuation）**:
+把一句话追加到一张工单的执行会话里，而不是新开工单。运行中的工单插进当前轮或排到下一轮；已结束的工单先拉回 `todo`，再 `resume` 原 `Executor Session`。
+_Avoid_: 评论、重试、后续工单
+
+**轮次（Turn）**:
+一次派工的执行区间。指令、回复、工具调用、汇报、待决定都挂在轮次下，时间线以它分隔。
+_Avoid_: 会话、消息流
+
+**时间线（Timeline）**:
+由 Dsh Manager 账本持久化的工单级记录（`ticket events`），与 Session 日志解耦；Session 只是事件的来源之一。
+_Avoid_: 聊天记录、面板历史

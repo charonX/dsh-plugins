@@ -151,10 +151,10 @@ afterAll(async () => {
   }
 })
 
-test('expanding a pipeline mid-flight walks into the newly added stage and uses updated crew role', async () => {
+test('expanding a flow mid-flight walks into the newly added step and uses updated step goal', async () => {
   const overlayPath = await writeOverlay(expandHome, 3098, expandCwd)
   const executorPrompts: string[] = []
-  let ruleId = ''
+  let flowId = ''
   const adapter = new ScriptedAdapter((options) => {
     const last = options.messages.at(-1)
     if (last === undefined) return textResponse('done')
@@ -167,8 +167,8 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
         args: { action: 'accept', strength: 'explicit', title: 'Flow expand', scope: 'expand scope', rationale: 'ok', evalId: evalIdOf(options) },
       }])
     }
-    if (tail.includes('Route the accepted ticket')) {
-      return toolCallsResponse([{ name: 'record_route', args: { ruleId, rationale: 'matched' } }])
+    if (tail.includes('Route ticket ')) {
+      return toolCallsResponse([{ name: 'record_route', args: { flowId, rationale: 'matched' } }])
     }
     if (tail.includes('executor dispatched for ticket')) {
       executorPrompts.push(tail)
@@ -176,7 +176,7 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
         { name: 'submit_report', args: { kind: 'ready', message: 'stage finished' } },
       ])
     }
-    if (tail.includes('review')) {
+    if (tail.includes('Review the finished work on ticket')) {
       return toolCallsResponse([{ name: 'record_review', args: { verdict: 'pass', feedback: 'looks good', dispatchId: 'unknown' } }])
     }
     return textResponse('done')
@@ -189,33 +189,26 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
     const yamlPath = ctx.dshManagerTeamConfig.status().filePath
 
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: worker-1',
-      '    name: Worker One',
-      '    role: initial stage 1 duty',
-      '  - id: worker-2',
-      '    name: Worker Two',
-      '    role: old worker 2 duty',
-      '  - id: worker-3',
-      '    name: Worker Three',
-      '    role: brand new stage 3 duty',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: dynamic-pipe',
       '    name: Dynamic Pipe v1',
-      '    stages:',
-      '      - memberId: worker-1',
-      '        instruction: do stage 1',
-      '      - memberId: worker-2',
-      '        instruction: do stage 2',
-      'routes:',
-      '  - id: r-dyn',
-      '    condition: any flow test',
-      '    pipelineId: dynamic-pipe',
+      '    when: any flow test',
+      '    workspaceMode: in-place',
+      '    enabled: true',
+      '    steps:',
+      '      - id: s1',
+      '        name: Step 1',
+      '        skills: []',
+      '        goal: do stage 1',
+      '      - id: s2',
+      '        name: Step 2',
+      '        skills: []',
+      '        goal: do stage 2',
       '',
     ].join('\n'), 'utf8')
     await ctx.dshManagerTeamConfig.reloadFromDisk()
-    ruleId = 'r-dyn'
+    flowId = 'dynamic-pipe'
 
     const connection = await ctx.dshManagerConnections.connectionAdd({
       connector: 'jira', name: 'prod', deployment: 'server-dc', baseUrl, authMethod: 'pat', secret: 'pat-value',
@@ -227,7 +220,7 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
     const root = await waitFor(async () => (await ctx.dshManagerBoard.ticketList()).tickets[0], 'root ticket')
     expect(root.flow).toMatchObject({ pipelineId: 'dynamic-pipe', stageIndex: 0, stageCount: 2 })
 
-    // Wait for stage 1 dispatch to complete before hot-updating the pipeline to 3 stages.
+    // Wait for stage 1 dispatch to complete before hot-updating the flow to 3 steps.
     await waitFor(async () => {
       const dispatches = (await ctx.dshManagerExecutor.dispatchList({ ticketId: root.id })).dispatches
       return dispatches[0]?.state === 'ended' ? true : undefined
@@ -235,31 +228,28 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
 
     // Hot-update YAML while flow is between stage 1 review and stage 2/3!
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: worker-1',
-      '    name: Worker One',
-      '    role: initial stage 1 duty',
-      '  - id: worker-2',
-      '    name: Worker Two',
-      '    role: updated hot-reloaded duty for stage 2',
-      '  - id: worker-3',
-      '    name: Worker Three',
-      '    role: brand new stage 3 duty',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: dynamic-pipe',
       '    name: Dynamic Pipe v2',
-      '    stages:',
-      '      - memberId: worker-1',
-      '        instruction: do stage 1',
-      '      - memberId: worker-2',
-      '        instruction: do updated stage 2',
-      '      - memberId: worker-3',
-      '        instruction: do newly added stage 3',
-      'routes:',
-      '  - id: r-dyn',
-      '    condition: any flow test',
-      '    pipelineId: dynamic-pipe',
+      '    when: any flow test',
+      '    workspaceMode: in-place',
+      '    enabled: true',
+      '    steps:',
+      '      - id: s1',
+      '        name: Step 1',
+      '        skills: []',
+      '        goal: do stage 1',
+      '      - id: s2',
+      '        name: Step 2',
+      '        skills: []',
+      '        goal: updated hot-reloaded duty for stage 2',
+      '      - id: s3',
+      '        name: Step 3',
+      '        skills: []',
+      '        readOnly: true',
+      '        onFail: s2',
+      '        goal: do newly added stage 3',
       '',
     ].join('\n'), 'utf8')
     await ctx.dshManagerTeamConfig.reloadFromDisk()
@@ -288,7 +278,7 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
         .find(a => a.status === 'pending' && a.kind === 'review'), 'final acceptance after stage 3')
     expect(acceptance.question).toContain('acceptance requested')
 
-    // Verify stage 2 got the hot-reloaded crew role & stage 3 got the new stage instruction.
+    // Verify stage 2 got the hot-reloaded goal & stage 3 got the new step goal.
     expect(executorPrompts[1]).toContain('updated hot-reloaded duty for stage 2')
     expect(executorPrompts[2]).toContain('do newly added stage 3')
 
@@ -300,9 +290,9 @@ test('expanding a pipeline mid-flight walks into the newly added stage and uses 
   }
 }, 300_000)
 
-test('shortening a pipeline mid-flight stops cleanly at the new end and asks acceptance', async () => {
+test('shortening a flow mid-flight stops cleanly at the new end and asks acceptance', async () => {
   const overlayPath = await writeOverlay(shrinkHome, 3099, shrinkCwd)
-  let ruleId = ''
+  let flowId = ''
   const adapter = new ScriptedAdapter((options) => {
     const last = options.messages.at(-1)
     if (last === undefined) return textResponse('done')
@@ -315,15 +305,15 @@ test('shortening a pipeline mid-flight stops cleanly at the new end and asks acc
         args: { action: 'accept', strength: 'explicit', title: 'Flow shrink', scope: 'shrink scope', rationale: 'ok', evalId: evalIdOf(options) },
       }])
     }
-    if (tail.includes('Route the accepted ticket')) {
-      return toolCallsResponse([{ name: 'record_route', args: { ruleId, rationale: 'matched' } }])
+    if (tail.includes('Route ticket ')) {
+      return toolCallsResponse([{ name: 'record_route', args: { flowId, rationale: 'matched' } }])
     }
     if (tail.includes('executor dispatched for ticket')) {
       return toolCallsResponse([
         { name: 'submit_report', args: { kind: 'ready', message: 'stage finished' } },
       ])
     }
-    if (tail.includes('review')) {
+    if (tail.includes('Review the finished work on ticket')) {
       return toolCallsResponse([{ name: 'record_review', args: { verdict: 'pass', feedback: 'looks good', dispatchId: 'unknown' } }])
     }
     return textResponse('done')
@@ -336,29 +326,30 @@ test('shortening a pipeline mid-flight stops cleanly at the new end and asks acc
     const yamlPath = ctx.dshManagerTeamConfig.status().filePath
 
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: w1',
-      '    name: W1',
-      '    role: worker 1',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: shrink-pipe',
       '    name: Shrink Pipe',
-      '    stages:',
-      '      - memberId: w1',
-      '        instruction: step 1',
-      '      - memberId: w1',
-      '        instruction: step 2',
-      '      - memberId: w1',
-      '        instruction: step 3',
-      'routes:',
-      '  - id: r-shrink',
-      '    condition: any flow test',
-      '    pipelineId: shrink-pipe',
+      '    when: any flow test',
+      '    workspaceMode: in-place',
+      '    enabled: true',
+      '    steps:',
+      '      - id: s1',
+      '        name: Step 1',
+      '        skills: []',
+      '        goal: step 1',
+      '      - id: s2',
+      '        name: Step 2',
+      '        skills: []',
+      '        goal: step 2',
+      '      - id: s3',
+      '        name: Step 3',
+      '        skills: []',
+      '        goal: step 3',
       '',
     ].join('\n'), 'utf8')
     await ctx.dshManagerTeamConfig.reloadFromDisk()
-    ruleId = 'r-shrink'
+    flowId = 'shrink-pipe'
 
     const connection = await ctx.dshManagerConnections.connectionAdd({
       connector: 'jira', name: 'prod', deployment: 'server-dc', baseUrl, authMethod: 'pat', secret: 'pat-value',
@@ -380,25 +371,24 @@ test('shortening a pipeline mid-flight stops cleanly at the new end and asks acc
       return dispatches[0]?.state === 'ended' ? true : undefined
     }, 'stage 2 completion')
 
-    // Shorten pipeline from 3 stages to 2 stages before stage 2 review finishes!
+    // Shorten flow from 3 steps to 2 steps before stage 2 review finishes!
     await writeFile(yamlPath, [
-      'version: 1',
-      'crew:',
-      '  - id: w1',
-      '    name: W1',
-      '    role: worker 1',
-      'pipelines:',
+      'version: 3',
+      'flows:',
       '  - id: shrink-pipe',
       '    name: Shrink Pipe',
-      '    stages:',
-      '      - memberId: w1',
-      '        instruction: step 1',
-      '      - memberId: w1',
-      '        instruction: step 2',
-      'routes:',
-      '  - id: r-shrink',
-      '    condition: any flow test',
-      '    pipelineId: shrink-pipe',
+      '    when: any flow test',
+      '    workspaceMode: in-place',
+      '    enabled: true',
+      '    steps:',
+      '      - id: s1',
+      '        name: Step 1',
+      '        skills: []',
+      '        goal: step 1',
+      '      - id: s2',
+      '        name: Step 2',
+      '        skills: []',
+      '        goal: step 2',
       '',
     ].join('\n'), 'utf8')
     await ctx.dshManagerTeamConfig.reloadFromDisk()

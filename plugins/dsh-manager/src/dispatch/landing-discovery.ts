@@ -13,7 +13,7 @@ import { runGit } from './worktree.ts'
 
 const MAX_DOC_EXCERPT_CHARS = 2400
 const CANDIDATE_DOC_NAMES = ['AGENTS.md', 'CLAUDE.md', 'docs/verify/README.md'] as const
-const DEFAULT_BASE_BRANCH_CANDIDATES = ['main', 'master', 'develop'] as const
+const DEFAULT_BASE_BRANCH_CANDIDATES = ['main', 'master', 'test', 'develop'] as const
 const PR_SKILL_PATTERN = /\b(pr|mr|pull|merge|ship|land|release|gitflow)\b/i
 const DOC_LANDING_HINT_PATTERN = /\b(pr|mr|pull\s+request|merge\s+request|gitflow|merge\s+to\s+main|glab|gh\s+pr|ship-pr|cherry-pick)\b/i
 

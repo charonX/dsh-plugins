@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import {
   AgyAdapter,
+  ClaudeCodeAdapter,
   CodexAdapter,
+  PiAdapter,
   buildAcpPromptBlocks,
   buildClaudeRunArgs,
   buildClaudeStreamUserMessage,
@@ -941,5 +943,183 @@ describe('external agent stream parsers and probes', () => {
     })
     expect(outcomes.read).toEqual({ outcome: 'selected', optionId: 'allow-1' })
     expect(outcomes.write).toEqual({ outcome: 'cancelled' })
+  })
+
+  it('probes slash commands using the caller-supplied workspace cwd for Agy, Claude Code, and Pi', async () => {
+    const projectDir = '/tmp/project-with-skills'
+
+    // 1. Agy ACP probeCommands forwards cwd to both subprocess.spawn and ACP session/new
+    const agySpawnCwds: string[] = []
+    let agySessionNewCwd: unknown
+    const agyClientToAgent = new PassThrough()
+    const agyAgentToClient = new PassThrough()
+    let agyDoneResolve!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+    const agyDone = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+      agyDoneResolve = r
+    })
+    let agyBuf = ''
+    agyClientToAgent.on('data', (chunk: Buffer) => {
+      agyBuf += chunk.toString('utf8')
+      let nl = agyBuf.indexOf('\n')
+      while (nl !== -1) {
+        const line = agyBuf.slice(0, nl).trim()
+        agyBuf = agyBuf.slice(nl + 1)
+        if (line !== '') {
+          const msg = JSON.parse(line) as { id?: number | string; method?: string; params?: Record<string, unknown> }
+          if (msg.method === 'initialize') {
+            agyAgentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1 } })}\n`)
+          } else if (msg.method === 'session/new') {
+            agySessionNewCwd = msg.params?.cwd
+            agyAgentToClient.write(`${JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId: 'acp-probe-1',
+                update: {
+                  sessionUpdate: 'available_commands_update',
+                  availableCommands: [
+                    { name: 'align', description: 'Project alignment skill' },
+                  ],
+                },
+              },
+            })}\n`)
+            agyAgentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { sessionId: 'acp-probe-1' } })}\n`)
+          } else if (msg.method === 'session/close') {
+            agyAgentToClient.write(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} })}\n`)
+          }
+        }
+        nl = agyBuf.indexOf('\n')
+      }
+    })
+    agyClientToAgent.once('finish', () => {
+      agyAgentToClient.end()
+      agyDoneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+    })
+    const agySubprocess = {
+      resolveExecutable: async () => '/usr/local/bin/agy',
+      spawn: (opts: { cwd?: string }) => {
+        if (opts.cwd !== undefined) agySpawnCwds.push(opts.cwd)
+        return {
+          stdin: agyClientToAgent,
+          stdout: agyAgentToClient,
+          done: agyDone,
+          terminate: async () => {
+            agyAgentToClient.end()
+            agyDoneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+          },
+        } as unknown as SubprocessHandle
+      },
+    } as unknown as SubprocessRuntime
+
+    const agyCmds = await new AgyAdapter().probeCommands(agySubprocess, projectDir)
+    expect(agySpawnCwds).toEqual([projectDir])
+    expect(agySessionNewCwd).toBe(projectDir)
+    expect(agyCmds).toEqual([{ name: 'align', description: 'Project alignment skill', source: 'acp' }])
+
+    // 2. ClaudeCodeAdapter probeCommands spawns in projectDir
+    const claudeSpawnCwds: string[] = []
+    const claudeStdout = new PassThrough()
+    const claudeStdin = new PassThrough()
+    let claudeDoneResolve!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+    const claudeDone = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+      claudeDoneResolve = r
+    })
+    claudeStdin.on('data', () => {
+      claudeStdout.write(`${JSON.stringify({
+        type: 'control_response',
+        response: {
+          subtype: 'success',
+          response: {
+            commands: [{ name: 'align', description: 'Project skill', builtin: false }],
+            models: [],
+          },
+        },
+      })}\n`)
+    })
+    const claudeSubprocess = {
+      resolveExecutable: async () => '/usr/local/bin/claude',
+      spawn: (opts: { cwd?: string }) => {
+        if (opts.cwd !== undefined) claudeSpawnCwds.push(opts.cwd)
+        return {
+          stdin: claudeStdin,
+          stdout: claudeStdout,
+          done: claudeDone,
+          terminate: async () => {
+            claudeStdout.end()
+            claudeDoneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+          },
+        } as unknown as SubprocessHandle
+      },
+    } as unknown as SubprocessRuntime
+
+    const claudeCmds = await new ClaudeCodeAdapter().probeCommands(claudeSubprocess, projectDir)
+    expect(claudeSpawnCwds).toEqual([projectDir])
+    expect(claudeCmds).toEqual([{ name: 'align', description: 'Project skill', source: 'custom' }])
+
+    // 3. PiAdapter probeCommands spawns in projectDir
+    const piSpawnCwds: string[] = []
+    const piStdout = new PassThrough()
+    let piDoneResolve!: (res: { exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }) => void
+    const piDone = new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((r) => {
+      piDoneResolve = r
+    })
+    const piSubprocess = {
+      resolveExecutable: async () => '/usr/local/bin/pi',
+      spawn: (opts: { cwd?: string }) => {
+        if (opts.cwd !== undefined) piSpawnCwds.push(opts.cwd)
+        queueMicrotask(() => {
+          piStdout.write(`${JSON.stringify({
+            type: 'response',
+            command: 'get_commands',
+            success: true,
+            data: { commands: [{ name: 'skill:align', description: 'Pi project skill', source: 'skill' }] },
+          })}\n`)
+        })
+        return {
+          stdout: piStdout,
+          done: piDone,
+          terminate: async () => {
+            piStdout.end()
+            piDoneResolve({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+          },
+        } as unknown as SubprocessHandle
+      },
+    } as unknown as SubprocessRuntime
+
+    const piCmds = await new PiAdapter().probeCommands(piSubprocess, projectDir)
+    expect(piSpawnCwds).toEqual([projectDir])
+    expect(piCmds).toEqual([{ name: 'skill:align', description: 'Pi project skill', source: 'skill' }])
+  })
+
+  it('parses Claude Code rate_limit_event into rate_limit turn events', () => {
+    const state = { sawStreamDeltas: false, lastText: '' }
+    const events = parseClaudeLine(JSON.stringify({
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed_warning',
+        rateLimitType: 'five_hour',
+        utilization: 0.82,
+        resetsAt: 1_800_000_000,
+        unifiedWindows: {
+          seven_day: { utilization: 0.45, resetsAt: 1_800_500_000 },
+        },
+      },
+    }), state)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.type).toBe('rate_limit')
+    if (events[0]?.type === 'rate_limit') {
+      expect(events[0].snapshot.status).toBe('ok')
+      expect(events[0].snapshot.source).toBe('passive_stream')
+      const buckets = events[0].snapshot.groups?.[0]?.buckets ?? []
+      expect(buckets.find(b => b.id === 'claude-5h')).toMatchObject({
+        remainingPercent: 18,
+        usedPercent: 82,
+        status: 'warning',
+      })
+      expect(buckets.find(b => b.id === 'claude-weekly')).toMatchObject({
+        remainingPercent: 55,
+        usedPercent: 45,
+      })
+    }
   })
 })

@@ -9,10 +9,10 @@ import type { BoardColumnId, TicketView } from '../board-domain.ts'
 import { BOARD_FILTER_KINDS, type BoardFilter } from '../board/wire-types.ts'
 import type { AttentionView } from '../attention/wire-types.ts'
 import type { BoardInjected, BoardSnapshot } from './board-source.ts'
-import type { CrewInjected } from './crew-source.ts'
+import type { FlowInjected } from './flow-source.ts'
 import type { NotificationsInjected, NotificationsSnapshot } from './notifications-source.ts'
 import type { StewardInjected } from './steward-source.ts'
-import type { AgentKindOption } from '../crew/wire-types.ts'
+import type { AgentKindOption } from '../flow/flow-ir.ts'
 import type { CandidateView, EvalRecordView } from '../evals/wire-types.ts'
 import { AttentionAnswerForm } from './AttentionAnswerForm.tsx'
 import { TicketDetailPanel } from './TicketDetail.tsx'
@@ -26,7 +26,7 @@ import css from './BoardPage.module.css'
 export type BoardPageProps = PropsRuntime<'main'>
   & InjectFace<BoardInjected>
   & InjectFace<NotificationsInjected>
-  & Partial<Pick<InjectFace<CrewInjected>, 'onAgentKindOptions'>>
+  & Partial<Pick<InjectFace<FlowInjected>, 'useFlows' | 'onAgentKindOptions'>>
   & Partial<Pick<InjectFace<StewardInjected>, 'useSteward'>>
   & { readonly onOpenMonitor?: () => void }
   & PropsLocale<'dshManager'>
@@ -123,7 +123,7 @@ function BoardStewardChip({ useSteward, onOpenMonitor, t }: {
 }
 
 /** Render the six board columns with their ticket cards, inbox candidates, and the rework pool. */
-export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotifications, useSteward, onOpenMonitor, onMarkSeen, onFilter, onAcceptCandidate, onEvalRequeue, onManualInput, onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onTicketWorktree, onTicketWorktreeRemove, onSetTicketDependencies, onCloseTicket, onAnswerAttention, onBoardRetry, t } = props
+export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotifications, useSteward, onOpenMonitor, onMarkSeen, onFilter, onAcceptCandidate, onEvalRequeue, onManualInput, onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onContinueTicket, onOpenSession, onTicketWorktree, onTicketWorktreeRemove, onSetTicketDependencies, onCloseTicket, onAnswerAttention, onBoardRetry, t } = props
   const [openTicketId, setOpenTicketId] = useState<string | undefined>()
   const [search, setSearch] = useState('')
   const snapshot = useBoard(snapshot => snapshot)
@@ -208,7 +208,7 @@ export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotific
           {useSteward !== undefined
             ? <BoardStewardChip useSteward={useSteward} onOpenMonitor={onOpenMonitor} t={t} />
             : null}
-          <ManualInputForm t={t} onManualInput={onManualInput} onAgentKindOptions={props.onAgentKindOptions} />
+          <ManualInputForm t={t} onManualInput={onManualInput} onAgentKindOptions={props.onAgentKindOptions} useFlows={props.useFlows} />
         </div>
       </div>
       <BoardColumns
@@ -256,7 +256,7 @@ export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotific
             onClose={() => { setOpenTicketId(undefined) }}
             onOpenTicket={setOpenTicketId}
             onAnswerAttention={onAnswerAttention}
-            actions={{ onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onTicketWorktree, onTicketWorktreeRemove, ...(onSetTicketDependencies === undefined ? {} : { onSetTicketDependencies }), ...(onCloseTicket === undefined ? {} : { onCloseTicket }) }}
+            actions={{ onTicketDetail, onFlowTimeline, onTicketChangeDiff, onDispatchTicket, onDispatchCancel, onContinueTicket, onOpenSession, onTicketWorktree, onTicketWorktreeRemove, ...(onSetTicketDependencies === undefined ? {} : { onSetTicketDependencies }), ...(onCloseTicket === undefined ? {} : { onCloseTicket }) }}
           />
         )
         : null}
@@ -265,10 +265,11 @@ export function BoardPage(props: BoardPageProps) {  const { useBoard, useNotific
 }
 
 /** The manual-entry modal: the user's own request walks the normal eval path. */
-function ManualInputForm({ t, onManualInput, onAgentKindOptions }: {
+function ManualInputForm({ t, onManualInput, onAgentKindOptions, useFlows }: {
   t: TranslateNS<'dshManager'>
   onManualInput: (input: { title: string; description: string; projectId?: string }) => Promise<boolean>
   onAgentKindOptions?: ((refresh?: boolean) => Promise<readonly AgentKindOption[]>) | undefined
+  useFlows?: BoardPageProps['useFlows']
 }) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -277,14 +278,25 @@ function ManualInputForm({ t, onManualInput, onAgentKindOptions }: {
   const [kindOptions, setKindOptions] = useState<readonly AgentKindOption[]>([])
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const flowSnapshot = useFlows?.(s => s)
   const formValid = title.trim() !== '' && description.trim() !== ''
-  const commandGroups: readonly SlashCommandGroup[] = kindOptions
-    .filter(option => option.available && (option.slashCommands?.length ?? 0) > 0)
-    .map(option => ({
-      agentId: option.kind,
-      agentLabel: option.kind,
-      commands: option.slashCommands ?? [],
+  const skillCommands = (flowSnapshot?.skills ?? [])
+    .map(skill => ({
+      name: skill.name,
+      ...(skill.description === '' ? {} : { description: skill.description }),
     }))
+  const commandGroups: readonly SlashCommandGroup[] = [
+    ...(skillCommands.length > 0
+      ? [{ agentId: 'skills', agentLabel: 'Skills', commands: skillCommands }]
+      : []),
+    ...kindOptions
+      .filter(option => option.available && (option.slashCommands?.length ?? 0) > 0)
+      .map(option => ({
+        agentId: option.kind,
+        agentLabel: option.kind,
+        commands: option.slashCommands ?? [],
+      })),
+  ]
   const openModal = (): void => {
     setOpen(true)
     if (typeof onAgentKindOptions === 'function') {
@@ -684,6 +696,18 @@ function formatTime(millis: number): string {
   return new Date(millis).toLocaleString()
 }
 
+/** Compact relative timestamp for the card's activity line. */
+function relativeTime(t: TranslateNS<'dshManager'>, at: number): string {
+  const minutes = Math.floor((Date.now() - at) / 60_000)
+  if (minutes < 1) return t('board.card.time.justNow')
+  if (minutes < 60) return t('board.card.time.minutes', { count: minutes })
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return t('board.card.time.hours', { count: hours })
+  const days = Math.floor(hours / 24)
+  if (days < 30) return t('board.card.time.days', { count: days })
+  return formatTime(at)
+}
+
 /** One ticket card: primary summary (title, badges, source, project, compact attention prompt); click opens full detail. */
 function TicketCard({ ticket, attentions, t, onOpen, onAnswerAttention }: {
   ticket: TicketView
@@ -730,6 +754,14 @@ function TicketCard({ ticket, attentions, t, onOpen, onAnswerAttention }: {
               ? <span>{t('board.card.source', { connection: ticket.sourceConnectionId, external: ticket.externalKey })}</span>
               : null}
             {ticket.projectId !== undefined ? <span>{t('board.card.project', { project: ticket.projectId })}</span> : null}
+          </div>
+        )
+        : null}
+      {ticket.lastActivity !== undefined
+        ? (
+          <div className={css.cardActivity}>
+            <span className={css.cardActivityText}>{ticket.lastActivity.text ?? t('board.card.activityFallback')}</span>
+            <span className={css.cardActivityTime}>{relativeTime(t, ticket.lastActivity.at)}</span>
           </div>
         )
         : null}

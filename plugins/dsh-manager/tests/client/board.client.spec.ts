@@ -14,6 +14,12 @@ function dialogEl(): HTMLElement {
   return el
 }
 
+function openInfo(): void {
+  const details = dialogEl().querySelector('details')
+  if (!(details instanceof HTMLDetailsElement)) throw new Error('the ticket info disclosure is missing')
+  details.open = true
+}
+
 type ColumnId = 'inbox' | 'pool' | 'todo' | 'running' | 'attention' | 'ended'
 const COLUMN_IDS: readonly ColumnId[] = ['inbox', 'pool', 'todo', 'running', 'attention', 'ended']
 
@@ -55,6 +61,7 @@ async function mountBoard(
     attentionList?: ReturnType<typeof vi.fn>
     answerAttention?: ReturnType<typeof vi.fn>
     notificationList?: ReturnType<typeof vi.fn>
+    uiWorkspace?: { openSession: (sessionId: string) => void }
   } = {},
 ): Promise<{ runtime: SlotTestRuntime; view: ReturnType<SlotTestRuntime['renderSlot']> }> {
   const runtime = await SlotTestRuntime.create()
@@ -63,6 +70,7 @@ async function mountBoard(
   // The locale plugin's product face: the renderer needs it for `t` seats.
   runtime.ctx.slots.installLocale(locale)
   await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
+  runtime.ctx.provide('uiWorkspace', extras.uiWorkspace ?? { openSession: () => {} })
   runtime.remote.provideNamespaces({
     dshManager: {
       summary,
@@ -87,7 +95,7 @@ async function mountBoard(
       notificationList: extras.notificationList ?? vi.fn().mockResolvedValue({ ok: true, value: { notifications: [] } }),
     },
   })
-  await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+  await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
   const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
   return { runtime, view }
 }
@@ -218,6 +226,30 @@ describe('board page', () => {
     })
     const link = view.container.querySelector('a[href="https://gl.example.com/mr/12#note_3"]')
     expect(link).not.toBeNull()
+    await runtime.dispose()
+  })
+
+  test('renders the newest timeline event and its relative time on the card', async () => {
+    const at = Date.now() - 5 * 60_000
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ running: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: {
+          tickets: [
+            ticketOf({
+              id: 'ticket-activity', title: 'Rename the drawer heading', state: 'running', threadId: 'thr-2',
+              lastActivity: { at, kind: 'instruction', author: 'user', text: '把标题改成工作台' },
+            }),
+          ],
+        },
+      }),
+    )
+    await vi.waitFor(() => {
+      const text = view.container.textContent ?? ''
+      expect(text).toContain('把标题改成工作台')
+      expect(text).toContain('5m ago')
+    })
     await runtime.dispose()
   })
 
@@ -581,6 +613,65 @@ describe('board page', () => {
     await runtime.dispose()
   })
 
+  test('the open-session action reveals the executor session and closes the drawer', async () => {
+    const openSession = vi.fn()
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'running', threadId: 'thr-1' }),
+        dispatches: [
+          { id: 'dispatch-1', ticketId: 'ticket-1', state: 'running', sessionId: 'sess-1', reports: [], createdAt: 1, updatedAt: 2 },
+        ],
+        deliverables: [], changes: [], followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ running: 1 }) }),
+      vi.fn().mockResolvedValue({ ok: true, value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'running' })] } }),
+      { ticketDetail, uiWorkspace: { openSession } },
+    )
+    try {
+      await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+      fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+      await vi.waitFor(() => { expect(dialogEl()).not.toBeNull() })
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Fix the login flow') })
+      fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Open session' }))
+      await vi.waitFor(() => { expect(openSession).toHaveBeenCalledWith('sess-1') })
+      // Navigation replaces the main view, so the drawer must not stay on top of it.
+      await vi.waitFor(() => { expect(document.querySelector('[role="dialog"]')).toBeNull() })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test('a session the sidebar cannot reveal keeps the drawer open and explains why', async () => {
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          { id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', sessionId: 'sess-missing', reports: [], createdAt: 1, updatedAt: 2 },
+        ],
+        deliverables: [], changes: [], followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({ ok: true, value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] } }),
+      { ticketDetail, uiWorkspace: { openSession: () => { throw new Error('unknown session') } } },
+    )
+    try {
+      await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+      fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+      await vi.waitFor(() => { expect(dialogEl()).not.toBeNull() })
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Fix the login flow') })
+      fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Open session' }))
+      await vi.waitFor(() => { expect(dialogEl().textContent).toContain('not in the sidebar list yet') })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test('a ticket card opens a detail panel with dispatches, deliverables, and a resolvable diff', async () => {
     const ticketDetail = vi.fn().mockResolvedValue({
       ok: true,
@@ -647,6 +738,86 @@ describe('board page', () => {
     await vi.waitFor(() => {
       expect(view.view.queryByRole('dialog')).toBeNull()
     })
+    await runtime.dispose()
+  })
+
+  test('ledger artifacts render on the timeline without a live session', async () => {
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          {
+            id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', outcome: 'ready',
+            sessionId: 'sess-9', reports: [], createdAt: 1, updatedAt: 2,
+          },
+        ],
+        deliverables: [],
+        changes: [],
+        events: [
+          { id: 'deliverable-1', seq: 0, kind: 'artifact', author: 'executor', at: 1, code: 'deliverable', body: 'Notes', sessionId: 'sess-9', turn: 1, turnId: 'dispatch-1', activity: { category: 'file', target: 'finding-9.md' } },
+          { id: 'change-1', seq: 1, kind: 'artifact', author: 'executor', at: 2, code: 'change', body: '3', sessionId: 'sess-9', turn: 1, turnId: 'dispatch-1', sourceSeq: 4 },
+        ],
+        followUps: [],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] },
+      }),
+      { ticketDetail },
+    )
+    await vi.waitFor(() => {
+      expect(view.container.textContent).toContain('Fix the login flow')
+    })
+    fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+    await vi.waitFor(() => {
+      expect(view.container.textContent).toContain('finding-9.md')
+      expect(view.container.textContent).toContain('3 files')
+    })
+    await runtime.dispose()
+  })
+
+  test('turn boundaries hide bookkeeping rows and collapse a repeated message', async () => {
+    const sentence = 'Stage 4/4 is closed out'
+    const ticketDetail = vi.fn().mockResolvedValue({
+      ok: true,
+      value: {
+        ticket: ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended', threadId: 'thr-1' }),
+        dispatches: [
+          {
+            id: 'dispatch-1', ticketId: 'ticket-1', state: 'ended', outcome: 'ready',
+            sessionId: 'sess-9', reports: [], createdAt: 1, updatedAt: 9,
+          },
+        ],
+        deliverables: [], changes: [], followUps: [],
+        events: [
+          { id: 'started', seq: 0, kind: 'system', author: 'system', at: 1, turnId: 'dispatch-1', code: 'turn-started', body: '' },
+          { id: 'spoken-1', seq: 1, kind: 'assistant', author: 'executor', at: 2, turnId: 'dispatch-1', body: sentence },
+          { id: 'spoken-2', seq: 2, kind: 'assistant', author: 'executor', at: 3, turnId: 'dispatch-1', body: sentence },
+          { id: 'ended', seq: 3, kind: 'system', author: 'system', at: 9, turnId: 'dispatch-1', code: 'turn-ended:ready', body: '' },
+        ],
+      },
+    })
+    const { runtime, view } = await mountBoard(
+      vi.fn().mockResolvedValue({ ok: true, value: summaryOf({ ended: 1 }) }),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        value: { tickets: [ticketOf({ id: 'ticket-1', title: 'Fix the login flow', state: 'ended' })] },
+      }),
+      { ticketDetail },
+    )
+    await vi.waitFor(() => { expect(view.container.textContent).toContain('Fix the login flow') })
+    fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
+    await vi.waitFor(() => { expect(dialogEl().textContent).toContain('Stage 4/4 is closed out') })
+    const text = dialogEl().textContent ?? ''
+    // The bookkeeping codes never reach the reader.
+    expect(text).not.toContain('turn-started')
+    expect(text).not.toContain('turn-ended')
+    // The executor said it once; a re-emitted copy is not a second sentence.
+    expect(text.split(sentence).length - 1).toBe(1)
     await runtime.dispose()
   })
 
@@ -1222,11 +1393,13 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
     })
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
-      expect(view.container.textContent).toContain('[claude-code] tool: Bash: pnpm test')
-      expect(view.container.textContent).toContain('command')
+      expect(view.container.textContent).toContain('Bash · pnpm test')
+      expect(view.container.textContent).toContain('tool calls')
       expect(view.container.textContent).toContain('dsh-manager/ticket-ext')
     })
 
+    // Worktree controls live under the ticket info disclosure.
+    openInfo()
     // Show unified worktree diff inline.
     fireEvent.click(view.view.getByRole('button', { name: 'Show diff' }))
     expect(view.container.textContent).toContain('+console.log("ok")')
@@ -1234,7 +1407,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
     // Worktree remove is disabled while dispatch is still running; cancel it first.
     const removeBtn = view.view.getByRole('button', { name: 'Remove worktree' }) as HTMLButtonElement
     expect(removeBtn.disabled).toBe(true)
-    fireEvent.click(view.view.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(view.view.getByRole('button', { name: 'Cancel turn' }))
     await vi.waitFor(() => {
       expect(dispatchCancel).toHaveBeenCalledWith({ dispatchId: 'disp-1' })
       expect(view.container.textContent).toContain('Interrupted')
@@ -1295,7 +1468,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
       expect(view.container.textContent).toContain('Built-in executor')
       expect(view.container.textContent).toContain('dsh-manager-exec-disp-builtin')
       expect(view.container.textContent).toContain('First interim reply')
-      expect(document.body.querySelector('[role="dialog"] h3')?.textContent ?? view.container.textContent).toContain('Dispatches')
+      expect(dialogEl().textContent).toContain('Dispatch history')
       expect(document.body.textContent).toContain('Key Findings')
     })
 
@@ -1419,6 +1592,7 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
       expect(dialogEl().textContent).toContain('Prerequisites')
       expect(dialogEl().textContent).toContain('Clean up legacy tabs')
     })
+    openInfo()
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Unblock / Run in parallel' }))
     await vi.waitFor(() => {
       expect(setTicketDependencies).toHaveBeenCalledWith({ ticketId: 'ticket-blocked', dependsOn: [] })
@@ -1488,9 +1662,16 @@ describe('ticket detail activity, cancellation, and worktree diff/cleanup', () =
 
     fireEvent.click(view.view.getByRole('button', { name: 'Detail' }))
     await vi.waitFor(() => {
+      expect(dialogEl().textContent).toContain('Ticket info')
+    })
+    openInfo()
+    await vi.waitFor(() => {
       expect(within(dialogEl()).getByRole('button', { name: 'Close ticket' })).toBeDefined()
     })
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Close ticket' }))
+    await vi.waitFor(() => {
+      expect(within(dialogEl()).getByRole('button', { name: 'Confirm close?' })).toBeDefined()
+    })
     fireEvent.click(within(dialogEl()).getByRole('button', { name: 'Confirm close?' }))
     await vi.waitFor(() => {
       expect(closeTicket).toHaveBeenCalledWith({ ticketId: 'ticket-open' })

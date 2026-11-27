@@ -11,7 +11,10 @@ import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typer
 import z from '@deepseek-ai/schemastery'
 import type { Domain } from '@deepseek-ai/dsh-storage-domain'
 import type {} from '@deepseek-ai/dsh-storage-domain'
-import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView } from './board-domain.ts'
+import { appendTimelineEvent, compactTimeline, type TimelineStorePort } from './timeline/timeline-core.ts'
+import { summarizeActivity } from './timeline/timeline-core.ts'
+import { createDomainTimelineStore } from './timeline/storage-store.ts'
+import { boardDomain, boardSummaryOf, type BoardColumnId, type BoardSummary, type EvalRecord, type TicketFlow, type TicketRecord, type TicketView, type TicketWorktreePlan } from './board-domain.ts'
 import { boardFilterSchema, closeTicketInputSchema, ticketDependenciesInputSchema, type BoardFilter, type CloseTicketInput, type TicketDependenciesInput } from './board/wire-types.ts'
 import { unresolvedDependencies, validateDependencies } from './board/dependency-core.ts'
 import type { AttentionStorePort } from './attention/attention-core.ts'
@@ -21,9 +24,7 @@ import { createDomainReviewStore } from './review/storage-store.ts'
 import { DshManagerConnections } from './connections-service.ts'
 import { DshManagerChannel } from './channel-service.ts'
 import { DshManagerTeamConfig } from './team-config-service.ts'
-import { DshManagerCrew } from './crew-service.ts'
-import { DshManagerPipeline } from './pipeline-service.ts'
-import { DshManagerRoute } from './route-service.ts'
+import { DshManagerFlow } from './flow-service.ts'
 import { DshManagerEffects } from './effects-service.ts'
 import { pendingBacklog, POLICY_VERSION } from './evals/eval-core.ts'
 import { fanInViewOf } from './evals/subscription.ts'
@@ -104,6 +105,28 @@ export class DshManagerBoard extends TypertRemoteService {
     const domain = await this.ctx.storageDomain.open(boardDomain)
     this.domain = domain
     this.ctx.effect(() => async () => { await domain.close() }, 'dsh-manager: close board domain')
+    // One pass over ledgers written before capture-side dedupe existed; it
+    // marks each record so the next boot skips it.
+    void this.compactTicketTimelines(domain)
+  }
+
+  /** Fold duplicated assistant/report rows in ledgers older builds wrote. */
+  private async compactTicketTimelines(domain: Domain<typeof boardDomain>): Promise<void> {
+    try {
+      const store = createDomainTimelineStore(domain)
+      let removed = 0
+      for (const record of store.listTimelines()) {
+        if (record.compactedAt !== undefined) continue
+        const before = record.events.length
+        const updated = await store.updateTimeline(record.ticketId, current => compactTimeline(current).record)
+        if (updated !== undefined) removed += before - updated.events.length
+      }
+      if (removed > 0) {
+        this.ctx.logger?.info('dsh-manager: compacted %d duplicated ticket timeline rows', removed)
+      }
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline compaction failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /** The eval store the Steward drives; the board owns the domain. */
@@ -113,12 +136,21 @@ export class DshManagerBoard extends TypertRemoteService {
 
   /** The dispatch store the executor drives; the board owns the domain. */
   dispatchStore(): DispatchStorePort {
-    return createDomainDispatchStore(this.domain!)
+    return createDomainDispatchStore(this.domain!, {
+      onTimelineError: error => this.ctx.logger?.warn('dsh-manager: dispatch timeline mirror failed: %s', error instanceof Error ? error.message : String(error)),
+    })
   }
 
   /** The attention store the executor drives; the board owns the domain. */
   attentionStore(): AttentionStorePort {
-    return createDomainAttentionStore(this.domain!)
+    return createDomainAttentionStore(this.domain!, {
+      onTimelineError: error => this.ctx.logger?.warn('dsh-manager: attention timeline mirror failed: %s', error instanceof Error ? error.message : String(error)),
+    })
+  }
+
+  /** The ticket timeline ledger; history independent of any Executor Session. */
+  timelineStore(): TimelineStorePort {
+    return createDomainTimelineStore(this.domain!)
   }
 
   /** The review store the Steward drives; the board owns the domain. */
@@ -137,6 +169,23 @@ export class DshManagerBoard extends TypertRemoteService {
     const updated: TicketRecord = { ...record, flow, updatedAt: Date.now() }
     await this.domain!.table('tickets').put(id as never, updated)
     await this.touchFlowMirror(id)
+    return updated
+  }
+
+  /** Persist or merge the structured worktree & repository target plan on a ticket. */
+  async updateWorktreePlan(id: string, patch: TicketWorktreePlan): Promise<TicketRecord | undefined> {
+    const record = this.domain!.table('tickets').get(id as never)
+    if (record === undefined) return undefined
+    const merged: TicketWorktreePlan = {
+      mode: patch.mode,
+      ...((patch.repoRoot ?? record.worktree?.repoRoot) === undefined ? {} : { repoRoot: patch.repoRoot ?? record.worktree?.repoRoot }),
+      ...((patch.baseBranch ?? record.worktree?.baseBranch) === undefined ? {} : { baseBranch: patch.baseBranch ?? record.worktree?.baseBranch }),
+      ...((patch.branch ?? record.worktree?.branch) === undefined ? {} : { branch: patch.branch ?? record.worktree?.branch }),
+      ...((patch.mergeTarget ?? record.worktree?.mergeTarget) === undefined ? {} : { mergeTarget: patch.mergeTarget ?? record.worktree?.mergeTarget }),
+      ...((patch.path ?? record.worktree?.path) === undefined ? {} : { path: patch.path ?? record.worktree?.path }),
+    }
+    const updated: TicketRecord = { ...record, worktree: merged, updatedAt: Date.now() }
+    await this.domain!.table('tickets').put(id as never, updated)
     return updated
   }
 
@@ -208,13 +257,27 @@ export class DshManagerBoard extends TypertRemoteService {
    * Re-open a prior execution stage ticket from `ended` back to `todo` when a
    * later review stage returns the flow walk for rework.
    */
-  async reopenStageTicket(id: string): Promise<TicketRecord | undefined> {
+  async reopenStageTicket(
+    id: string,
+    options?: { readonly reason?: string, readonly author?: 'steward' | 'user' },
+  ): Promise<TicketRecord | undefined> {
     const record = this.domain!.table('tickets').get(id as never)
     if (record === undefined || record.state !== 'ended') return record
-    const updated: TicketRecord = { ...record, state: 'todo', updatedAt: Date.now() }
+    const now = Date.now()
+    const updated: TicketRecord = { ...record, state: 'todo', updatedAt: now }
     await this.domain!.table('tickets').put(id as never, updated)
+    await this.appendTicketEvent(id, now, 'reopened', options?.reason ?? '', options?.author ?? 'steward')
     await this.touchFlowMirror(id)
     return updated
+  }
+
+  /** Append one Steward/system event to a ticket's ledger, best effort. */
+  private async appendTicketEvent(id: string, at: number, code: string, body: string, author: 'user' | 'steward' | 'system'): Promise<void> {
+    try {
+      await appendTimelineEvent(this.timelineStore(), { ticketId: id, kind: 'system', author, at, code, body })
+    } catch (error) {
+      this.ctx.logger?.warn('dsh-manager: ticket timeline append failed: %s', error instanceof Error ? error.message : String(error))
+    }
   }
 
   /**
@@ -246,6 +309,7 @@ export class DshManagerBoard extends TypertRemoteService {
     if (!anyEnded) return undefined
     await this.touchFlowMirror(id)
     const reason = options?.reason?.trim()
+    await this.appendTicketEvent(id, now, 'finished', reason ?? '', 'system')
     await this.ctx.get('dshManagerNotifications')?.notify({
       id: `progress-ended-${id}-${now}`,
       kind: 'progress',
@@ -363,6 +427,7 @@ export class DshManagerBoard extends TypertRemoteService {
       ...(parent.handoffSessionId === undefined ? {} : { handoffSessionId: parent.handoffSessionId }),
       ...(parent.acceptanceCriteria === undefined ? {} : { acceptanceCriteria: parent.acceptanceCriteria }),
       ...(parent.scratchDir === undefined ? {} : { scratchDir: parent.scratchDir }),
+      ...(parent.worktree === undefined ? {} : { worktree: parent.worktree }),
       createdAt: now,
       updatedAt: now,
     }
@@ -527,13 +592,13 @@ export class DshManagerBoard extends TypertRemoteService {
     return this.projectTicket(record, batch, this.pendingAttentionTicketIds(), this.runningDispatchTicketIds(), this.ticketRecords())
   }
 
-  /** Resolve live pipeline name and stage count for in-flight projections; falls back cleanly if removed. */
+  /** Resolve live flow name and step count for in-flight projections; falls back cleanly if removed. */
   private resolveLivePipeline(pipelineId: string): { readonly name: string; readonly stageCount: number } | undefined {
-    const svc = this.ctx.get('dshManagerPipeline')
+    const svc = this.ctx.get('dshManagerFlow')
     if (svc === undefined) return undefined
     try {
-      const pipeline = svc.require(pipelineId)
-      return { name: pipeline.name, stageCount: pipeline.stages.length }
+      const flow = svc.require(pipelineId)
+      return { name: flow.name, stageCount: flow.steps.length }
     } catch {
       return undefined
     }
@@ -549,6 +614,7 @@ export class DshManagerBoard extends TypertRemoteService {
   ): TicketView {
     const fanIn = fanInViewOf(record, batch, this.ctx.dshManagerSources.threadTriggers(record.threadId))
     const waitingOn = unresolvedDependencies(allRecords, record)
+    const lastActivity = this.lastActivityOf(record.id)
     const live = record.flow === undefined ? undefined : this.resolveLivePipeline(record.flow.pipelineId)
     const flow = record.flow === undefined ? undefined : {
       ...record.flow,
@@ -579,14 +645,23 @@ export class DshManagerBoard extends TypertRemoteService {
       ...(record.url === undefined ? {} : { url: record.url }),
       ...(record.mandate === undefined ? {} : { mandate: record.mandate }),
       ...(flow === undefined ? {} : { flow }),
+      ...(record.worktree === undefined ? {} : { worktree: record.worktree }),
       ...(record.scratchDir === undefined ? {} : { scratchDir: record.scratchDir }),
       ...(record.dependsOn === undefined || record.dependsOn.length === 0 ? {} : { dependsOn: record.dependsOn }),
       ...(waitingOn.length === 0 ? {} : { waitingOn }),
       ...(record.supersededBy === undefined ? {} : { supersededBy: record.supersededBy }),
       ...(fanIn.length > 0 ? { fanIn } : {}),
+      ...(lastActivity === undefined ? {} : { lastActivity }),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     }
+  }
+
+  /** The newest non-tool timeline event, compacted for a card one-liner. */
+  private lastActivityOf(ticketId: string): TicketView['lastActivity'] {
+    const timeline = this.timelineStore().getTimeline(ticketId as never)
+    if (timeline === undefined) return undefined
+    return summarizeActivity(timeline.events)
   }
 
   /** Keep only the tickets matching the combined filter. */
@@ -634,18 +709,22 @@ export class DshManagerBundle extends Service {
     await this.ctx.plugin(DshManagerPolicy)
     // The UI settings (panel display name) persist independently of the board.
     await this.ctx.plugin(DshManagerSettings)
-    // Declarative YAML SSOT for crew, pipelines, and routes (hot-reloading).
+    const playbookCwd = this.config.executor?.cwd
+    // Declarative YAML SSOT for Flow IR (hot-reloading).
     await this.ctx.plugin(
       DshManagerTeamConfig,
-      this.config.teamConfigPath === undefined ? undefined : { filePath: this.config.teamConfigPath },
+      this.config.teamConfigPath === undefined && playbookCwd === undefined
+        ? undefined
+        : {
+            ...(this.config.teamConfigPath === undefined ? {} : { filePath: this.config.teamConfigPath }),
+            ...(playbookCwd === undefined ? {} : { playbookCwd }),
+          },
     )
-    // The crew's role cards back the pipeline stages (mounted before the
-    // facilities that will reference them).
-    await this.ctx.plugin(DshManagerCrew)
-    // The pipelines reference the crew and validate stage members on write.
-    await this.ctx.plugin(DshManagerPipeline)
-    // The route rules reference the pipelines and validate them on write.
-    await this.ctx.plugin(DshManagerRoute)
+    // Flow IR management, Skill catalog discovery, and Playbook compilation.
+    await this.ctx.plugin(
+      DshManagerFlow,
+      playbookCwd === undefined ? undefined : { playbookCwd },
+    )
     await this.ctx.plugin(DshManagerBoard, this.config.executor?.cwd === undefined ? undefined : { flowsCwd: this.config.executor.cwd })
     // The Steward drives evals through the agent runtime; it reads the board's
     // eval store and the sources' trigger facts (both mounted above).

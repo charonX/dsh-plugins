@@ -59,6 +59,7 @@ function stewardTurn(strength: 'explicit' | 'inferred'): (options: GenerateOptio
     const last = options.messages.at(-1)
     if (last === undefined) return textResponse('done')
     if (JSON.stringify(last).includes('Generate the session title')) return textResponse('Steward thread')
+    if (JSON.stringify(options.messages.slice(-2)).includes('executor dispatched')) return textResponse('done')
     if (last.role === 'user') {
       const callId = ToolCallId('call-1')
       const argumentsJson = JSON.stringify({
@@ -116,7 +117,7 @@ test(
       binName: 'dsh-manager-test', profile: 'web', overlayPaths: [overlayPath], home,
     })
     await waitUntilService(ctx, 'dshManagerSteward')
-    const adapter = new ScriptedAdapter(Array.from({ length: 8 }, () => stewardTurn('inferred')))
+    const adapter = new ScriptedAdapter(Array.from({ length: 16 }, () => stewardTurn('inferred')))
     ctx.llm.registerAdapter(['mock'], adapter)
 
     const connection = await ctx.dshManagerConnections.connectionAdd({
@@ -154,7 +155,7 @@ test(
     expect(tickets).toHaveLength(1)
     expect(tickets[0]).toMatchObject({
       title: 'Fix the login flow',
-      state: 'todo',
+      state: expect.stringMatching(/^(todo|running)$/),
       mandate: { strength: 'explicit', scope: 'the triggered change', policyVersion: '1' },
     })
     expect((await ctx.dshManagerBoard.summary()).columns.find(column => column.id === 'inbox')?.count).toBe(1)

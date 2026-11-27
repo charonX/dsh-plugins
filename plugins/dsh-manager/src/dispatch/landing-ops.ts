@@ -175,6 +175,8 @@ export interface LocalMergeInput {
   readonly strategy?: 'rebase-then-ff' | 'ff-only' | 'merge-commit'
   readonly removeWorktreeOnSuccess?: boolean
   readonly ticketId?: string
+  readonly worktreeBranch?: string
+  readonly worktreePath?: string
   readonly lockKey?: string
 }
 
@@ -270,7 +272,10 @@ export async function localMergeBranch(
     let worktreeRemoved = false
     if (input.removeWorktreeOnSuccess === true && input.ticketId !== undefined) {
       try {
-        await removeTicketWorktree(subprocess, input.repoRoot, input.ticketId)
+        await removeTicketWorktree(subprocess, input.repoRoot, input.ticketId, {
+          ...(input.worktreeBranch === undefined ? {} : { branch: input.worktreeBranch }),
+          ...(input.worktreePath === undefined ? {} : { path: input.worktreePath }),
+        })
         worktreeRemoved = true
       } catch {
         worktreeRemoved = false

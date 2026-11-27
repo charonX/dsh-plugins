@@ -19,8 +19,90 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ExternalAgentAdapter, ExternalAsyncEvent, ExternalTurnEvent } from '../src/adapters/base.ts'
 import type { ExternalAgentId } from '../src/types.ts'
 import { ExternalSessionStore } from '../src/session-store.ts'
-import { ExternalAgentCatalog, registerExternalLlmProviders } from '../src/llm-providers.ts'
 import { installExternalTurnDriver } from '../src/turn-driver.ts'
+
+/**
+ * Enforces the native V4 session format lifecycle invariants from
+ * `session-format-v3-to-v4/src/relationships.ts` (so cold-loading a persisted
+ * session log never throws `SessionFormatError`).
+ */
+function assertV4ToolStepLifecycle(events: readonly SessionEvent[]): void {
+  let openTurn: number | null = null
+  let openStep: number | null = null
+  let nextTurn = 1
+  let nextStep = 1
+  const tools = new Map<string, { name: unknown; arguments: unknown; started: boolean }>()
+
+  for (const event of events) {
+    if (event.type === 'turn/start') {
+      expect(openTurn, `turn/start seq=${event.seq} while turn ${openTurn} still open`).toBeNull()
+      expect(event.data.turn).toBe(nextTurn)
+      openTurn = event.data.turn
+      nextStep = 1
+      tools.clear()
+      continue
+    }
+    if (event.type === 'turn/end') {
+      expect(event.data.turn).toBe(openTurn)
+      expect(openStep, `turn/end while step ${openStep} still open`).toBeNull()
+      expect([...tools.keys()], 'turn/end leaves unresolved tool calls').toEqual([])
+      openTurn = null
+      nextTurn += 1
+      continue
+    }
+    if (event.type === 'step/start') {
+      expect(event.data.turn).toBe(openTurn)
+      expect(openStep, `step/start while step ${openStep} still open`).toBeNull()
+      expect(event.data.step).toBe(nextStep)
+      openStep = nextStep
+      continue
+    }
+    if (event.type === 'step/end') {
+      expect(event.data.turn, `step/end seq=${event.seq} turn mismatch`).toBe(openTurn)
+      expect(event.data.step, `step/end seq=${event.seq} step mismatch`).toBe(openStep)
+      expect([...tools.keys()], `step/end turn=${event.data.turn} step=${event.data.step} leaves unresolved tool calls`).toEqual([])
+      openStep = null
+      nextStep += 1
+      continue
+    }
+    if (event.type === 'assistant/message') {
+      expect(event.data.turn).toBe(openTurn)
+      expect(event.data.step).toBe(openStep)
+      for (const block of event.data.message.content) {
+        if (block.type !== 'tool-call') continue
+        expect(tools.has(block.id), `assistant/message repeats advertised tool call ${block.id}`).toBe(false)
+        tools.set(block.id, { name: block.name, arguments: block.arguments, started: false })
+      }
+      continue
+    }
+    if (event.type === 'tool/call') {
+      expect(event.data.turn).toBe(openTurn)
+      expect(event.data.step).toBe(openStep)
+      const pending = tools.get(event.data.callId)
+      expect(pending, `tool/call ${event.data.callId} has no advertised tool lifecycle`).toBeDefined()
+      expect(pending!.started, `tool/call ${event.data.callId} started twice`).toBe(false)
+      expect(pending!.name).toBe(event.data.name)
+      expect(pending!.arguments).toBe(event.data.arguments)
+      pending!.started = true
+      continue
+    }
+    if (event.type === 'tool/result') {
+      expect(event.data.turn, `tool/result seq=${event.seq} turn mismatch`).toBe(openTurn)
+      expect(event.data.step, `tool/result seq=${event.seq} step mismatch (step already closed?)`).toBe(openStep)
+      const callId = event.data.message.source.callId
+      expect(event.data.message.toolCallId, `tool/result seq=${event.seq} toolCallId mismatch`).toBe(callId)
+      const pending = tools.get(callId)
+      expect(pending, `tool/result ${callId} has no advertised tool lifecycle`).toBeDefined()
+      if (!pending!.started) {
+        expect(event.data.error?.code, `unstarted tool/result ${callId} lacks TOOL_NOT_STARTED repair`).toBe('TOOL_NOT_STARTED')
+      }
+      tools.delete(callId)
+    }
+  }
+  expect(openTurn).toBeNull()
+  expect(openStep).toBeNull()
+  expect([...tools.keys()]).toEqual([])
+}
 
 describe('external turn driver', () => {
   const cleanups: Array<() => Promise<void> | void> = []
@@ -136,6 +218,7 @@ describe('external turn driver', () => {
 
     const turnEnd = events.findLast(e => e.type === 'turn/end')
     expect(turnEnd?.type === 'turn/end' ? turnEnd.data.reason.kind : undefined).toBe('completed')
+    assertV4ToolStepLifecycle(events)
   })
 
   it('rejects mismatched external model provider on a locked session and allows switching models within the same agent', async () => {
@@ -418,6 +501,11 @@ describe('external turn driver', () => {
     })
     cleanups.push(() => handle.dispose())
 
+    const richEvents: SessionEvent[] = []
+    ctx.on('session/event', (session, event) => {
+      if (session.id === 'sess-rich-1') richEvents.push(event)
+    }, { global: true })
+
     handle.agent.followup(createUserMessage({
       content: [
         { type: 'text', text: 'Check this screenshot' },
@@ -426,6 +514,7 @@ describe('external turn driver', () => {
       source: { kind: 'user' },
     }))
     await handle.agent.whenIdle()
+    assertV4ToolStepLifecycle(richEvents)
 
     expect(seenImagesCount).toBe(1)
     expect(seenImageBase64).toBe(Buffer.from([1, 2, 3]).toString('base64'))
@@ -520,6 +609,7 @@ describe('external turn driver', () => {
     const toolResults = events.filter((e): e is Extract<SessionEvent, { type: 'tool/result' }> => e.type === 'tool/result')
     expect(toolCalls.map(t => t.data.step)).toEqual([1, 2])
     expect(toolResults.map(t => t.data.step)).toEqual([1, 2])
+    assertV4ToolStepLifecycle(events)
   })
 
   it('continues background tasks into a wakeup turn cleanly and closes session pool on agent/disposed', async () => {
@@ -659,6 +749,100 @@ describe('external turn driver', () => {
     await handle.dispose()
     expect(closedSessions).toEqual([]) // handle.dispose triggers agent/disposed on adapter via index.ts; coordinator unsubscribes here.
     expect(asyncListeners.size).toBe(0)
+    assertV4ToolStepLifecycle(events)
+  })
+
+  it('maintains valid V4 step/tool lifecycle when text/thinking follows open tool calls, parallel tools overlap, or synthetic tasks settle across steps', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-v4-lifecycle-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    await ctx.plugin(SubprocessLocalPlugin)
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const store = new ExternalSessionStore(join(dir, 'sessions.json'))
+    store.setAgent('sess-v4-1', 'agy')
+
+    const fakeAgy: ExternalAgentAdapter = {
+      id: 'agy',
+      label: 'Antigravity',
+      command: 'agy',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'agy',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        // Scenario 1: parallel tools A & B in same step, plus text_delta while A/B remain open before late results settle
+        await request.onEvent({ type: 'thinking_delta', delta: 'Inspecting workspace' })
+        await request.onEvent({ type: 'tool_start', callId: 'call-par-1', name: 'read_file', arguments: '{"path":"a.ts"}' })
+        await request.onEvent({ type: 'tool_start', callId: 'call-par-2', name: 'read_file', arguments: '{"path":"b.ts"}' })
+        await request.onEvent({ type: 'text_delta', delta: 'Reading files in parallel...' })
+        await request.onEvent({ type: 'tool_result', callId: 'call-par-1', content: 'contents-a', isError: false })
+        await request.onEvent({ type: 'tool_result', callId: 'call-par-2', content: 'contents-b', isError: false })
+
+        // Scenario 2: parallel tool_start while a backgrounded call result settles alongside it, plus duplicate start guard
+        await request.onEvent({ type: 'text_delta', delta: 'Checking question next' })
+        await request.onEvent({ type: 'tool_start', callId: 'call-ask-1', name: 'Run ask_question', arguments: '{}' })
+        await request.onEvent({ type: 'tool_start', callId: 'call-ask-1', name: 'Run ask_question', arguments: '{}' })
+        await request.onEvent({ type: 'thinking_delta', delta: 'Waiting for answer' })
+        await request.onEvent({ type: 'text_delta', delta: 'Please confirm an option.' })
+        // Tool result arrives later in the same turn (after narrative step split!)
+        await request.onEvent({ type: 'tool_result', callId: 'call-ask-1', content: 'User answered Yes', isError: false })
+
+        // Scenario 3: synthetic task_started followed by text_delta then task_completed later in same turn
+        await request.onEvent({ type: 'task_started', taskId: 'sub-9', description: 'Run audit' })
+        await request.onEvent({ type: 'text_delta', delta: 'Subagent running in parallel.' })
+        await request.onEvent({ type: 'task_completed', taskId: 'sub-9', status: 'completed', summary: 'Audit clean' })
+
+        return { finalText: 'Audit clean' }
+      },
+    }
+
+    cleanups.push(installExternalTurnDriver({
+      ctx,
+      adapters: new Map([['agy', fakeAgy]]),
+      store,
+      getSubprocess: () => ctx.get('subprocess') as SubprocessRuntime | undefined,
+      getPermissionPolicy: () => 'allow',
+      resolvePresetForSession: () => null,
+    }))
+
+    const events: SessionEvent[] = []
+    ctx.on('session/event', (_session, event) => { events.push(event) }, { global: true })
+
+    const errors: unknown[] = []
+    ctx.on('agent/error', ({ error }) => { errors.push(error) }, { global: true })
+
+    const handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-v4-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => handle.dispose())
+
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Run complex multi-tool workflow' }],
+      source: { kind: 'user' },
+    }))
+    await handle.agent.whenIdle()
+
+    expect(errors).toEqual([])
+    assertV4ToolStepLifecycle(events)
+    const toolResults = events.filter((e): e is Extract<SessionEvent, { type: 'tool/result' }> => e.type === 'tool/result')
+    expect(toolResults.some(r => r.data.message.content.some(b => b.type === 'text' && b.text === 'User answered Yes'))).toBe(true)
+    expect(toolResults.some(r => r.data.message.content.some(b => b.type === 'text' && b.text === 'Audit clean'))).toBe(true)
   })
 
   it('ignores context injections appended by preset prepended pre-step hooks (e.g. time-context) after an external turn finishes', async () => {
@@ -699,8 +883,7 @@ describe('external turn driver', () => {
     }
 
     const adapters = new Map<ExternalAgentId, ExternalAgentAdapter>([['agy', fakeAgy]])
-    const catalog = new ExternalAgentCatalog(adapters, () => ctx.get('subprocess') as SubprocessRuntime | undefined)
-    cleanups.push(registerExternalLlmProviders(ctx, adapters, catalog))
+    store.setModelSelection('sess-ext-preset-1', 'agy', { model: 'gemini-4-hydrogen', reasoningEffort: 'high' })
 
     cleanups.push(installExternalTurnDriver({
       ctx,
@@ -721,7 +904,7 @@ describe('external turn driver', () => {
     const handle = await ctx.agents.create({
       sessionId: brandString<SessionId>('sess-ext-preset-1'),
       meta: { cwd: dir },
-      agentOptions: { provider: 'ext-agy', model: 'gemini-4-hydrogen' },
+      agentOptions: { provider: 'deepseek', model: 'deepseek-chat' },
       setup: (agentCtx) => {
         agentCtx.on('agent/pre-step', async (_payload, next) => {
           const decision = await next()
@@ -754,5 +937,153 @@ describe('external turn driver', () => {
       .filter((e): e is Extract<SessionEvent, { type: 'user/message' }> => e.type === 'user/message')
       .map(e => e.data.content.map(b => b.type === 'text' ? b.text : '').join(''))
     expect(userTexts).toEqual(['Create ticket'])
+    assertV4ToolStepLifecycle(events)
+  })
+
+  it('closes unresolved parallel tool calls cleanly with error tool/result before step/end if an external turn throws mid-step', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-err-tools-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    await ctx.plugin(SubprocessLocalPlugin)
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const store = new ExternalSessionStore(join(dir, 'sessions.json'))
+    store.setAgent('sess-err-1', 'agy')
+
+    const failingAgy: ExternalAgentAdapter = {
+      id: 'agy',
+      label: 'Antigravity',
+      command: 'agy',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'agy',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        await request.onEvent({ type: 'tool_start', callId: 'call-fail-1', name: 'bash', arguments: '{"cmd":"a"}' })
+        await request.onEvent({ type: 'tool_start', callId: 'call-fail-2', name: 'bash', arguments: '{"cmd":"b"}' })
+        throw new Error('ACP transport crashed mid-step')
+      },
+    }
+
+    cleanups.push(installExternalTurnDriver({
+      ctx,
+      adapters: new Map([['agy', failingAgy]]),
+      store,
+      getSubprocess: () => ctx.get('subprocess') as SubprocessRuntime | undefined,
+      getPermissionPolicy: () => 'allow',
+      resolvePresetForSession: () => null,
+    }))
+
+    const events: SessionEvent[] = []
+    ctx.on('session/event', (_session, event) => { events.push(event) }, { global: true })
+    const errors: unknown[] = []
+    ctx.on('agent/error', ({ error }) => { errors.push(error) }, { global: true })
+
+    const handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-err-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => handle.dispose())
+
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Trigger failure' }],
+      source: { kind: 'user' },
+    }))
+    await handle.agent.whenIdle()
+
+    expect(errors).toHaveLength(1)
+    assertV4ToolStepLifecycle(events)
+    const turnEnd = events.findLast(e => e.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' ? turnEnd.data.reason.kind : undefined).toBe('error')
+  })
+
+  it('closes pending tool calls with interrupted errors before step/end when turn abort fires mid-tool', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ext-abort-tools-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    await ctx.plugin(SessionProjectionPlugin)
+    await ctx.plugin(SessionPlugin)
+    await ctx.plugin(LlmPlugin)
+    await ctx.plugin(ToolsPlugin)
+    await ctx.plugin(NativeToolExecutorPlugin)
+    await ctx.plugin(SystemPromptPlugin)
+    await ctx.plugin(SubprocessLocalPlugin)
+    await ctx.plugin(AgentRegistryPlugin)
+    await ctx.plugin(AgentLoopPlugin, { agents: [] })
+
+    const store = new ExternalSessionStore(join(dir, 'sessions.json'))
+    store.setAgent('sess-abort-1', 'agy')
+
+    let resolveStarted!: () => void
+    const startedPromise = new Promise<void>((r) => { resolveStarted = r })
+
+    const abortableAgy: ExternalAgentAdapter = {
+      id: 'agy',
+      label: 'Antigravity',
+      command: 'agy',
+      permissionModes: [],
+      probe: async () => ({
+        available: true,
+        command: 'agy',
+        models: [{ id: 'default', name: 'Default' }],
+        defaultModel: 'default',
+        permissionModes: [],
+      }),
+      runTurn: async (_subprocess, request) => {
+        await request.onEvent({ type: 'tool_start', callId: 'call-abort-1', name: 'Run ask_question', arguments: '{}' })
+        resolveStarted()
+        await new Promise<void>((_, reject) => {
+          request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        return { finalText: '' }
+      },
+    }
+
+    cleanups.push(installExternalTurnDriver({
+      ctx,
+      adapters: new Map([['agy', abortableAgy]]),
+      store,
+      getSubprocess: () => ctx.get('subprocess') as SubprocessRuntime | undefined,
+      getPermissionPolicy: () => 'allow',
+      resolvePresetForSession: () => null,
+    }))
+
+    const events: SessionEvent[] = []
+    ctx.on('session/event', (_session, event) => { events.push(event) }, { global: true })
+
+    const handle = await ctx.agents.create({
+      sessionId: brandString<SessionId>('sess-abort-1'),
+      meta: { cwd: dir },
+      agentOptions: { provider: 'ext-agy', model: 'default' },
+    })
+    cleanups.push(() => handle.dispose())
+
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Abort me mid tool' }],
+      source: { kind: 'user' },
+    }))
+    await startedPromise
+    handle.agent.cancel({ kind: 'user' })
+    await handle.agent.whenIdle()
+
+    assertV4ToolStepLifecycle(events)
+    const turnEnd = events.findLast(e => e.type === 'turn/end')
+    expect(turnEnd?.type === 'turn/end' ? turnEnd.data.reason.kind : undefined).toBe('aborted')
   })
 })

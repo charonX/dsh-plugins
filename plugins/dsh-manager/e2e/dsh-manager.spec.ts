@@ -65,9 +65,13 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     await page.locator('#dsh-manager-tab-team').click()
     await expect(page.locator('#dsh-manager-panel-team')).toBeVisible()
     await expect(page.locator('#dsh-team-workbench')).toBeVisible()
+    await expect(page.locator('#dsh-team-view-flows')).toBeVisible()
+    await expect(page.locator('#dsh-team-view-skills')).toBeVisible()
+    await expect(page.locator('#dsh-team-view-crew')).toHaveCount(0)
+    await expect(page.locator('#dsh-team-view-prompt')).toHaveCount(0)
     await expect(page.locator('#dsh-team-audit')).toHaveCount(0)
-    await page.locator('#dsh-team-view-crew').click()
-    await expect(page.locator('#dsh-team-crew')).toBeVisible()
+    await page.locator('#dsh-team-view-skills').click()
+    await expect(page.locator('#dsh-team-skills')).toBeVisible()
 
     await page.locator('#dsh-manager-tab-policy').click()
     await expect(page.locator('#dsh-manager-panel-policy')).toBeVisible()
@@ -124,7 +128,7 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     expect(pageErrors).toEqual([])
   })
 
-  test('Team tab supports creating Crew + Pipeline (with Stage SlashInput), topology inspector actions, persists on reload, and cleans up', async ({ page }) => {
+  test('Team & Flows tab supports creating generic Flows, topology inspector, persistence, and clean removal', async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', err => pageErrors.push(err.message))
 
@@ -132,90 +136,33 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     await page.locator('#dsh-manager-tab-team').click()
     await expect(page.locator('#dsh-team-workbench')).toBeVisible()
 
-    // 1. Switch to Crew roster and add a Crew member bound to Claude Code.
-    await page.locator('#dsh-team-view-crew').click()
-    await expect(page.locator('#dsh-team-crew')).toBeVisible()
-    await page.getByRole('button', { name: /添加队员|Add member/ }).click()
-    const crewDialog = page.getByRole('dialog')
-    await expect(crewDialog).toBeVisible()
+    // 1. Create a Flow IR manually (`New flow`) and inspect it on Topology + List views.
+    await page.getByRole('button', { name: /新建流程|New flow/ }).click()
+    const flowDialog = page.getByRole('dialog')
+    await expect(flowDialog).toBeVisible()
 
-    await crewDialog.locator('input').first().fill('E2E-Claude研发')
-    await crewDialog.locator('textarea').first().fill('负责自动化回归验证与工程质量检查')
-    await selectDshMenuOption(page, crewDialog.locator('#dsh-crew-agent-kind'), /Claude Code/)
-    const claudeReady = await crewDialog.getByText(/^(Ready:|已就绪：)/).isVisible({ timeout: 5_000 }).catch(() => false)
+    await flowDialog.locator('input').first().fill('E2E-知识创作流')
+    await flowDialog.locator('textarea').first().fill('撰写技术文章或领域知识笔记（无需 git worktree）')
+    await selectDshMenuOption(page, flowDialog.locator('[data-select-control]').first(), /in-place/)
 
-    await crewDialog.getByRole('button', { name: /^(添加|Add)$/ }).click()
-    await expect(crewDialog).toBeHidden()
-    await expect(page.locator('#dsh-team-crew')).toContainText('E2E-Claude研发')
+    await flowDialog.getByRole('button', { name: /保存流程|Save flow/ }).click()
+    await expect(flowDialog).toBeHidden()
+    await expect(page.locator('#dsh-team-workbench')).toContainText('E2E-知识创作流')
 
-    // 2. Switch back to Orchestration workbench (default Topology) and add Pipeline + Rule.
-    await page.locator('#dsh-team-view-workbench').click()
-    await expect(page.locator('#dsh-team-workbench')).toBeVisible()
-    await page.getByRole('button', { name: /添加流水线|Add pipeline/ }).click()
-    const pipelineDialog = page.getByRole('dialog')
-    await expect(pipelineDialog).toBeVisible()
-
-    await pipelineDialog.locator('input').first().fill('E2E-研发流水线')
-    await selectDshMenuOption(page, pipelineDialog.locator('[data-select-control]').first(), /E2E-Claude研发/)
-
-    const stageInstruction = pipelineDialog.locator('textarea').first()
-    await stageInstruction.click()
-    await stageInstruction.pressSequentially('/')
-
-    const stageListbox = page.locator('[role="listbox"]')
-    if (claudeReady) {
-      await expect(stageListbox).toBeVisible({ timeout: 8_000 })
-      await stageListbox.locator('[role="option"]').first().click()
-      await expect(stageInstruction).toHaveValue(/^\//)
-    } else {
-      await stageInstruction.fill('/verify 执行端到端验证')
-    }
-
-    await pipelineDialog.getByRole('button', { name: /^(添加|Add)$/ }).click()
-    await expect(pipelineDialog).toBeHidden()
-
-    // Create a route rule in Topology mode so the canvas and Inspector become interactive.
-    await page.getByRole('button', { name: /添加规则|Add rule/ }).click()
-    const ruleDialog = page.getByRole('dialog')
-    await expect(ruleDialog).toBeVisible()
-    await ruleDialog.locator('textarea').first().fill('E2E-拓扑交互规则')
-    await selectDshMenuOption(page, ruleDialog.locator('[data-select-control]').first(), /E2E-研发流水线/)
-    await ruleDialog.getByRole('button', { name: /^(添加|Add)$/ }).click()
-    await expect(ruleDialog).toBeHidden()
-
-    // Select the rule node in Topology Inspector and remove it directly from the Inspector.
-    const inspector = page.locator('aside[aria-label="节点详情"], aside[aria-label="Node inspector"]')
-    await expect(inspector).toBeVisible()
-    await inspector.getByRole('button', { name: 'E2E-拓扑交互规则' }).click()
-    await expect(inspector.getByRole('button', { name: /^(编辑|Edit)$/ })).toBeVisible()
-    await expect(inspector.getByRole('button', { name: /^(停用|Disable)$/ })).toBeVisible()
-    await inspector.getByRole('button', { name: /^(删除|Remove)$/ }).click()
-    await expect(page.locator('#dsh-team-workbench')).not.toContainText('E2E-拓扑交互规则')
-    await expect(inspector).toHaveCount(0)
-
-    // Switch to List mode and verify the pipeline card.
+    // Verify List mode + Topology inspector
     await page.locator('#dsh-team-workbench-mode-list').click()
-    await expect(page.locator('#dsh-team-orchestration')).toContainText('E2E-研发流水线')
+    await expect(page.locator('#dsh-team-flows')).toContainText('E2E-知识创作流')
 
-    // 3. Reload the whole app and confirm storage persistence across Host + Remote reload.
+    // 2. Reload the whole app and confirm storage persistence in team-config.yaml.
     await openManager(page)
     await page.locator('#dsh-manager-tab-team').click()
     await page.locator('#dsh-team-workbench-mode-list').click()
-    await expect(page.locator('#dsh-team-orchestration')).toContainText('E2E-研发流水线')
-    await page.locator('#dsh-team-view-crew').click()
-    await expect(page.locator('#dsh-team-crew')).toContainText('E2E-Claude研发')
+    await expect(page.locator('#dsh-team-flows')).toContainText('E2E-知识创作流')
 
-    // 4. Clean up pipeline first (from List mode), then crew member.
-    await page.locator('#dsh-team-view-workbench').click()
-    await page.locator('#dsh-team-workbench-mode-list').click()
-    const pipelineCard = page.locator('#dsh-team-orchestration li', { hasText: 'E2E-研发流水线' }).first()
-    await pipelineCard.getByRole('button', { name: /^(删除|Remove)$/ }).click()
-    await expect(page.locator('#dsh-team-orchestration')).not.toContainText('E2E-研发流水线')
-
-    await page.locator('#dsh-team-view-crew').click()
-    const crewCard = page.locator('#dsh-team-crew li', { hasText: 'E2E-Claude研发' }).first()
-    await crewCard.getByRole('button', { name: /^(删除|Remove)$/ }).click()
-    await expect(page.locator('#dsh-team-crew')).not.toContainText('E2E-Claude研发')
+    // 3. Clean up the created flow.
+    const flowCard = page.locator('#dsh-team-flows article', { hasText: 'E2E-知识创作流' }).first()
+    await flowCard.getByRole('button', { name: /^(删除|Remove)$/ }).click()
+    await expect(page.locator('#dsh-team-flows')).not.toContainText('E2E-知识创作流')
 
     expect(pageErrors).toEqual([])
   })
@@ -284,6 +231,109 @@ test.describe.serial('@charonx/dsh-manager E2E', () => {
     await page.locator('#dsh-manager-panel-settings').getByRole('button', { name: /保存名称|Save name/ }).click()
     await expect(page.locator('#dsh-manager-panel-settings')).toContainText(/已保存|Saved/)
     await expect(page.locator('h1').first()).toContainText(/中控台|Control Center/)
+
+    expect(pageErrors).toEqual([])
+  })
+
+  test('Flow presets and one-shot Playbook compiler compile into Flow IR and show Skill catalog', async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', err => pageErrors.push(err.message))
+
+    await openManager(page)
+    await page.locator('#dsh-manager-tab-team').click()
+    await expect(page.locator('#dsh-manager-panel-team')).toBeVisible()
+
+    // Fresh DSH_HOME automatically compiles and displays the default Playbook flows.
+    await page.locator('#dsh-team-workbench-mode-list').click()
+    await expect(page.locator('#dsh-team-flows')).toContainText(/通用功能开发/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/通用缺陷修复/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/知识创作/)
+    await expect(page.locator('#dsh-team-flows')).toContainText(/架构重构/)
+    await expect(page.locator('#dsh-team-flows')).toContainText('/writing')
+
+    // Apply preset from discovered Playbook catalog (creates an editable `(2)` copy).
+    await page.getByRole('button', { name: /从预设复制|Copy from preset/ }).click()
+    const presetDialog = page.getByRole('dialog')
+    await expect(presetDialog).toBeVisible()
+    await expect(presetDialog).toContainText(/知识创作|Knowledge/)
+    await presetDialog.getByRole('button', { name: /一键复制为流程|Copy as flow/ }).last().click()
+    await expect(presetDialog).toBeHidden()
+
+    await expect(page.locator('#dsh-team-flows')).toContainText(/\(2\)/)
+
+    // Import & compile a Markdown Playbook once into Flow IR
+    await page.getByRole('button', { name: /从 Playbook 识别|Import Playbook/ }).click()
+    const playbookDialog = page.getByRole('dialog')
+    await expect(playbookDialog).toBeVisible()
+    await page.locator('#dsh-playbook-kind-markdown').click()
+    await playbookDialog.locator('input').first().fill('e2e-poteto-test')
+    await playbookDialog.locator('textarea').first().fill([
+      '### E2E Poteto Flow',
+      '1. Reproduce & check read-only via `verify`.',
+      '2. Implement minimal fix via `tdd`.',
+      '3. Independent review via `code-review`.',
+    ].join('\n'))
+    await playbookDialog.getByRole('button', { name: /识别并缓存为流程|Compile & cache/ }).click()
+    await expect(playbookDialog).toBeHidden()
+
+    await expect(page.locator('#dsh-team-flows')).toContainText('E2E Poteto Flow')
+    await expect(page.locator('#dsh-team-flows')).toContainText(/已缓存|Cached/)
+
+    const evidenceDir = process.env.DSH_EVIDENCE_DIR
+    if (evidenceDir !== undefined && evidenceDir !== '') {
+      await page.locator('#dsh-team-workbench-mode-graph').click()
+      await page.waitForTimeout(300)
+      // Inspector + editor: right-panel padding and the widened dialog.
+      const nodeButtons = page.locator('#dsh-team-flows button[title]')
+      if (await nodeButtons.count() > 1) {
+        await nodeButtons.nth(1).click()
+        await page.waitForTimeout(250)
+        await page.screenshot({ path: `${evidenceDir}/team-inspector-light.png`, fullPage: false })
+        await page.getByRole('button', { name: /^(Edit|编辑)$/ }).first().click()
+        await page.waitForTimeout(300)
+        await page.screenshot({ path: `${evidenceDir}/team-flow-editor-light.png`, fullPage: false })
+        const stepTabs = page.locator('#flow-step-panel').locator('xpath=preceding-sibling::*[@role="tablist"][1]').getByRole('tab')
+        if (await stepTabs.count() > 1) {
+          await stepTabs.nth(1).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-step2.png`, fullPage: false })
+          await page.getByRole('button', { name: /插入步骤|Insert step/ }).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-inserted.png`, fullPage: false })
+          await page.getByRole('button', { name: /插入步骤|Insert step/ }).click()
+          await page.waitForTimeout(200)
+          await page.screenshot({ path: `${evidenceDir}/team-flow-editor-inserted2.png`, fullPage: false })
+        }
+        await page.keyboard.press('Escape')
+        await page.waitForTimeout(200)
+      }
+      await page.emulateMedia({ colorScheme: 'light' })
+      await page.waitForTimeout(250)
+      await page.screenshot({ path: `${evidenceDir}/team-flows-light.png`, fullPage: false })
+      await page.emulateMedia({ colorScheme: 'dark' })
+      await page.waitForTimeout(250)
+      await page.screenshot({ path: `${evidenceDir}/team-flows-dark.png`, fullPage: false })
+
+      await page.locator('#dsh-team-view-skills').click()
+      await expect(page.locator('#dsh-team-skills')).toBeVisible()
+      await page.emulateMedia({ colorScheme: 'light' })
+      await page.waitForTimeout(200)
+      await page.screenshot({ path: `${evidenceDir}/team-skills-light.png`, fullPage: false })
+      await page.emulateMedia({ colorScheme: 'dark' })
+      await page.waitForTimeout(200)
+      await page.screenshot({ path: `${evidenceDir}/team-skills-dark.png`, fullPage: false })
+
+      await page.locator('#dsh-team-view-flows').click()
+      await page.locator('#dsh-team-workbench-mode-list').click()
+    }
+
+    // Clean up only the E2E-added flows, keeping auto-seeded defaults intact.
+    for (const label of ['E2E Poteto Flow', '(2)']) {
+      const card = page.locator('#dsh-team-flows article', { hasText: label }).first()
+      if ((await card.count()) > 0) {
+        await card.getByRole('button', { name: /^(删除|Remove)$/ }).click()
+      }
+    }
 
     expect(pageErrors).toEqual([])
   })

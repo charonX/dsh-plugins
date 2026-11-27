@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /**
  * Slot-tier specs for team-config hot-reload sync in TeamPage:
- * 1) Polling revision bumps automatically refresh crew, pipeline, and route views.
+ * 1) Polling revision bumps automatically refresh flows and skills views.
  * 2) Validation error (`lastError`) renders an explicit alert banner and Reload clears it.
  */
 import { fireEvent } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { SlotTestRuntime } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import type { FlowDef } from '../../src/flow/flow-ir.ts'
 import { registerUi, PANEL_ID, UI_INJECT } from '../../src/client/register.ts'
 
 describe('team page hot-reload sync and error banner', () => {
@@ -15,21 +16,31 @@ describe('team page hot-reload sync and error banner', () => {
     vi.useRealTimers()
   })
 
-  test('automatically refreshes crew/pipelines/routes on revision bump and shows validation errors', async () => {
+  test('automatically refreshes flows on revision bump and shows validation errors', async () => {
     vi.useFakeTimers()
     let revision = 1
     let lastError: string | undefined
-    let members = [
-      { id: 'c1', name: 'Initial Member', role: 'initial role', enabled: true, createdAt: 1, updatedAt: 1 },
+    let flows: FlowDef[] = [
+      {
+        id: 'f1',
+        name: 'Initial Flow',
+        when: 'initial condition',
+        workspaceMode: 'in-place',
+        enabled: true,
+        steps: [{ id: 's1', name: 'Draft', skills: ['how'] }],
+        createdAt: 1,
+        updatedAt: 1,
+      },
     ]
 
     const runtime = await SlotTestRuntime.create()
     const locale = new LocaleRuntime(runtime.ctx)
     runtime.ctx.provide('locale', locale)
+  runtime.ctx.provide('uiWorkspace', { openSession: () => {} })
     runtime.ctx.slots.installLocale(locale)
     await runtime.declare({ main: { kind: 'keyed', scope: 'root' }, 'sidebar.panellist': { kind: 'list', scope: 'root' } })
 
-    const crewList = vi.fn().mockImplementation(async () => ({ ok: true, value: { members } }))
+    const flowList = vi.fn().mockImplementation(async () => ({ ok: true, value: { flows } }))
     const teamConfigStatus = vi.fn().mockImplementation(async () => ({
       ok: true,
       value: {
@@ -50,60 +61,66 @@ describe('team page hot-reload sync and error banner', () => {
 
     runtime.remote.provideNamespaces({
       dshManager: {
-        crewList,
+        flowList,
+        skillCatalog: vi.fn().mockResolvedValue({ ok: true, value: { skills: [] } }),
         modelOptions: vi.fn().mockResolvedValue({ ok: true, value: { providers: [] } }),
         agentKindOptions: vi.fn().mockResolvedValue({ ok: true, value: { kinds: [{ kind: 'builtin', command: '', available: true }] } }),
-        crewAdd: vi.fn().mockResolvedValue({ ok: false }),
-        crewUpdate: vi.fn().mockResolvedValue({ ok: false }),
-        crewRemove: vi.fn().mockResolvedValue({ ok: true }),
-        pipelineList: vi.fn().mockResolvedValue({ ok: true, value: { pipelines: [] } }),
-        pipelineAdd: vi.fn().mockResolvedValue({ ok: false }),
-        pipelineUpdate: vi.fn().mockResolvedValue({ ok: false }),
-        pipelineRemove: vi.fn().mockResolvedValue({ ok: true }),
-        pipelineReferencesOf: vi.fn().mockResolvedValue({ ok: true, value: { references: [] } }),
-        ruleList: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
-        ruleAdd: vi.fn().mockResolvedValue({ ok: false }),
-        ruleUpdate: vi.fn().mockResolvedValue({ ok: false }),
-        ruleRemove: vi.fn().mockResolvedValue({ ok: true }),
-        ruleReferencesOfPipeline: vi.fn().mockResolvedValue({ ok: true, value: { rules: [] } }),
+        flowAdd: vi.fn().mockResolvedValue({ ok: false }),
+        flowUpdate: vi.fn().mockResolvedValue({ ok: false }),
+        flowRemove: vi.fn().mockResolvedValue({ ok: true }),
+        flowPresetApply: vi.fn().mockResolvedValue({ ok: false }),
+        flowImportPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+        flowSyncPlaybook: vi.fn().mockResolvedValue({ ok: false }),
+        teamConfigExportYaml: vi.fn().mockResolvedValue({ ok: true, value: { yaml: 'version: 3\nflows: []\n' } }),
+        teamConfigImportYaml: vi.fn().mockResolvedValue({ ok: false }),
         teamConfigStatus,
         teamConfigReload,
         stewardStatus: vi.fn().mockResolvedValue({ ok: true, value: { busy: false, backlog: 0, mode: 'auto', activity: [] } }),
       },
     })
 
-    await runtime.mount({ inject: UI_INJECT, apply: registerUi })
+    await runtime.mount({ inject: [...UI_INJECT, 'uiWorkspace'], apply: registerUi })
     const view = runtime.renderSlot('main', {}, { entryKey: PANEL_ID })
-    fireEvent.click(view.view.getByRole('tab', { name: 'Team' }))
-    fireEvent.click(view.view.getByRole('tab', { name: 'Crew roster' }))
+    fireEvent.click(view.view.getByRole('tab', { name: 'Team & Flows' }))
 
     await vi.waitFor(() => {
-      expect(view.container.textContent).toContain('Initial Member')
+      expect(view.container.textContent).toContain('Initial Flow')
     })
+    fireEvent.click(view.view.getByRole('tab', { name: 'List' }))
 
     // Simulate external YAML edit -> revision bumps and lastError appears.
-    members = [
-      { id: 'c1', name: 'Hot Reloaded Member', role: 'updated role', enabled: true, createdAt: 1, updatedAt: 2 },
+    flows = [
+      {
+        id: 'f1',
+        name: 'Hot Reloaded Flow',
+        when: 'updated condition',
+        workspaceMode: 'in-place',
+        enabled: true,
+        steps: [{ id: 's1', name: 'Publish', skills: ['verify'] }],
+        createdAt: 1,
+        updatedAt: 2,
+      },
     ]
     revision = 2
-    lastError = 'pipeline "p1" stage 1 references unknown crew member "missing"'
+    lastError = 'flow "f1" step "s1" references unknown onFail step "missing"'
 
     await vi.advanceTimersByTimeAsync(2100)
     await vi.waitFor(() => {
-      expect(view.container.textContent).toContain('Hot Reloaded Member')
-      expect(view.container.textContent).toContain('unknown crew member "missing"')
+      expect(view.container.textContent).toContain('Hot Reloaded Flow')
+      expect(view.container.textContent).toContain('unknown onFail step "missing"')
       expect(view.container.textContent).toContain('/tmp/team-config.yaml')
     })
 
-    // Switching back to Orchestration workbench keeps the TeamConfigErrorBanner visible.
-    fireEvent.click(view.view.getByRole('tab', { name: 'Orchestration workbench' }))
-    expect(view.container.textContent).toContain('unknown crew member "missing"')
+    // Switching to Skills and back keeps the TeamConfigErrorBanner visible.
+    fireEvent.click(view.view.getByRole('tab', { name: 'Skills' }))
+    expect(view.container.textContent).toContain('unknown onFail step "missing"')
+    fireEvent.click(view.view.getByRole('tab', { name: 'Flows' }))
 
     // Clicking Reload clears the error banner once fixed.
     fireEvent.click(view.view.getByRole('button', { name: 'Reload' }))
     await vi.waitFor(() => {
       expect(teamConfigReload).toHaveBeenCalledTimes(1)
-      expect(view.container.textContent).not.toContain('unknown crew member "missing"')
+      expect(view.container.textContent).not.toContain('unknown onFail step "missing"')
     })
 
     await runtime.dispose()

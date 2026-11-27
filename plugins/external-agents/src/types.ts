@@ -12,10 +12,10 @@ export const EXTERNAL_AGENT_IDS: readonly ExternalAgentId[] = [
   'codex',
 ] as const
 
-/** Provider route prefix used when exposing external agent models to DSH. */
+/** Provider route prefix used for legacy session compatibility and assistant message provenance. */
 export const EXTERNAL_PROVIDER_PREFIX = 'ext-'
 
-/** Preset id prefix used when registering external agents in AgentPresetRegistry. */
+/** Preset id prefix used for legacy session compatibility. */
 export const EXTERNAL_PRESET_PREFIX = 'ext-'
 
 export function providerIdForAgent(agentId: ExternalAgentId): string {
@@ -73,24 +73,85 @@ export interface AgentPermissionOption {
   readonly description?: string
 }
 
+export interface AgentAuthStatus {
+  readonly authenticated?: boolean
+  readonly method?: string
+  readonly plan?: string
+  readonly summary?: string
+}
+
+export type AgentQuotaWindow = '5h' | 'weekly' | 'session' | 'other'
+
+export interface AgentQuotaBucket {
+  readonly id: string
+  readonly label: string
+  readonly window: AgentQuotaWindow
+  readonly remainingPercent?: number
+  readonly usedPercent?: number
+  readonly resetAt?: string
+  readonly description?: string
+  readonly status?: 'allowed' | 'warning' | 'rejected'
+}
+
+export interface AgentQuotaGroup {
+  readonly name: string
+  readonly description?: string
+  readonly buckets: readonly AgentQuotaBucket[]
+}
+
+export interface AgentQuotaSnapshot {
+  readonly status: 'ok' | 'unavailable' | 'unsupported' | 'error'
+  readonly source: 'active_cli' | 'passive_stream' | 'unsupported'
+  readonly plan?: string
+  readonly observedAt?: string
+  readonly note?: string
+  readonly groups?: readonly AgentQuotaGroup[]
+}
+
+export interface ExternalAgentSettings {
+  readonly defaultModel?: string
+  readonly defaultReasoningEffort?: string
+  readonly customModels?: readonly AgentModelOption[]
+}
+
+export interface ExternalAgentsConfigSnapshot {
+  readonly defaultAgent: SessionAgentId
+  readonly agents: Partial<Record<ExternalAgentId, ExternalAgentSettings>>
+}
+
+export interface UpdateExternalAgentsConfigInput {
+  readonly defaultAgent?: SessionAgentId
+  readonly agentId?: ExternalAgentId
+  readonly settings?: ExternalAgentSettings
+}
+
 export interface AgentDescriptor {
   readonly id: SessionAgentId
   readonly label: string
   readonly command: string
   readonly available: boolean
+  readonly executablePath?: string
   readonly version?: string
   readonly reason?: string
   readonly provider?: string
   readonly presetId?: string
   readonly defaultModel?: string
   readonly models: readonly AgentModelOption[]
+  readonly reasoning?: AgentReasoning
   readonly defaultPermissionMode?: string
   readonly permissionModes: readonly AgentPermissionOption[]
   readonly commands: readonly AgentCommandOption[]
+  readonly authStatus?: AgentAuthStatus
+  readonly quota?: AgentQuotaSnapshot
 }
 
 export interface SavedModelSelection {
   readonly provider: string
+  readonly model: string
+  readonly reasoningEffort?: string
+}
+
+export interface ExternalModelSelection {
   readonly model: string
   readonly reasoningEffort?: string
 }
@@ -137,6 +198,7 @@ export interface SessionAgentState {
   readonly running: boolean
   readonly externalSessionId?: string
   readonly selectedModel?: SavedModelSelection
+  readonly selectedExternalModel?: ExternalModelSelection
   readonly permissionMode?: string
   readonly activeTasks?: readonly ExternalTaskState[]
 }
@@ -149,4 +211,15 @@ export interface SelectSessionAgentInput {
 export interface SelectSessionPermissionInput {
   readonly sessionId: string
   readonly permissionMode: string
+}
+
+export interface SessionCommandsResult {
+  readonly agentId: SessionAgentId
+  readonly commands: readonly AgentCommandOption[]
+}
+
+export interface SelectSessionModelInput {
+  readonly sessionId: string
+  readonly model?: string
+  readonly reasoningEffort?: string | null
 }

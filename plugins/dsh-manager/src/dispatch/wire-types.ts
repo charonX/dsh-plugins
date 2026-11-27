@@ -3,9 +3,10 @@
  * by the Host service and the client contribution.
  */
 import { z as zod } from 'zod'
-import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
-import type { AgentKind } from '../crew/crew-core.ts'
+import { DISPATCH_OUTCOMES, DISPATCH_STATES, REPORT_KINDS, type DispatchOutcome, type DispatchPromptRecord, type DispatchState, type ReportActivity, type ReportActivityCategory, type ReportKind } from './dispatch-core.ts'
+import type { AgentKind } from '../flow/flow-ir.ts'
 import type { TicketView } from '../board-domain.ts'
+import type { TimelineEvent } from '../timeline/timeline-core.ts'
 
 /** One executor report as the wire sees it. */
 export interface ReportView {
@@ -26,6 +27,8 @@ export interface DispatchMessageView {
   readonly at: number
 }
 
+export type DispatchPromptView = DispatchPromptRecord
+
 /** One dispatch as the wire sees it. */
 export interface DispatchView {
   readonly id: string
@@ -41,6 +44,8 @@ export interface DispatchView {
   readonly agentKind?: AgentKind
   /** Sticky external CLI session id when executed by an external CLI. */
   readonly externalSessionId?: string
+  /** Actual rendered prompt dispatched to this executor run (absent on legacy pre-template records). */
+  readonly prompt?: DispatchPromptView
   readonly reports: readonly ReportView[]
   /** Chronological conversation & tool stream assembled from Session events or external CLI reports. */
   readonly messages?: readonly DispatchMessageView[]
@@ -89,6 +94,8 @@ export interface TicketDetailView {
   readonly deliverables: readonly DeliverableRef[]
   /** The executor sessions' workspace changes, per turn with actual edits. */
   readonly changes: readonly ChangesRef[]
+  /** The ticket's ledger, oldest first; independent of any Executor Session. */
+  readonly events: readonly TimelineEvent[]
   /** The ticket this one follows up, when it is a follow-up itself. */
   readonly followUpOf?: TicketLinkView
   /** The follow-up tickets minted after this one, oldest first. */
@@ -100,6 +107,25 @@ export const dispatchTicketInputSchema = zod.object({
 })
 
 export type DispatchTicketInput = zod.infer<typeof dispatchTicketInputSchema>
+
+/** How a continued instruction reached the ticket's current turn. */
+export type ContinueTicketMode = 'delivered' | 'queued' | 'started' | 'resumed' | 'new-session'
+
+/** One continuation outcome as the wire sees it. */
+export interface ContinueTicketResult {
+  readonly ok: boolean
+  readonly mode: ContinueTicketMode
+  readonly dispatchId?: string
+}
+
+export const continueTicketInputSchema = zod.object({
+  ticketId: zod.string().min(1),
+  text: zod.string().min(1),
+  /** Start a fresh Executor Session instead of resuming the ticket's last one. */
+  newSession: zod.boolean().optional(),
+})
+
+export type ContinueTicketInput = zod.infer<typeof continueTicketInputSchema>
 
 export const dispatchListInputSchema = zod.object({
   ticketId: zod.string().min(1).optional(),
